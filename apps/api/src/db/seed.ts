@@ -98,7 +98,7 @@ async function main() {
   const existingAdmin = await db.query.users.findFirst({ where: eq(users.email, adminEmail) });
   if (!existingAdmin) {
     await db.insert(users).values({ name: 'Administrator', email: adminEmail, passwordHash: await bcrypt.hash(adminPass, 10), roleId: roleIds.get('Super Admin')!, employeeCode: 'TT000' });
-    console.log(`✓ admin user ${adminEmail} / ${adminPass}  ← change this password after first login`);
+    console.log(`✓ admin user ${adminEmail} created (password from SEED_ADMIN_PASSWORD — change it after first login)`);
   }
 
   if (!demo) return;
@@ -117,7 +117,7 @@ async function main() {
   await mk('TT005', 'Vikas Patil', 'stores@tisatech.in', 'Purchase & Stores', { designation: 'Store Keeper', managerId: director.id });
   await mk('TT010', 'Imran Shaikh', 'imran@tisatech.in', 'Field Technician', { designation: 'Sr. Technician', isFieldStaff: true, managerId: svcMgr.id, phone: '9800000010' });
   await mk('TT011', 'Ganesh More', 'ganesh@tisatech.in', 'Field Technician', { designation: 'Technician', isFieldStaff: true, managerId: svcMgr.id, phone: '9800000011' });
-  console.log('✓ demo staff (password Tisa@12345)');
+  console.log('✓ demo staff created (shared demo password — see README)');
 
   // Catalogue
   if (!(await db.$count(items))) {
