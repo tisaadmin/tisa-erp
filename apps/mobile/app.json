@@ -28,10 +28,16 @@
         "backgroundColor": "#0f3d5e"
       },
       "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "CAMERA",
-        "POST_NOTIFICATIONS"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "plugins": [
@@ -58,10 +64,17 @@
     ],
     "extra": {
       "apiUrl": "https://tisa-erp-production.up.railway.app",
-      "eas": {}
+      "eas": {
+        "projectId": "7b19c15d-de5d-4668-92e0-9e9381a4c15f"
+      },
+      "router": {}
     },
     "runtimeVersion": {
       "policy": "sdkVersion"
+    },
+    "owner": "atharvasamant",
+    "updates": {
+      "url": "https://u.expo.dev/7b19c15d-de5d-4668-92e0-9e9381a4c15f"
     }
   }
 }
