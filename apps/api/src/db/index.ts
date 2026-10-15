@@ -14,15 +14,26 @@ const ssl = sslMode === 'verify' ? { rejectUnauthorized: true } : sslMode === 't
  * first ':' after the user and the LAST '@'.
  */
 export function parseDbUrl(raw: string) {
-  const url = raw.trim().replace(/^["']|["']$/g, '');
-  const m = url.match(/^postgres(?:ql)?:\/\/([^:@\/]+)(?::(.*))?@([^@\/?#:]+)(?::(\d+))?\/([^?#]+)?/);
-  if (!m) throw new Error('DATABASE_URL is not a valid postgres:// URL');
-  const [, user, password = '', host, port = '5432', database = 'postgres'] = m;
+  // Tolerate common paste mistakes: "DATABASE_URL=" prefix, quotes, <angle brackets>, whitespace/newlines.
+  let url = raw.replace(/\s+/g, '').replace(/^DATABASE_URL=/i, '').replace(/^["'<]+|["'>]+$/g, '');
+  const at = url.search(/postgres(?:ql)?:\/\//i);
+  if (at > 0) url = url.slice(at);
+  const m = url.match(/^postgres(?:ql)?:\/\/([^:@\/]+)(?::(.*))?@([^@\/?#:]+)(?::(\d+))?(?:\/([^?#]*))?/i);
+  if (!m) {
+    // Hide the password: everything between the first ':' after the user name and the last '@'.
+    const lastAt = url.lastIndexOf('@');
+    const afterScheme = url.indexOf('://') >= 0 ? url.indexOf('://') + 3 : 0;
+    const colon = url.indexOf(':', afterScheme);
+    const masked = lastAt > 0 && colon >= 0 && colon < lastAt ? `${url.slice(0, colon + 1)}****${url.slice(lastAt)}` : url.replace(/./g, '*');
+    throw new Error(`DATABASE_URL is not a valid postgres:// URL. Stored value (password hidden): "${masked.slice(0, 120)}". ` +
+      'Expected: postgresql://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:5432/postgres');
+  }
+  const [, user, password = '', host, port = '5432', database] = m;
   if (/^\[.*\]$/.test(password) || password.includes('YOUR-PASSWORD')) {
     throw new Error('DATABASE_URL still contains the [YOUR-PASSWORD] placeholder — replace it (and the brackets) with the real password');
   }
   const dec = (v: string) => { try { return decodeURIComponent(v); } catch { return v; } };
-  return { user: dec(user), password: dec(password), host, port: Number(port), database: dec(database) };
+  return { user: dec(user), password: dec(password), host, port: Number(port), database: dec(database || 'postgres') };
 }
 
 const conn = parseDbUrl(env.DATABASE_URL);
