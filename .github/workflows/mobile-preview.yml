@@ -1,0 +1,76 @@
+# Publishes the field app to Expo so it can be opened on a phone in Expo Go.
+# Needs one repository secret: EXPO_TOKEN (expo.dev → Account settings → Access tokens).
+name: Mobile app – publish preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["apps/mobile/**"]
+
+permissions:
+  contents: write
+
+concurrency: mobile-preview
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    env:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/mobile/package-lock.json
+
+      - name: Check Expo token
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then echo "::error::Add the EXPO_TOKEN repository secret first (Settings → Secrets and variables → Actions)"; exit 1; fi
+          npx -y eas-cli@latest whoami
+
+      - run: npm ci
+
+      - name: Link Expo project (first run creates it)
+        run: |
+          if ! node -e "process.exit(require('./app.json').expo.extra?.eas?.projectId ? 0 : 1)"; then
+            npx -y eas-cli@latest init --non-interactive --force
+          fi
+          node -e "console.log('projectId', require('./app.json').expo.extra.eas.projectId)"
+
+      - name: Configure EAS Update
+        run: npx -y eas-cli@latest update:configure --platform all --non-interactive || true
+
+      - name: Publish update
+        id: update
+        run: |
+          npx -y eas-cli@latest update --branch preview --message "${{ github.event.head_commit.message || 'Manual publish' }}" --platform all --non-interactive --json > update.json
+          cat update.json
+          PROJECT=$(node -e "console.log(require('./app.json').expo.extra.eas.projectId)")
+          OWNER=$(npx -y eas-cli@latest whoami | head -1)
+          SLUG=$(node -e "console.log(require('./app.json').expo.slug)")
+          {
+            echo "## 📱 Open the Tisa Field app"
+            echo ""
+            echo "1. Install **Expo Go** from the App Store / Play Store."
+            echo "2. Open https://expo.dev/accounts/${OWNER}/projects/${SLUG}/updates on your phone (signed in to Expo) and tap the latest update → **Preview** / scan its QR code."
+            echo ""
+            echo "Project id: \`${PROJECT}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save project link back to the repo
+        working-directory: .
+        run: |
+          if [ -n "$(git status --porcelain apps/mobile/app.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add apps/mobile/app.json
+            git commit -m "Link Expo project [skip ci]"
+            git push
+          fi
