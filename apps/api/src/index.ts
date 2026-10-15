@@ -52,6 +52,9 @@ export function createApp() {
   return app;
 }
 
+process.on('unhandledRejection', (r) => console.error('[unhandledRejection]', r));
+process.on('uncaughtException', (e) => console.error('[uncaughtException]', e));
+
 if (require.main === module) {
   fs.mkdirSync(env.UPLOAD_DIR, { recursive: true });
   const server = http.createServer(createApp());
