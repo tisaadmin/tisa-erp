@@ -39,7 +39,7 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
-    "@types/express-serve-static-core": "^5.0.7",
+    "@types/express-serve-static-core": "5.0.7",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/morgan": "^1.9.10",
     "@types/multer": "^2.0.0",
@@ -52,6 +52,6 @@
     "typescript": "^5.9.3"
   },
   "overrides": {
-    "@types/express-serve-static-core": "5.0.7"
+    "@types/express-serve-static-core": "$@types/express-serve-static-core"
   }
 }
