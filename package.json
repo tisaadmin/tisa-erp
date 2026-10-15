@@ -1,0 +1,16 @@
+{
+  "name": "tisa-erp",
+  "private": true,
+  "scripts": {
+    "install:all": "npm --prefix apps/api ci && npm --prefix apps/web ci && npm --prefix apps/mobile ci",
+    "dev:api": "npm --prefix apps/api run dev",
+    "dev:web": "npm --prefix apps/web run dev",
+    "dev:mobile": "npm --prefix apps/mobile start",
+    "db:migrate": "npm --prefix apps/api run db:migrate",
+    "db:seed": "npm --prefix apps/api run db:seed",
+    "db:seed:demo": "npm --prefix apps/api run db:seed -- --demo",
+    "test": "npm --prefix apps/api test",
+    "typecheck": "npm --prefix apps/api run typecheck && npm --prefix apps/web run typecheck && npm --prefix apps/mobile run typecheck",
+    "build": "npm --prefix apps/web run build && npm --prefix apps/api run build"
+  }
+}

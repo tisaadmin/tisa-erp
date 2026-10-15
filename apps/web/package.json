@@ -1,0 +1,32 @@
+{
+  "name": "@tisa/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.87.4",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.544.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-router-dom": "^7.9.1",
+    "recharts": "^3.2.1",
+    "socket.io-client": "^4.8.1",
+    "sonner": "^2.0.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^4.7.0",
+    "tailwindcss": "^4.1.13",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.6"
+  }
+}

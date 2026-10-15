@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Tisa Field",
+    "slug": "tisa-field",
+    "scheme": "tisafield",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
+    "splash": { "image": "./assets/icon.png", "resizeMode": "contain", "backgroundColor": "#0f3d5e" },
+    "ios": {
+      "bundleIdentifier": "in.tisatech.field",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Your location is stamped on attendance and site photos so the office can verify site visits.",
+        "NSCameraUsageDescription": "Take geo-tagged site photos, selfies for attendance and expense receipts.",
+        "NSPhotoLibraryUsageDescription": "Attach receipts and photos."
+      }
+    },
+    "android": {
+      "package": "in.tisatech.field",
+      "adaptiveIcon": { "foregroundImage": "./assets/icon.png", "backgroundColor": "#0f3d5e" },
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "CAMERA", "POST_NOTIFICATIONS"]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      ["expo-location", { "locationWhenInUsePermission": "Your location is stamped on attendance and site photos so the office can verify site visits." }],
+      ["expo-image-picker", { "cameraPermission": "Take geo-tagged site photos, selfies for attendance and expense receipts." }],
+      ["expo-notifications", { "color": "#0f3d5e" }]
+    ],
+    "extra": {
+      "apiUrl": "https://erp.tisatech.in",
+      "eas": { "projectId": "REPLACE_WITH_EAS_PROJECT_ID" }
+    }
+  }
+}

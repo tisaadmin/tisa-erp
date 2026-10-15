@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+apps/api/uploads/
+apps/mobile/.expo/
+apps/mobile/.export-check/
+*.log
+.DS_Store

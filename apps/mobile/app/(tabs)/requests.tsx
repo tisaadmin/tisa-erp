@@ -1,0 +1,21 @@
+import { router } from 'expo-router';
+import { FlatList, View } from 'react-native';
+import { Badge, Btn, C, Empty, Row, Screen, useFetch } from '../../src/components/ui';
+import { useAuth } from '../../src/lib/auth';
+import { fmtDateTime, label } from '../../src/lib/format';
+
+export default function Requests() {
+  const { can } = useAuth();
+  const list = useFetch<{ data: any[] }>('/requisitions?pageSize=100');
+  return (
+    <Screen scroll={false}>
+      {can('requisitions:create') && <View style={{ padding: 12, backgroundColor: C.bg }}><Btn title="New requisition" icon="add" onPress={() => router.push('/requisition/new')} /></View>}
+      <FlatList data={list.data?.data ?? []} keyExtractor={(r) => r.id} onRefresh={list.reload} refreshing={list.loading}
+        renderItem={({ item: r }) => (
+          <Row title={`${label(r.type)} — ${r.site?.name}`} sub={`${r.number} · ${r.description}${r.actionNote ? `\nOffice: ${r.actionNote}` : ''}\n${fmtDateTime(r.createdAt)}`}
+            right={<Badge text={r.status} />} />
+        )}
+        ListEmptyComponent={list.data ? <Empty text="No requisitions yet" /> : null} />
+    </Screen>
+  );
+}

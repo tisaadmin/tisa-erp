@@ -1,0 +1,335 @@
+import { LogIn, LogOut, MapPin, Paperclip, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
+import { Combo } from '../components/Combo';
+import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Select, Spinner, Status, Table, Tabs, Textarea, cx } from '../components/ui';
+import { api, fileUrl, pathUrl } from '../lib/api';
+import { useAuth } from '../lib/auth';
+import { fmtDate, fmtDateTime, fmtTime, inr, label, qty, today } from '../lib/format';
+import { useAction, useGet, useItems, useSites, type Page } from '../lib/hooks';
+import { PhotoGrid } from './Service';
+
+// ═══════════════════════ Attendance ═══════════════════════
+
+function getPosition(): Promise<GeolocationPosition> {
+  return new Promise((res, rej) => navigator.geolocation ? navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 15000 }) : rej(new Error('Location not available')));
+}
+
+function MyDay() {
+  const today_ = useGet<any>('/attendance/today');
+  const act = useAction(async (kind: 'check-in' | 'check-out') => {
+    const pos = await getPosition().catch(() => { throw new Error('Allow location access in your browser to mark attendance'); });
+    const fd = new FormData();
+    fd.append('latitude', String(pos.coords.latitude)); fd.append('longitude', String(pos.coords.longitude)); fd.append('accuracy', String(pos.coords.accuracy));
+    return api(`/attendance/${kind}`, { form: fd });
+  }, { success: 'Attendance marked', invalidate: [['/attendance'], ['/dashboard']] });
+  const a = today_.data;
+  return (
+    <Card title="My attendance today">
+      <div className="flex flex-wrap items-center gap-4">
+        <div className="text-sm">
+          {a?.checkInAt ? <>In <b>{fmtTime(a.checkInAt)}</b>{a.site && <> at {a.site.name}</>} <Status s={a.status} /></> : 'Not checked in'}
+          {a?.checkOutAt && <> · Out <b>{fmtTime(a.checkOutAt)}</b> ({Math.floor(a.workMinutes / 60)}h {a.workMinutes % 60}m)</>}
+        </div>
+        {!a?.checkInAt && <Button variant="primary" icon={<LogIn className="size-4" />} loading={act.isPending} onClick={() => act.mutate('check-in')}>Check in</Button>}
+        {a?.checkInAt && !a.checkOutAt && <Button icon={<LogOut className="size-4" />} loading={act.isPending} onClick={() => act.mutate('check-out')}>Check out</Button>}
+        <span className="text-xs text-slate-500">Field staff check in from the mobile app with a geo-stamped selfie.</span>
+      </div>
+    </Card>
+  );
+}
+
+export function AttendancePage() {
+  const { can } = useAuth();
+  const [sp] = useSearchParams();
+  const [tab, setTab] = useState<'today' | 'log' | 'muster' | 'leaves'>((sp.get('tab') as any) ?? 'today');
+  const [range, setRange] = useState({ from: today(), to: today() });
+  const [month, setMonth] = useState(today().slice(0, 7));
+  const log = useGet<any[]>(tab === 'today' || tab === 'log' ? '/attendance' : null, tab === 'today' ? { from: today(), to: today() } : range, { refetchInterval: tab === 'today' ? 60_000 : undefined });
+  const muster = useGet<any>(tab === 'muster' ? '/attendance/muster' : null, { month });
+  return (
+    <div className="space-y-4">
+      <PageHeader title="Attendance" />
+      {can('attendance:mark') && <MyDay />}
+      <Tabs value={tab} onChange={setTab} tabs={[{ value: 'today', label: 'Today' }, { value: 'log', label: 'Log' }, { value: 'muster', label: 'Monthly muster' }, { value: 'leaves', label: 'Leaves' }]} />
+      {(tab === 'today' || tab === 'log') && (
+        <Card pad={false}>
+          {tab === 'log' && <div className="flex gap-2 border-b border-slate-100 p-3"><Input type="date" className="w-40" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /><Input type="date" className="w-40" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} /></div>}
+          <Table rows={log.data} empty="No attendance marked" cols={[
+            { key: 'user', label: 'Employee', render: (r: any) => <>{r.user.name}<div className="text-xs text-slate-400">{r.user.employeeCode}</div></> },
+            ...(tab === 'log' ? [{ key: 'date', label: 'Date', render: (r: any) => fmtDate(r.date) }] : []),
+            { key: 'in', label: 'In', render: (r: any) => r.checkInAt ? <>{fmtTime(r.checkInAt)} {r.checkInPhoto && <a href={pathUrl(r.checkInPhoto)} target="_blank" rel="noreferrer" className="text-xs text-brand-700">photo</a>}</> : '—' },
+            { key: 'out', label: 'Out', render: (r: any) => fmtTime(r.checkOutAt) },
+            { key: 'hours', label: 'Hours', render: (r: any) => (r.workMinutes ? `${Math.floor(r.workMinutes / 60)}h ${r.workMinutes % 60}m` : '—') },
+            { key: 'where', label: 'Location', render: (r: any) => r.checkInLat ? <a className="text-brand-700 hover:underline" target="_blank" rel="noreferrer" href={`https://maps.google.com/?q=${r.checkInLat},${r.checkInLng}`}><MapPin className="inline size-3" /> {r.site?.name ?? 'Map'}</a> : '—' },
+            { key: 'onSite', label: 'Geofence', render: (r: any) => r.site ? (r.onSite ? <Badge t="green">On site</Badge> : <Badge t="amber">{Math.round(r.distanceFromSite ?? 0)} m away</Badge>) : '' },
+            { key: 'source', label: 'Via', render: (r: any) => label(r.source) },
+            { key: 'status', label: 'Status', render: (r: any) => <Status s={r.status} /> },
+          ]} />
+        </Card>
+      )}
+      {tab === 'muster' && (
+        <Card pad={false}>
+          <div className="border-b border-slate-100 p-3"><Input type="month" className="w-44" value={month} onChange={(e) => setMonth(e.target.value)} /></div>
+          {!muster.data ? <Spinner /> : (
+            <div className="overflow-x-auto">
+              <table className="tbl text-xs">
+                <thead><tr><th>Employee</th>{Array.from({ length: muster.data.days }, (_, i) => <th key={i} className="px-1 text-center">{i + 1}</th>)}<th>P</th><th>L</th><th>½</th><th>Lv</th></tr></thead>
+                <tbody>
+                  {muster.data.rows.map((r: any) => (
+                    <tr key={r.user.id}>
+                      <td className="whitespace-nowrap">{r.user.name}</td>
+                      {r.days.map((d: any) => <td key={d.date} title={d.in ? `${d.in}–${d.out ?? ''}` : ''} className={cx('px-1 text-center font-semibold',
+                        d.status === 'PRESENT' && 'text-emerald-700', d.status === 'LATE' && 'text-amber-600', d.status === 'HALF_DAY' && 'text-amber-700', d.status === 'LEAVE' && 'text-violet-600', d.status === 'ABSENT' && 'text-red-600')}>
+                        {({ PRESENT: 'P', LATE: 'L', HALF_DAY: '½', LEAVE: 'Lv', ABSENT: 'A', HOLIDAY: 'H', WEEK_OFF: 'W' } as Record<string, string>)[d.status] ?? '·'}</td>)}
+                      <td className="font-semibold">{r.present}</td><td>{r.late}</td><td>{r.halfDay}</td><td>{r.leave}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+      {tab === 'leaves' && <Leaves />}
+    </div>
+  );
+}
+
+function Leaves() {
+  const { can } = useAuth();
+  const mine = useGet<any[]>('/leaves', { scope: 'mine' });
+  const approvals = useGet<any[]>('/leaves', { scope: 'approvals' });
+  const [apply, setApply] = useState<any>(null);
+  const doApply = useAction(() => api('/leaves', { body: apply }), { success: 'Leave applied', invalidate: [['/leaves']], onSuccess: () => setApply(null) });
+  const decide = useAction(({ id, d }: { id: string; d: string }) => api(`/leaves/${id}/${d}`, { body: {} }), { success: 'Done', invalidate: [['/leaves'], ['/attendance']] });
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <Card title="My leave requests" actions={can('leaves:apply') && <Button size="sm" onClick={() => setApply({ fromDate: today(), toDate: today(), type: 'CASUAL', reason: '' })}>Apply</Button>} pad={false}>
+        <Table rows={mine.data} empty="No leave requests" cols={[{ key: 'type', label: 'Type', render: (l: any) => label(l.type) }, { key: 'dates', label: 'Dates', render: (l: any) => `${fmtDate(l.fromDate)} → ${fmtDate(l.toDate)}` }, { key: 'reason', label: 'Reason', render: (l: any) => l.reason ?? '' }, { key: 'status', label: 'Status', render: (l: any) => <Status s={l.status} /> }]} />
+      </Card>
+      <Card title="Awaiting my approval" pad={false}>
+        <Table rows={approvals.data} empty="Nothing to approve" cols={[{ key: 'user', label: 'Employee', render: (l: any) => l.user.name }, { key: 'dates', label: 'Dates', render: (l: any) => `${label(l.type)} · ${fmtDate(l.fromDate)} → ${fmtDate(l.toDate)}` }, { key: 'reason', label: 'Reason', render: (l: any) => l.reason ?? '' },
+          { key: 'act', label: '', render: (l: any) => <div className="flex gap-1"><Button size="sm" variant="success" onClick={() => decide.mutate({ id: l.id, d: 'approve' })}>Approve</Button><Button size="sm" onClick={() => decide.mutate({ id: l.id, d: 'reject' })}>Reject</Button></div> }]} />
+      </Card>
+      <Modal open={!!apply} onClose={() => setApply(null)} title="Apply for leave" footer={<><Button onClick={() => setApply(null)}>Cancel</Button><Button variant="primary" loading={doApply.isPending} onClick={() => doApply.mutate(undefined)}>Submit</Button></>}>
+        {apply && <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="From"><Input type="date" value={apply.fromDate} onChange={(e) => setApply({ ...apply, fromDate: e.target.value })} /></Field>
+          <Field label="To"><Input type="date" value={apply.toDate} onChange={(e) => setApply({ ...apply, toDate: e.target.value })} /></Field>
+          <Field label="Type"><Select value={apply.type} onChange={(e) => setApply({ ...apply, type: e.target.value })} options={['CASUAL', 'SICK', 'EARNED', 'UNPAID']} /></Field>
+          <Field label="Reason" className="sm:col-span-2"><Textarea value={apply.reason} onChange={(e) => setApply({ ...apply, reason: e.target.value })} /></Field>
+        </div>}
+      </Modal>
+    </div>
+  );
+}
+
+// ═══════════════════════ Requisitions ═══════════════════════
+
+export function RequisitionsPage() {
+  const { can } = useAuth();
+  const [sp, setSp] = useSearchParams();
+  const sites = useSites();
+  const items = useItems();
+  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50, status: 'PENDING,APPROVED,IN_PROGRESS' });
+  const list = useGet<Page<any>>('/requisitions', q, { refetchInterval: 60_000 });
+  const [form, setForm] = useState<any>(null);
+  useEffect(() => { if (sp.get('new')) { setForm({ type: 'MATERIAL', priority: 'MEDIUM', siteId: sp.get('siteId'), ticketId: sp.get('ticketId'), description: '', items: [{ itemId: null, description: '', qty: 1, unit: 'Nos' }] }); setSp({}); } }, [sp, setSp]);
+  const save = useAction(() => api('/requisitions', { body: { ...form, items: form.type === 'MATERIAL' ? form.items.filter((i: any) => i.description) : [] } }), { success: 'Requisition raised — approvers notified', invalidate: [['/requisitions']], onSuccess: () => setForm(null) });
+  return (
+    <div>
+      <PageHeader title="Requisitions" subtitle="Material, pending work and repair requests raised from site (mobile app) or office"
+        actions={can('requisitions:create') && <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setForm({ type: 'MATERIAL', priority: 'MEDIUM', description: '', items: [{ itemId: null, description: '', qty: 1, unit: 'Nos' }] })}>New requisition</Button>} />
+      <Card pad={false}>
+        <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
+          <Select className="w-56" value={q.status} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} options={[{ value: 'PENDING,APPROVED,IN_PROGRESS', label: 'Open' }, ...['PENDING', 'APPROVED', 'IN_PROGRESS', 'FULFILLED', 'REJECTED'].map((s) => ({ value: s, label: label(s) }))]} placeholder="All" />
+          <Select className="w-44" value={q.type ?? ''} onChange={(e) => setQ({ ...q, type: e.target.value, page: 1 })} options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} placeholder="All types" />
+        </div>
+        <Table rows={list.data?.data} to={(r) => `/requisitions/${r.id}`} cols={[
+          { key: 'number', label: 'Number', render: (r) => <>{r.number}<div className="text-xs font-normal text-slate-400">{fmtDateTime(r.createdAt)}</div></> },
+          { key: 'type', label: 'Type', render: (r) => <Badge t={r.type === 'MATERIAL' ? 'blue' : r.type === 'REPAIR' ? 'red' : 'violet'}>{label(r.type)}</Badge> },
+          { key: 'site', label: 'Site', render: (r) => <>{r.site?.name}{r.ticket && <div className="text-xs text-slate-400">{r.ticket.number}</div>}</> },
+          { key: 'description', label: 'Request', render: (r) => <span className="line-clamp-2 max-w-sm">{r.description}{!!r.items.length && <span className="text-slate-400"> · {r.items.length} item(s)</span>}</span> },
+          { key: 'by', label: 'Raised by', render: (r) => r.raisedBy?.name }, { key: 'priority', label: 'Priority', render: (r) => <Status s={r.priority} /> },
+          { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
+        ]} />
+        {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
+      </Card>
+      <Modal open={!!form} onClose={() => setForm(null)} title="New requisition" wide footer={<><Button onClick={() => setForm(null)}>Cancel</Button><Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Submit</Button></>}>
+        {form && <div className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Type"><Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} /></Field>
+            <Field label="Priority"><Select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} options={['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']} /></Field>
+            <Field label="Site"><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={form.siteId} onChange={(v) => setForm({ ...form, siteId: v })} /></Field>
+          </div>
+          <Field label="Description"><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
+          {form.type === 'MATERIAL' && <div className="space-y-2">
+            {form.items.map((it: any, i: number) => (
+              <div key={i} className="flex gap-2">
+                <Combo className="w-64" options={(items.data?.data ?? []).map((x) => ({ value: x.id, label: x.name, sub: x.sku }))} value={it.itemId} onChange={(v, o) => setForm({ ...form, items: form.items.map((x: any, j: number) => (j === i ? { ...x, itemId: v, description: o?.label ?? x.description } : x)) })} />
+                <Input placeholder="Description" value={it.description} onChange={(e) => setForm({ ...form, items: form.items.map((x: any, j: number) => (j === i ? { ...x, description: e.target.value } : x)) })} />
+                <Input type="number" className="w-24" value={it.qty} onChange={(e) => setForm({ ...form, items: form.items.map((x: any, j: number) => (j === i ? { ...x, qty: Number(e.target.value) } : x)) })} />
+              </div>
+            ))}
+            <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setForm({ ...form, items: [...form.items, { itemId: null, description: '', qty: 1, unit: 'Nos' }] })}>Add item</Button>
+          </div>}
+        </div>}
+      </Modal>
+    </div>
+  );
+}
+
+export function RequisitionDetail() {
+  const { id } = useParams();
+  const { can } = useAuth();
+  const { data: r } = useGet<any>(`/requisitions/${id}`);
+  const [note, setNote] = useState('');
+  const act = useAction((a: string) => api(`/requisitions/${id}/${a}`, { body: { note } }), { success: 'Updated — requester notified', invalidate: [['/requisitions']], onSuccess: () => setNote('') });
+  if (!r) return <Spinner />;
+  const actions: [string, string, any][] = r.status === 'PENDING' ? [['approve', 'Approve', 'success'], ['reject', 'Reject', 'danger']] : r.status === 'APPROVED' ? [['start', 'Mark in progress', 'secondary'], ['fulfil', 'Mark fulfilled', 'success'], ['reject', 'Reject', 'danger']] : r.status === 'IN_PROGRESS' ? [['fulfil', 'Mark fulfilled', 'success']] : [];
+  return (
+    <div className="space-y-4">
+      <PageHeader back="/requisitions" title={<>{r.number} <Status s={r.status} /></>} subtitle={`${label(r.type)} · ${r.site.client.name} · ${r.site.name}`}
+        actions={can('requisitions:approve') && actions.length > 0 && <>
+          <Input className="w-56" placeholder="Note to requester" value={note} onChange={(e) => setNote(e.target.value)} />
+          {actions.map(([a, l, v]) => <Button key={a} variant={v} loading={act.isPending} onClick={() => act.mutate(a)}>{l}</Button>)}
+        </>} />
+      <Card><KV cols={4} items={[['Raised by', `${r.raisedBy.name}${r.raisedBy.phone ? ` · ${r.raisedBy.phone}` : ''}`], ['Raised at', fmtDateTime(r.createdAt)], ['Priority', <Status s={r.priority} />], ['Required by', fmtDate(r.requiredBy)],
+        ['Ticket', r.ticket ? <Link className="text-brand-700" to={`/tickets/${r.ticket.id}`}>{r.ticket.number}</Link> : null], ['Action note', r.actionNote], ['Actioned', fmtDateTime(r.actionAt)]]} />
+        <p className="mt-4 text-sm whitespace-pre-line">{r.description}</p></Card>
+      {!!r.items.length && <Card title="Materials" pad={false}><Table rows={r.items} cols={[{ key: 'description', label: 'Item' }, { key: 'qty', label: 'Qty', num: true, render: (i: any) => `${qty(i.qty)} ${i.unit}` }]} /></Card>}
+      {!!r.photos.length && <Card title="Photos"><PhotoGrid photos={r.photos} /></Card>}
+      {can('purchase_orders:create') && r.type === 'MATERIAL' && r.status === 'APPROVED' && <p className="text-sm text-slate-500">Tip: issue from stock with a delivery challan to the site, or <Link className="text-brand-700" to="/purchase-orders/new">raise a PO</Link> if not in stock.</p>}
+    </div>
+  );
+}
+
+// ═══════════════════════ Expenses ═══════════════════════
+
+export function ExpensesPage() {
+  const { can } = useAuth();
+  const [sp] = useSearchParams();
+  const [tab, setTab] = useState<'mine' | 'approvals' | 'all'>((sp.get('tab') as any) ?? 'mine');
+  const list = useGet<Page<any>>('/expenses', { scope: tab, pageSize: 100 });
+  const tabs: { value: 'mine' | 'approvals' | 'all'; label: string }[] = [{ value: 'mine', label: 'My claims' }, { value: 'approvals', label: 'For my approval' }];
+  if (can('expenses:finance') || can('expenses:approve')) tabs.push({ value: 'all' as const, label: 'All claims' });
+  return (
+    <div>
+      <PageHeader title="Expense claims" subtitle="Employee → reporting manager → accounts → paid"
+        actions={can('expenses:create') && <Link to="/expenses/new"><Button variant="primary" icon={<Plus className="size-4" />}>New claim</Button></Link>} />
+      <Tabs value={tab} onChange={setTab} tabs={tabs} />
+      <Card pad={false}>
+        <Table rows={list.data?.data} to={(r) => `/expenses/${r.id}`} empty={tab === 'approvals' ? 'Nothing waiting for you' : 'No claims'} cols={[
+          { key: 'number', label: 'Claim' }, ...(tab !== 'mine' ? [{ key: 'user', label: 'Employee', render: (r: any) => r.user?.name }] : []),
+          { key: 'title', label: 'Title' }, { key: 'period', label: 'Period', render: (r: any) => `${fmtDate(r.periodFrom)} → ${fmtDate(r.periodTo)}` },
+          { key: 'lines', label: 'Lines', num: true, render: (r: any) => r.lines.length }, { key: 'total', label: 'Claimed', num: true, render: (r: any) => inr(r.total) },
+          { key: 'approvedTotal', label: 'Approved', num: true, render: (r: any) => (r.approvedTotal != null ? inr(r.approvedTotal) : '—') },
+          { key: 'status', label: 'Status', render: (r: any) => <Status s={r.status} /> },
+        ]} />
+      </Card>
+    </div>
+  );
+}
+
+const EXP_CATS = ['TRAVEL', 'FUEL', 'FOOD', 'LODGING', 'LOCAL_PURCHASE', 'COURIER', 'PHONE', 'TOOLS', 'OTHER'];
+type ELine = { date: string; category: string; description: string; amount: number; siteId?: string | null; distanceKm?: number | null; receiptId?: string | null; receiptName?: string };
+
+export function ExpenseEditor() {
+  const { id } = useParams();
+  const nav = useNavigate();
+  const sites = useSites();
+  const existing = useGet<any>(id ? `/expenses/${id}` : null);
+  const [title, setTitle] = useState('');
+  const [lines, setLines] = useState<ELine[]>([{ date: today(), category: 'TRAVEL', description: '', amount: 0 }]);
+  useEffect(() => { if (existing.data) { setTitle(existing.data.title); setLines(existing.data.lines.map((l: any) => ({ ...l, receiptName: l.receiptId ? 'receipt' : undefined }))); } }, [existing.data]);
+  const upload = async (i: number, f: File) => {
+    const fd = new FormData(); fd.append('files', f); fd.append('entityType', 'EXPENSE');
+    try { const [a] = await api<any[]>('/attachments', { form: fd }); setLines((ls) => ls.map((l, j) => (j === i ? { ...l, receiptId: a.id, receiptName: f.name } : l))); } catch (e) { toast.error((e as Error).message); }
+  };
+  const save = useAction((submit: boolean) => {
+    const body = { title, submit, lines: lines.map(({ receiptName: _r, ...l }) => ({ ...l, siteId: l.siteId || null })) };
+    return id ? api(`/expenses/${id}`, { method: 'PUT', body }) : api('/expenses', { body });
+  }, { success: 'Saved', invalidate: [['/expenses']], onSuccess: (c: any) => nav(`/expenses/${c.id}`) });
+  const total = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+  return (
+    <div className="space-y-4">
+      <PageHeader back="/expenses" title={id ? 'Edit claim' : 'New expense claim'} actions={<><Button loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" loading={save.isPending} onClick={() => save.mutate(true)}>Submit to manager</Button></>} />
+      <Card><Field label="Claim title"><Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Site visits — week 42" /></Field></Card>
+      <Card title="Expenses" pad={false}>
+        <div className="overflow-x-auto">
+          <table className="tbl min-w-[900px]">
+            <thead><tr><th className="w-36">Date</th><th className="w-40">Category</th><th>Description</th><th className="w-56">Site</th><th className="w-20">Km</th><th className="w-28 text-right">Amount</th><th className="w-32">Receipt</th><th /></tr></thead>
+            <tbody>
+              {lines.map((l, i) => {
+                const set = (p: Partial<ELine>) => setLines(lines.map((x, j) => (j === i ? { ...x, ...p } : x)));
+                return <tr key={i}>
+                  <td><Input type="date" value={l.date} onChange={(e) => set({ date: e.target.value })} /></td>
+                  <td><Select value={l.category} onChange={(e) => set({ category: e.target.value })} options={EXP_CATS} /></td>
+                  <td><Input value={l.description} onChange={(e) => set({ description: e.target.value })} /></td>
+                  <td><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name }))} value={l.siteId} onChange={(v) => set({ siteId: v })} placeholder="—" /></td>
+                  <td><Input type="number" value={l.distanceKm ?? ''} onChange={(e) => set({ distanceKm: e.target.value ? Number(e.target.value) : null })} /></td>
+                  <td><Input type="number" step="any" className="text-right" value={l.amount} onChange={(e) => set({ amount: Number(e.target.value) })} /></td>
+                  <td>{l.receiptId ? <a href={fileUrl(l.receiptId)} target="_blank" rel="noreferrer" className="text-xs text-brand-700"><Paperclip className="inline size-3" /> {l.receiptName ?? 'view'}</a>
+                    : <label className="cursor-pointer text-xs text-brand-700"><Paperclip className="inline size-3" /> Attach<input type="file" accept="image/*,application/pdf" className="hidden" onChange={(e) => e.target.files?.[0] && upload(i, e.target.files[0])} /></label>}</td>
+                  <td><button className="p-1 text-slate-400 hover:text-red-600" onClick={() => setLines(lines.filter((_, j) => j !== i))} aria-label="Remove"><Trash2 className="size-4" /></button></td>
+                </tr>;
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center justify-between p-3">
+          <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setLines([...lines, { date: today(), category: 'TRAVEL', description: '', amount: 0 }])}>Add expense</Button>
+          <span className="text-base font-semibold">Total {inr(total)}</span>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+export function ExpenseDetail() {
+  const { id } = useParams();
+  const { user, can } = useAuth();
+  const { data: c } = useGet<any>(`/expenses/${id}`);
+  const [d, setD] = useState<{ comment: string; approvedTotal: string; paymentRef: string }>({ comment: '', approvedTotal: '', paymentRef: '' });
+  const act = useAction((a: string) => api(`/expenses/${id}/${a}`, { body: { comment: d.comment || null, approvedTotal: d.approvedTotal ? Number(d.approvedTotal) : null, paymentRef: d.paymentRef || null } }), { success: 'Done — employee notified', invalidate: [['/expenses']] });
+  const submit = useAction(() => api(`/expenses/${id}/submit`, { body: {} }), { success: 'Submitted', invalidate: [['/expenses']] });
+  if (!c) return <Spinner />;
+  const mine = c.userId === user?.id;
+  const managerStage = c.status === 'SUBMITTED' && !mine && (c.approverId === user?.id || can('expenses:approve'));
+  const financeStage = ['MANAGER_APPROVED', 'ACCOUNTS_APPROVED'].includes(c.status) && !mine && can('expenses:finance');
+  return (
+    <div className="space-y-4">
+      <PageHeader back="/expenses" title={<>{c.number} <Status s={c.status} /></>} subtitle={`${c.user.name} · ${c.title}`}
+        actions={mine && ['DRAFT', 'SENT_BACK'].includes(c.status) && <><Link to={`/expenses/${c.id}/edit`}><Button>Edit</Button></Link><Button variant="primary" loading={submit.isPending} onClick={() => submit.mutate(undefined)}>Submit</Button></>} />
+      <Card><KV cols={4} items={[['Claimed', inr(c.total)], ['Approved', c.approvedTotal != null ? inr(c.approvedTotal) : null], ['Approver', c.approver?.name], ['Period', `${fmtDate(c.periodFrom)} → ${fmtDate(c.periodTo)}`], ['Paid', fmtDateTime(c.paidAt)], ['Payment ref', c.paymentRef]]} /></Card>
+      <Card title="Expenses" pad={false}>
+        <Table rows={c.lines} cols={[
+          { key: 'date', label: 'Date', render: (l: any) => fmtDate(l.date) }, { key: 'category', label: 'Category', render: (l: any) => label(l.category) }, { key: 'description', label: 'Description' },
+          { key: 'km', label: 'Km', render: (l: any) => l.distanceKm ?? '' }, { key: 'receipt', label: 'Receipt', render: (l: any) => (l.receiptId ? <a className="text-brand-700" href={fileUrl(l.receiptId)} target="_blank" rel="noreferrer"><Paperclip className="inline size-3" /> view</a> : <span className="text-amber-700">none</span>) },
+          { key: 'amount', label: 'Amount', num: true, render: (l: any) => inr(l.amount) },
+        ]} />
+      </Card>
+      {(managerStage || financeStage) && (
+        <Card title={managerStage ? 'Manager approval' : c.status === 'MANAGER_APPROVED' ? 'Accounts approval' : 'Record payment'}>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {c.status !== 'ACCOUNTS_APPROVED' && <Field label="Approve amount (blank = full)"><Input type="number" value={d.approvedTotal} onChange={(e) => setD({ ...d, approvedTotal: e.target.value })} placeholder={String(c.approvedTotal ?? c.total)} /></Field>}
+            {c.status === 'ACCOUNTS_APPROVED' && <Field label="Payment reference"><Input value={d.paymentRef} onChange={(e) => setD({ ...d, paymentRef: e.target.value })} /></Field>}
+            <Field label="Comment" className="sm:col-span-2"><Input value={d.comment} onChange={(e) => setD({ ...d, comment: e.target.value })} /></Field>
+          </div>
+          <div className="mt-3 flex gap-2">
+            {c.status === 'ACCOUNTS_APPROVED' ? <Button variant="success" loading={act.isPending} onClick={() => act.mutate('pay')}>Mark paid</Button>
+              : <Button variant="success" loading={act.isPending} onClick={() => act.mutate('approve')}>Approve</Button>}
+            <Button loading={act.isPending} onClick={() => act.mutate('send-back')}>Send back</Button>
+            <Button variant="danger" loading={act.isPending} onClick={() => act.mutate('reject')}>Reject</Button>
+          </div>
+        </Card>
+      )}
+      <Card title="History">
+        <ul className="space-y-2 text-sm">{c.history.map((h: any) => <li key={h.id} className="border-l-2 border-brand-200 pl-3"><div className="text-xs text-slate-500">{fmtDateTime(h.createdAt)} · {h.userName}</div>{label(h.action)} → <Status s={h.toStatus} />{h.comment && <> — “{h.comment}”</>}</li>)}</ul>
+      </Card>
+      {!!c.receipts.length && <Card title="Receipts"><PhotoGrid photos={c.receipts.filter((r: any) => r.mimeType.startsWith('image/'))} /></Card>}
+    </div>
+  );
+}
+

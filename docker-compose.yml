@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tisa
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change-me}
+      POSTGRES_DB: tisa_erp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tisa -d tisa_erp"]
+      interval: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db: { condition: service_healthy }
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://tisa:${DB_PASSWORD:-change-me}@db:5432/tisa_erp
+      UPLOAD_DIR: /app/apps/api/uploads
+    ports:
+      - "4000:4000"
+    volumes:
+      - uploads:/app/apps/api/uploads
+
+volumes:
+  pgdata:
+  uploads:
