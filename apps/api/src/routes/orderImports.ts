@@ -5,10 +5,10 @@
  */
 import { Router } from 'express';
 import multer from 'multer';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
-import { clients, importJobs, items, salesOrders, sites } from '../db/schema';
+import { clients, importJobs, items, salesOrderItems, salesOrders, sites } from '../db/schema';
 import { audit } from '../lib/audit';
 import { badRequest, notFound } from '../lib/http';
 import { GSTIN_REGEX, INDIAN_STATES, stateFromGstin } from '../lib/gst';
@@ -119,6 +119,7 @@ const commitSchema = z.object({
     itemId: z.string().nullish(), description: z.string().trim().min(1), unit: z.string().trim().min(1), qty: z.coerce.number().positive(),
     rate: z.coerce.number().min(0), discountPct: z.coerce.number().min(0).max(100).default(0), gstRate: z.coerce.number().min(0).max(40),
     hsnSac: z.string().trim().nullish(),
+    deliveredQty: z.coerce.number().min(0).nullish(),
     newItem: z.object({ type: z.enum(['PRODUCT', 'ACCESSORY', 'SERVICE']), categoryId: z.string().nullish(), brand: z.string().nullish() }).nullish(),
   })).min(1),
 });
@@ -210,6 +211,11 @@ r.post('/order-imports/:id/commit', perm, async (req, res) => {
       ? await replaceOrderLines(tx, dup!.id, input, `Items imported from ${job.fileName} on ${new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}.`)
       : await createSalesOrder(tx, input, req.user.id);
 
+    // quantities already delivered in the old ERP become the opening delivered quantity (no stock movement)
+    for (const [i, l] of lines.entries()) {
+      const dq = Math.min(l.deliveredQty ?? 0, l.qty);
+      if (dq > 0) await tx.update(salesOrderItems).set({ deliveredQty: dq }).where(and(eq(salesOrderItems.orderId, order.id), eq(salesOrderItems.sortOrder, i)));
+    }
     const summary = { orderId: order.id, number: order.number, total: order.total, itemsCreated: toCreate.length, siteCreated, clientCreated, lines: lines.length, filledIn: fillIn };
     await tx.update(importJobs).set({ status: 'DONE', summary }).where(eq(importJobs.id, job.id));
     return { order, summary };

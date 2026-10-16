@@ -15,6 +15,8 @@ export type DocLine = {
   srNo: string | null;
   parentKey: string | null; // sub-component of a kit / package line
   description: string;
+  /** the product name alone (description without a line remark) — used for matching inventory */
+  name: string;
   manufacturer: string | null;
   model: string | null;
   hsnSac: string | null;
@@ -24,6 +26,9 @@ export type DocLine = {
   discountPct: number | null;
   gstRate: number | null;
   amount: number | null;
+  /** quantities already delivered / billed in the source system (FFH product details export) */
+  deliveredQty: number | null;
+  billedQty: number | null;
 };
 export type ParsedOrderDoc = {
   source: string; // "FFH ERP" or "Document"
@@ -130,8 +135,9 @@ export async function parseOrderDocument(buf: Buffer, fileName: string): Promise
 
   // ── header ──
   const title = find(/^(proforma invoice|sales order|order form|work order|tax invoice|quotation)\b/i)?.text.split('\n')[0] ?? null;
-  const sourceNo = inline(/\b(?:SO|S\.O\.|Sales\s*Order|Order)\s*No\.?\s*:?\s*\n?\s*([A-Z0-9][A-Z0-9/_-]*)/i)
-    ?? (fileName.match(/SalesOrder_([A-Z0-9-]+)_/i)?.[1] ?? null);
+  // FFH puts the SO number in the file name (…_SalesOrder_<no>_… / ProductDetails_Id-<no>); otherwise look for an "SO No" label
+  const sourceNo = fileName.match(/SalesOrder_([A-Z0-9-]+)_/i)?.[1] ?? fileName.match(/_Id-(\d+)/i)?.[1]
+    ?? inline(/\b(?:SO|S\.O\.|Sales\s*Order|Order)[\s.]*No\b\.?\s*:?\s*\n?\s*([A-Z0-9][A-Z0-9/_-]*)/i) ?? null;
   const date = toIsoDate(inline(/\b(?:SO\s*|Order\s*)?Date\s*:?\s*(\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})/i))
     ?? toIsoDate(fileName.match(/_(\d{2}-\d{2}-\d{4})_/)?.[1]);
   const poRaw = inline(/\b(?:Client\s*|Customer\s*)?P\.?O\.?\s*No\.?\s*:?[ \t]*([^\s:][^\n]*)/i);
@@ -142,7 +148,8 @@ export async function parseOrderDocument(buf: Buffer, fileName: string): Promise
   const dueAmount = num(inline(/\bDue\s*Amount\s*:?\s*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d+)?)/i));
   const advanceReceived = num(inline(/\bAdvance\s*Received\s*:?\s*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d+)?)/i));
   const grandTotal = num(inline(/\b(?:Grand\s*Total|Total\s*Amount|Net\s*Amount|Invoice\s*Total|Order\s*Value)\s*:?\s*(?:Rs\.?|₹|INR)?\s*([\d,]+(?:\.\d+)?)/i));
-  const remarkLabel = find(/^(delivery\s*remarks?|remarks?|special\s*instructions?)\s*:?$/i);
+  // a "Remarks" heading inside the item table is a column, not the order's remark
+  const remarkLabel = cells.find((x) => /^(delivery\s*remarks?|remarks?|special\s*instructions?)\s*:?$/i.test(x.text) && !at(x.s, x.r).some((y) => /^(qty|quantity)\b/i.test(y.text)));
   const remark = oneLine(below(remarkLabel, 2)?.text) ?? inline(/^(?:Delivery\s*)?Remarks?\s*:\s*([^\n]+)/i);
 
   // ── billed to / despatched to ──
@@ -191,10 +198,14 @@ export async function parseOrderDocument(buf: Buffer, fileName: string): Promise
     unit: col(/^(units?|uom|unit of measure)$/i),
     qty: col(/^(qty|quantity)\b/i),
     rate: col(/^(rate|price|unit\s*price|unit\s*rate|rate\s*per\s*unit|basic\s*rate)\b/i),
-    disc: col(/^(disc(ount)?\.?\s*%?|disc\s*\(%\))/i),
+    disc: col(/^dis(c(ount)?)?\.?\s*(\(%\)|%)?$/i),
     gst: col(/^(gst|igst|tax)\s*(%|rate)?/i),
     hsn: col(/^(hsn|sac|hsn\s*\/\s*sac|hsn_sac)/i),
-    amount: col(/^(amount|total|value|taxable\s*value|line\s*total)\b/i),
+    amount: col(/^(amount|total|value|taxable\s*value|line\s*total|final\s*amt)/i),
+    model: col(/^(part\s*code|part\s*no\.?|model(\s*no\.?)?)$/i),
+    remark: col(/^remarks?$/i),
+    delivered: col(/^delivered\s*qty$/i),
+    billed: col(/^bill(ed)?\s*qty$/i),
   };
   const headerCols = hdr.map((x) => x.c).sort((a, b) => a - b);
   const nextHeaderCol = (c: number) => headerCols.find((x) => x > c) ?? Infinity;
@@ -205,6 +216,7 @@ export async function parseOrderDocument(buf: Buffer, fileName: string): Promise
   };
 
   const lines: DocLine[] = [];
+  const skippedNoQty: string[] = [];
   let parent: string | null = null;
   const maxRow = Math.max(...cells.filter((x) => x.s === descHeader.s).map((x) => x.r));
   for (let r = descHeader.r + 1; r <= maxRow; r++) {
@@ -215,7 +227,10 @@ export async function parseOrderDocument(buf: Buffer, fileName: string): Promise
     const qtyV = num(val(row, cols.qty));
     if (descRaw && /^(total|sub\s*total|grand\s*total|amount\s*in\s*words|terms)/i.test(descRaw) ) break;
     if (!descRaw || qtyV == null) {
-      if (lines.length && !sr) break; // end of the table
+      // printed forms end the table at the first row without a serial no.; plain tables just skip incomplete rows
+      if (descRaw && cols.sr == null) { skippedNoQty.push(oneLine(descRaw)!); continue; }
+      if (lines.length && !sr && cols.sr != null) break;
+      if (lines.length && !sr && !descRaw) break;
       continue;
     }
     // description: first line(s) are the item; "Manufacturer:", "Make:", "Model:", "HSN:" lines are details
@@ -232,21 +247,27 @@ export async function parseOrderDocument(buf: Buffer, fileName: string): Promise
     const key: string = isChild ? `${parent}(${srClean})` : srClean ?? String(lines.filter((l) => !l.parentKey).length + 1);
     if (!isChild) parent = key;
     const gstRaw = val(row, cols.gst);
+    const lineRemark = oneLine(val(row, cols.remark));
     lines.push({
       key, srNo: sr, parentKey: isChild ? parent : null,
-      description: textLines.join(' ').replace(/\s+/g, ' ').trim(),
-      manufacturer, model, hsnSac: oneLine(val(row, cols.hsn)) ?? hsnInline,
+      description: [textLines.join(' ').replace(/\s+/g, ' ').trim(), lineRemark].filter(Boolean).join(' — '),
+      name: textLines.join(' ').replace(/\s+/g, ' ').trim(),
+      manufacturer, model: oneLine(val(row, cols.model)) ?? model, hsnSac: oneLine(val(row, cols.hsn)) ?? hsnInline,
       unit: oneLine(val(row, cols.unit)), qty: qtyV,
       rate: num(val(row, cols.rate)), discountPct: num(val(row, cols.disc)),
       gstRate: gstRaw ? num(gstRaw) : null, amount: num(val(row, cols.amount)),
+      deliveredQty: num(val(row, cols.delivered)), billedQty: num(val(row, cols.billed)),
     });
   }
   if (!lines.length) throw badRequest('No item lines were found under the Description / Quantity headings');
+  if (skippedNoQty.length) warnings.push(`${skippedNoQty.length} line${skippedNoQty.length > 1 ? 's have' : ' has'} no quantity in the file and ${skippedNoQty.length > 1 ? 'were' : 'was'} left out: ${skippedNoQty.slice(0, 5).join('; ')}${skippedNoQty.length > 5 ? '…' : ''}`);
+  if (cols.gst == null && lines.some((l) => l.rate != null)) warnings.push('The file has no GST column — GST % comes from the item master (18% for new items); compare the total with the old ERP\'s order value below');
+  if (lines.some((l) => (l.billedQty ?? 0) > 0)) warnings.push('Some lines were already billed in the old ERP — billed quantities are shown per line; avoid billing them again here');
   if (!lines.some((l) => l.rate != null)) warnings.push('The file has no rates — rates are taken from the item master where the item is known; enter the rest before importing');
 
   const clientHint = (fileName.replace(/\.[^.]+$/, '').match(/^(.+?)_(?:SalesOrder|SO|Order|Proforma|Quotation)_/i)?.[1] ?? null)
     ?.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim() ?? null;
-  const isFfh = /Digital Document generated on CRM System/i.test(cells.map((c) => c.text).join('\n')) || /_SalesOrder_\d+_/i.test(fileName);
+  const isFfh = /Digital Document generated on CRM System/i.test(cells.map((c) => c.text).join('\n')) || /_SalesOrder_\d+_|ProductDetails_Id-\d+/i.test(fileName);
 
   return {
     source: isFfh ? 'FFH ERP' : 'Document', title, sourceNo, date, poNo, poDate, contact, owner, clientHint,

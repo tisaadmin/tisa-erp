@@ -21,7 +21,7 @@ type ItemSug = { id: string; name: string; sku: string; brand: string | null; un
 type ImpLine = {
   key: string; srNo: string | null; parentKey: string | null; description: string; manufacturer: string | null; suggestions: ItemSug[];
   include: boolean; action: 'match' | 'new' | 'text'; itemId: string | null; unit: string; qty: number; rate: number; gstRate: number; hsnSac: string | null;
-  discountPct: number; newItem: { type: 'PRODUCT' | 'ACCESSORY' | 'SERVICE'; categoryId: string | null; brand: string | null };
+  discountPct: number; deliveredQty: number | null; billedQty: number | null; model: string | null; newItem: { type: 'PRODUCT' | 'ACCESSORY' | 'SERVICE'; categoryId: string | null; brand: string | null };
 };
 type ClientSug = { id: string; name: string; code: string; city: string | null; score: number; reason: string };
 type SiteSug = { id: string; name: string; code: string; address: string | null; city: string | null; score: number };
@@ -152,7 +152,7 @@ export function OrderImportPage() {
           </Field>
           <Button variant={p ? 'secondary' : 'primary'} icon={<Upload className="size-4" />} disabled={!file} loading={busy} onClick={upload}>{p ? 'Read another file' : 'Read file'}</Button>
         </div>
-        {!p && <p className="mt-3 text-sm text-slate-500">In FFH, open the sales order and export it to Excel (or save the PDF as .xlsx). The file name usually starts with the client name, which is used to find the client.</p>}
+        {!p && <p className="mt-3 text-sm text-slate-500">Upload FFH's <b>product details</b> export of an order (ProductDetails_Id-&lt;SO no&gt;.xlsx — it has rates and quantities) or the sales order print saved as .xlsx. The SO number in the file name links it to the order brought in from the FFH order list, so its client and site are filled in automatically.</p>}
       </Card>
 
       {p && (
@@ -280,7 +280,7 @@ export function OrderImportPage() {
                       <td className={cx('pt-3 text-slate-500', l.parentKey && 'pl-5')}>{l.srNo ?? l.key}</td>
                       <td>
                         <textarea rows={2} className={cx('input min-h-8', l.parentKey && 'ml-3 w-[calc(100%-0.75rem)]')} value={l.description} onChange={(e) => set(i, { description: e.target.value })} />
-                        <div className={cx('mt-0.5 text-xs text-slate-400', l.parentKey && 'ml-3')}>{[l.parentKey && `part of line ${l.parentKey}`, l.manufacturer && `Make: ${l.manufacturer}`].filter(Boolean).join(' · ')}</div>
+                        <div className={cx('mt-0.5 text-xs text-slate-400', l.parentKey && 'ml-3')}>{[l.parentKey && `part of line ${l.parentKey}`, l.model && `Part: ${l.model}`, l.manufacturer && `Make: ${l.manufacturer}`].filter(Boolean).join(' · ')}</div>
                       </td>
                       <td>
                         <div className="mb-1.5 flex gap-1 text-xs">
@@ -310,7 +310,8 @@ export function OrderImportPage() {
                         )}
                         {l.action === 'text' && <p className="text-xs text-slate-500">Billed as a description only — not linked to inventory or stock.</p>}
                       </td>
-                      <td><input type="number" min={0} step="any" className="input text-right" value={l.qty} onChange={(e) => set(i, { qty: Number(e.target.value) })} /></td>
+                      <td><input type="number" min={0} step="any" className="input text-right" value={l.qty} onChange={(e) => set(i, { qty: Number(e.target.value) })} />
+                        {((l.deliveredQty ?? 0) > 0 || (l.billedQty ?? 0) > 0) && <div className="mt-0.5 text-right text-[11px] leading-tight text-amber-700" title="Already done in the old ERP">{(l.deliveredQty ?? 0) > 0 && <div>dlv {l.deliveredQty}</div>}{(l.billedQty ?? 0) > 0 && <div>billed {l.billedQty}</div>}</div>}</td>
                       <td><input className="input" value={l.unit} onChange={(e) => set(i, { unit: e.target.value })} /></td>
                       <td><input type="number" min={0} step="any" className={cx('input text-right', l.include && !l.rate && 'border-amber-400')} value={l.rate} onChange={(e) => set(i, { rate: Number(e.target.value) })} /></td>
                       <td><select className="input text-right" value={l.gstRate} onChange={(e) => set(i, { gstRate: Number(e.target.value) })}>{[0, 5, 12, 18, 28, 40].map((g) => <option key={g} value={g}>{g}</option>)}</select></td>
@@ -323,6 +324,8 @@ export function OrderImportPage() {
             <div className="flex flex-wrap items-start justify-between gap-4 border-t border-slate-100 p-4">
               <div className="space-y-1 text-sm">
                 {zeroRate > 0 && <p className="text-amber-700">{zeroRate} included line{zeroRate > 1 ? 's have' : ' has'} no rate (₹0). Enter rates, or leave them at 0 for parts that are covered by the main line's price.</p>}
+                {p.duplicate?.summaryOnly && p.duplicate.soValue != null && p.duplicate.soValue > 0 && <p className={cx(Math.abs(t.total - p.duplicate.soValue) < 1 ? 'text-emerald-700' : 'text-amber-800')}>
+                  FFH order value incl. GST: <b>{inr(p.duplicate.soValue)}</b> · this order: <b>{inr(t.total)}</b>{Math.abs(t.total - p.duplicate.soValue) < 1 ? ' — matches' : ` — difference ${inr(t.total - p.duplicate.soValue)} (check GST % on the lines)`}</p>}
                 {p.duplicate?.summaryOnly && p.duplicate.basicValue != null && <p className={cx(Math.abs(t.taxable - p.duplicate.basicValue) < 1 ? 'text-emerald-700' : 'text-amber-800')}>
                   FFH basic value of this order: <b>{inr(p.duplicate.basicValue)}</b> · items here: <b>{inr(t.taxable)}</b>{Math.abs(t.taxable - p.duplicate.basicValue) < 1 ? ' — matches' : ` — difference ${inr(t.taxable - p.duplicate.basicValue)}`}</p>}
                 {p.doc.dueAmount != null && <p className={cx(Math.abs(t.total - p.doc.dueAmount) < 1 ? 'text-emerald-700' : 'text-slate-600')}>

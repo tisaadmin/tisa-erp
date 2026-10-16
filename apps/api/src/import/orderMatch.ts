@@ -80,11 +80,13 @@ export async function suggestItems(tx: DbOrTx, lines: DocLine[]): Promise<ItemSu
     salePrice: items.salePrice, hsnSac: items.hsnSac, active: items.active }).from(items);
   const prepared = all.filter((i) => i.active).map((i) => ({ i, n: norm(i.name), t: tokens(i.name), m: norm(i.model) }));
   return lines.map((l) => {
-    const dn = norm(l.description), dt = tokens(l.description);
+    const nameText = l.name || l.description;
+    const dn = norm(nameText), dt = tokens(nameText), lm = norm(l.model);
     const scored: ItemSuggestion[] = [];
     for (const p of prepared) {
       let s: number;
       if (p.n === dn) s = 1;
+      else if (lm.length >= 4 && p.m === lm) s = 0.97; // same part code
       else if (p.m.length >= 4 && dn.includes(p.m)) s = 0.92;
       else {
         const td = tokenDice(dt, p.t);

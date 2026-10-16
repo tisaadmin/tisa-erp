@@ -498,3 +498,36 @@ test('order list import: FFH order list → summary orders matching FFH values; 
   await ok('admin', 'POST', `/imports/${(await upload()).id}/commit`);
   assert.equal((await ok('sales', 'GET', `/orders/${a.id}`)).items.length, 4);
 });
+
+test('order import: FFH product-details export (ProductDetails_Id-<SO>) fills the order found by its SO number', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  // the order list entry
+  const lw = new ExcelJS.Workbook(); const ls = lw.addWorksheet('Salesorderlist List');
+  ls.addRow(['Sales Order Id', 'Client Name', 'Delivery Address', 'Billing Address', 'City', 'State', 'Title', 'Delivery Remarks', 'Delivery Status', 'Billing Status', 'Open Date', 'So Value', 'Basic Value']);
+  ls.addRow([261099600, 'Imported Towers CHS', null, null, 'Mumbai', 'Maharashtra', 'Lobby CCTV', 'Lobby CCTV', 'Part Delivered', 'Not Billed', '05/10/2026', 3540 + 2 * 1180, 3000 + 2000]);
+  const lb = Buffer.from(await lw.xlsx.writeBuffer());
+  const lfd = new FormData(); lfd.append('file', new Blob([new Uint8Array(lb)]), 'Salesorderlist List.xlsx');
+  const up = await ok('admin', 'POST', '/imports/upload', undefined, lfd);
+  await ok('admin', 'POST', `/imports/${up.id}/commit`);
+  // the product details export
+  const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('ProductDetails_Id-261099600');
+  ws.addRow(['Product', 'Partcode', 'Hsn', 'Uom', 'Quantity', 'Rate', 'Final Amt(Wd)', 'Dis(%)', 'Remarks', 'Pp Qty', 'Pp Rate', 'Pp Dis(%)', 'Pp Final Amt(Wd)', 'Margin', '% Margin', 'Bill Qty', 'Delivered Qty', 'Po Qty']);
+  ws.addRow([ctx.cam.name, null, null, 'Number', 3, 1000, 3000, null, null, 0, 0, 0, 0, 0, 0, 0, 2, 0]);
+  ws.addRow(['Sonology NAS DS925 storage', 'DS925', null, 'Number', 1, 2000, 2000, null, 'with 4 bays', 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+  ws.addRow(['RG-6 Coaxial Cable', null, null, 'Meter', null, 76.38, null, null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  const buf = Buffer.from(await wb.xlsx.writeBuffer());
+  const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(buf)]), 'ProductDetails_Id-261099600.xlsx');
+  const p = await ok('sales', 'POST', '/order-imports/parse', undefined, fd);
+  assert.equal(p.doc.sourceNo, '261099600', 'SO number from the file name, not from "Sonology NAS"');
+  assert.equal(p.doc.source, 'FFH ERP');
+  assert.equal(p.duplicate.summaryOnly, true); assert.ok(p.clientId);
+  assert.equal(p.lines.length, 2); assert.ok(p.doc.warnings.some((w: string) => /no quantity/.test(w)));
+  assert.equal(p.lines[0].action, 'match'); assert.equal(p.lines[0].deliveredQty, 2); assert.equal(p.lines[0].rate, 1000);
+  assert.equal(p.lines[1].model, 'DS925'); assert.equal(p.lines[1].description, 'Sonology NAS DS925 storage — with 4 bays');
+  const lines = p.lines.map((l: any) => ({ ...l, newItem: { ...l.newItem, categoryId: l.newItem.categoryId ?? ctx.cam.categoryId } }));
+  const done = await ok('sales', 'POST', `/order-imports/${p.id}/commit`, { clientId: p.clientId, site: p.siteId ? { mode: 'existing', siteId: p.siteId } : { mode: 'none' }, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines });
+  assert.equal(done.filledIn, true);
+  const o = await ok('sales', 'GET', `/orders/${done.orderId}`);
+  assert.equal(o.taxable, 5000); assert.equal(o.total, 5900);
+  assert.equal(o.items.find((l: any) => l.itemId === ctx.cam.id).deliveredQty, 2, 'opening delivered qty from the old ERP');
+});
