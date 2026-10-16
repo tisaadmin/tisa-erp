@@ -12,7 +12,7 @@ export function validateTerms(terms: PaymentTerm[] | null | undefined, label = '
   for (const t of terms) {
     if (!STAGES.includes(t.stage)) throw badRequest(`${label}: unknown stage ${t.stage}`);
     if (seen.has(t.stage)) throw badRequest(`${label}: ${t.stage} listed twice`);
-    if (!(t.percent > 0 && t.percent <= 100)) throw badRequest(`${label}: ${t.stage} percent must be between 0 and 100`);
+    if (!(t.percent >= 0 && t.percent <= 100)) throw badRequest(`${label}: ${t.stage} percent must be between 0 and 100`);
     seen.add(t.stage);
   }
   const sum = r2(terms.reduce((s, t) => s + t.percent, 0));
@@ -77,7 +77,7 @@ export async function orderBillingStatus(tx: DbOrTx, orderId: string) {
         const b = billedMap.get(key(it.id, t.stage));
         const eligibleQty = eligible(t.stage, it);
         const billedQty = b ? Number(b.qty) : 0;
-        return { stage: t.stage, percent: t.percent, eligibleQty, billedQty, billableQty: r3(Math.max(0, eligibleQty - billedQty)), billedAmount: b ? Number(b.taxable) : 0 };
+        return { stage: t.stage, percent: t.percent, eligibleQty, billedQty, billableQty: t.percent > 0 ? r3(Math.max(0, eligibleQty - billedQty)) : 0, billedAmount: b ? Number(b.taxable) : 0 };
       }),
     };
   });

@@ -91,6 +91,7 @@ export function Totals({ t }: { t: { discount?: number; taxable: number; cgst: n
 export const TERM_PRESETS: { label: string; terms: Term[] }[] = [
   { label: '100% Advance', terms: [{ stage: 'ADVANCE', percent: 100 }] },
   { label: '100% Against delivery', terms: [{ stage: 'DELIVERY', percent: 100 }] },
+  { label: 'No advance: 0 / 70 / 20 / 10 (Adv / Del / Install / Comm.)', terms: [{ stage: 'ADVANCE', percent: 0 }, { stage: 'DELIVERY', percent: 70 }, { stage: 'INSTALLATION', percent: 20 }, { stage: 'COMMISSIONING', percent: 10 }] },
   { label: '30 / 60 / 10 (Adv / Delivery / Commissioning)', terms: [{ stage: 'ADVANCE', percent: 30 }, { stage: 'DELIVERY', percent: 60 }, { stage: 'COMMISSIONING', percent: 10 }] },
   { label: '30 / 40 / 20 / 10 (Adv / Del / Install / Handover)', terms: [{ stage: 'ADVANCE', percent: 30 }, { stage: 'DELIVERY', percent: 40 }, { stage: 'INSTALLATION', percent: 20 }, { stage: 'HANDOVER', percent: 10 }] },
   { label: '20 / 50 / 15 / 10 / 5 (Adv / Del / Inst / Testing / Comm.)', terms: [{ stage: 'ADVANCE', percent: 20 }, { stage: 'DELIVERY', percent: 50 }, { stage: 'INSTALLATION', percent: 15 }, { stage: 'TESTING', percent: 10 }, { stage: 'COMMISSIONING', percent: 5 }] },

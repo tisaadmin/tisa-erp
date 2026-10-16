@@ -1,7 +1,8 @@
 import { Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { FormFields, type FieldDef } from '../components/MasterPage';
-import { Button, Card, Field, Input, PageHeader, Spinner, cx } from '../components/ui';
+import { toast } from 'sonner';
+import { Badge, Button, Card, Field, Input, PageHeader, Spinner, Stat, Table, Tabs, cx } from '../components/ui';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { label } from '../lib/format';
@@ -92,6 +93,238 @@ export function SettingsPage() {
           <div className="flex items-end"><Button loading={chg.isPending} onClick={() => chg.mutate(undefined)}>Change</Button></div>
         </div>
       </Card>
+    </div>
+  );
+}
+
+// ═══════════════════════ Forms & Fields ═══════════════════════
+
+type RF = { key: string; label: string; defaultLabel: string; type: string; isCustom: boolean; lock: string | null; visible: boolean; required: boolean; defaultValue: string | null; options: string[] | null; sortOrder: number };
+const CUSTOM_TYPES = [
+  { value: 'text', label: 'Text' }, { value: 'number', label: 'Number' }, { value: 'date', label: 'Date' }, { value: 'select', label: 'Dropdown' },
+  { value: 'checkbox', label: 'Yes / No' }, { value: 'textarea', label: 'Long text' }, { value: 'email', label: 'Email' },
+];
+const keyFromLabel = (l: string) => {
+  const words = l.replace(/[^a-zA-Z0-9 ]/g, ' ').trim().split(/\s+/).filter(Boolean);
+  const k = words.map((w, i) => (i ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w.toLowerCase())).join('');
+  return /^[a-z]/.test(k) ? k.slice(0, 40) : `f${k}`.slice(0, 40);
+};
+
+export function FieldsPage() {
+  const { can } = useAuth();
+  const cfg = useGet<Record<string, { title: string; fields: RF[] }>>('/field-config');
+  const [entity, setEntity] = useState('clients');
+  const [rows, setRows] = useState<RF[] | null>(null);
+  const [nf, setNf] = useState({ label: '', type: 'text', options: '' });
+  useEffect(() => { if (cfg.data) setRows(cfg.data[entity].fields.map((f) => ({ ...f }))); }, [cfg.data, entity]);
+  const toBody = (list: RF[]) => list.map((f, i) => ({
+    fieldKey: f.key, isCustom: f.isCustom, label: f.isCustom || f.label !== f.defaultLabel ? f.label : null, type: f.isCustom ? f.type : null,
+    options: f.isCustom ? f.options : null, visible: f.visible, required: f.required, defaultValue: f.defaultValue || null, sortOrder: (i + 1) * 10,
+  }));
+  const save = useAction((list: RF[] | null) => api(`/field-config/${entity}`, { method: 'PUT', body: { fields: list ? toBody(list) : [] } }),
+    { success: 'Form updated — changes apply to everyone immediately', invalidate: [['/field-config']] });
+  if (!cfg.data || !rows) return <Spinner />;
+  const editable = can('settings:edit');
+  const set = (i: number, p: Partial<RF>) => setRows(rows.map((r, j) => (j === i ? { ...r, ...p } : r)));
+  const move = (i: number, d: number) => { const j = i + d; if (j < 0 || j >= rows.length) return; const c = [...rows]; [c[i], c[j]] = [c[j], c[i]]; setRows(c); };
+  const addCustom = () => {
+    const key = keyFromLabel(nf.label);
+    if (!nf.label.trim() || rows.some((r) => r.key === key)) return;
+    setRows([...rows, { key, label: nf.label.trim(), defaultLabel: nf.label.trim(), type: nf.type, isCustom: true, lock: null, visible: true, required: false, defaultValue: null,
+      options: nf.type === 'select' ? nf.options.split(',').map((o) => o.trim()).filter(Boolean) : null, sortOrder: 0 }]);
+    setNf({ label: '', type: 'text', options: '' });
+  };
+  return (
+    <div className="space-y-4">
+      <PageHeader title="Forms & fields" subtitle="Rename fields, hide the ones you don't use, make fields mandatory, set defaults, change the order, and add your own fields."
+        actions={editable && <>
+          <Button onClick={() => confirm('Reset this form to the standard layout? Custom fields and their values stay in the database but are hidden.') && save.mutate(null)}>Reset to standard</Button>
+          <Button variant="primary" loading={save.isPending} onClick={() => save.mutate(rows)}>Save {cfg.data[entity].title.toLowerCase()} form</Button>
+        </>} />
+      <Tabs value={entity} onChange={(v) => setEntity(v)} tabs={Object.entries(cfg.data).map(([k, v]) => ({ value: k, label: v.title }))} />
+      <Card pad={false}>
+        <div className="overflow-x-auto">
+          <table className="tbl">
+            <thead><tr><th className="w-16">Order</th><th>Label shown on the form</th><th>Type</th><th className="text-center">Show</th><th className="text-center">Mandatory</th><th>Default value</th><th /></tr></thead>
+            <tbody>
+              {rows.map((f, i) => (
+                <tr key={f.key} className={cx(!f.visible && 'opacity-50')}>
+                  <td className="whitespace-nowrap">
+                    <button disabled={!editable} className="px-1 text-slate-400 hover:text-slate-700" onClick={() => move(i, -1)} aria-label="Move up">▲</button>
+                    <button disabled={!editable} className="px-1 text-slate-400 hover:text-slate-700" onClick={() => move(i, 1)} aria-label="Move down">▼</button>
+                  </td>
+                  <td>
+                    <Input disabled={!editable} value={f.label} onChange={(e) => set(i, { label: e.target.value })} />
+                    <div className="mt-0.5 text-[11px] text-slate-400">{f.isCustom ? `Custom field · ${f.key}` : f.label !== f.defaultLabel ? `Standard: ${f.defaultLabel}` : 'Standard field'}{f.lock && ' · 🔒 needed for GST / billing'}</div>
+                  </td>
+                  <td className="text-sm whitespace-nowrap">{f.isCustom ? (CUSTOM_TYPES.find((t) => t.value === f.type)?.label ?? f.type) : label(f.type)}
+                    {f.isCustom && f.type === 'select' && <Input className="mt-1" disabled={!editable} value={(f.options ?? []).join(', ')} placeholder="Option 1, Option 2" onChange={(e) => set(i, { options: e.target.value.split(',').map((o) => o.trim()) })} />}</td>
+                  <td className="text-center"><input type="checkbox" disabled={!editable || !!f.lock} checked={f.visible} onChange={(e) => set(i, { visible: e.target.checked, required: e.target.checked && f.required })} /></td>
+                  <td className="text-center"><input type="checkbox" disabled={!editable || f.lock === 'required' || !f.visible} checked={f.required} onChange={(e) => set(i, { required: e.target.checked })} /></td>
+                  <td><Input disabled={!editable || f.key === 'clientId' || f.key === 'categoryId' || f.key === 'assignedToId'} value={f.defaultValue ?? ''} onChange={(e) => set(i, { defaultValue: e.target.value })} placeholder="—" /></td>
+                  <td>{f.isCustom && editable && <button className="text-xs text-red-600 hover:underline" onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      {editable && (
+        <Card title="Add a custom field">
+          <div className="grid gap-3 sm:grid-cols-4">
+            <Field label="Label"><Input value={nf.label} onChange={(e) => setNf({ ...nf, label: e.target.value })} placeholder="e.g. Society registration no." /></Field>
+            <Field label="Type"><select className="input" value={nf.type} onChange={(e) => setNf({ ...nf, type: e.target.value })}>{CUSTOM_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}</select></Field>
+            {nf.type === 'select' && <Field label="Options (comma separated)"><Input value={nf.options} onChange={(e) => setNf({ ...nf, options: e.target.value })} placeholder="Residential, Commercial, Industrial" /></Field>}
+            <div className="flex items-end"><Button icon={<Plus className="size-4" />} disabled={!nf.label.trim()} onClick={addCustom}>Add field</Button></div>
+          </div>
+          <p className="mt-2 text-xs text-slate-500">Then click <b>Save</b> above. Mandatory rules are checked on the desktop, in the importer and on the server.</p>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════ Data import ═══════════════════════
+
+type Job = {
+  id: string; kind: string; preset: string | null; fileName: string; headers: string[]; mapping: Record<string, string | null>; options: Record<string, boolean>; status: string;
+  targets: { key: string; label: string; required?: boolean; hint?: string }[];
+  stats: { total: number; create: number; update: number; skip: number; error: number; warnings: number; byEntity: Record<string, { create: number; update: number }> };
+  rows: { row: number; action: string; entity: string; label: string; detail?: string }[]; issues: { row: number; level: string; message: string }[]; issuesTruncated: boolean;
+};
+const KIND_LABEL: Record<string, string> = { clients: 'Clients, vendors & prospects', contacts: 'Contact persons', items: 'Inventory items', sites: 'Sites' };
+const ENTITY_LABEL: Record<string, string> = { client: 'clients', vendor: 'vendors', lead: 'prospects (leads)', site: 'sites', item: 'items', system: 'systems', stock: 'opening stock entries', contact: 'contacts' };
+const OPTION_LABEL: Record<string, Record<string, string>> = {
+  clients: { createSites: 'Create a "Main" site for each new client from its address', updateExisting: 'Update records that already exist (matched by source ID, GSTIN or name)' },
+  items: { importStock: 'Bring in current stock as opening stock (new items only)', ignoreDefaultReorder: 'Ignore a stock-alert level of 1 (FFH default)', updateExisting: 'Update items that already exist' },
+  sites: { updateExisting: 'Update sites that already exist' }, contacts: {},
+};
+
+export function ImportPage() {
+  const [kind, setKind] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [job, setJob] = useState<Job | null>(null);
+  const [busy, setBusy] = useState(false);
+  const recent = useGet<any[]>('/imports');
+  const upload = async () => {
+    if (!file) return;
+    const fd = new FormData(); fd.append('file', file); if (kind) fd.append('kind', kind);
+    setBusy(true);
+    try { setJob(await api<Job>('/imports/upload', { form: fd })); } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
+  };
+  const preview = async (body: Record<string, unknown>) => {
+    setBusy(true);
+    try { setJob(await api<Job>(`/imports/${job!.id}/preview`, { body })); } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
+  };
+  const commit = useAction(() => api<Job>(`/imports/${job!.id}/commit`, { body: {} }), { success: 'Import complete', onSuccess: (j) => setJob(j) });
+  const downloadIssues = async () => {
+    const csv = await api<string>(`/imports/${job!.id}/issues.csv`);
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a'); a.href = url; a.download = `import-issues-${job!.kind}.csv`; a.click(); URL.revokeObjectURL(url);
+  };
+  const done = job?.status === 'DONE';
+  const missingRequired = job?.targets.filter((t) => t.required && !job.mapping[t.key]) ?? [];
+  return (
+    <div className="space-y-4">
+      <PageHeader title="Data import" subtitle="Bring clients, vendors, contacts, sites and inventory in from Excel or CSV — including FFH ERP exports." />
+      {!job && (
+        <Card title="Upload a file">
+          <ol className="mb-4 list-inside list-decimal space-y-0.5 text-sm text-slate-600">
+            <li><b>Client list</b> first — clients, suppliers (→ vendors) and prospects (→ leads), plus a main site per client</li>
+            <li>Then the <b>contact list</b> — fills in contact persons, phones and emails</li>
+            <li>Then the <b>product list</b> — items by system, GST, HSN, makes, part codes, rack locations and current stock</li>
+            <li>Optionally a <b>sites</b> sheet (client name or ID + site name + address/GPS) for clients with several sites</li>
+          </ol>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="File (.xlsx or .csv)"><input type="file" accept=".xlsx,.csv" className="input" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Field>
+            <Field label="What's in the file?"><select className="input" value={kind} onChange={(e) => setKind(e.target.value)}>
+              <option value="">Detect automatically</option>{Object.entries(KIND_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></Field>
+            <div className="flex items-end"><Button variant="primary" disabled={!file} loading={busy} onClick={upload}>Upload & preview</Button></div>
+          </div>
+          <p className="mt-2 text-xs text-slate-500">Nothing is saved until you confirm. Importing the same file again updates records instead of duplicating them.</p>
+        </Card>
+      )}
+      {job && (
+        <>
+          <Card>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm text-slate-500">{job.fileName}</div>
+                <div className="text-lg font-semibold">{KIND_LABEL[job.kind]} {job.preset && <Badge t="blue">{job.preset} format detected</Badge>} {done && <Badge t="green">Imported</Badge>}</div>
+              </div>
+              <div className="flex gap-2">
+                {!done && <select className="input w-56" value={job.kind} onChange={(e) => preview({ kind: e.target.value })}>{Object.entries(KIND_LABEL).map(([k, l]) => <option key={k} value={k}>Treat as: {l}</option>)}</select>}
+                <Button onClick={() => { setJob(null); setFile(null); recent.refetch(); }}>{done ? 'Import another file' : 'Cancel'}</Button>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-6">
+              <Stat label="Rows" value={job.stats.total} />
+              <Stat label={done ? 'Created' : 'Will create'} value={job.stats.create} accent="green" />
+              <Stat label={done ? 'Updated' : 'Will update'} value={job.stats.update} />
+              <Stat label="Skipped" value={job.stats.skip} />
+              <Stat label="Errors (not imported)" value={job.stats.error} accent={job.stats.error ? 'red' : undefined} />
+              <Stat label="Warnings" value={job.stats.warnings} accent={job.stats.warnings ? 'amber' : undefined} />
+            </div>
+            <div className="mt-3 text-sm text-slate-600">{Object.entries(job.stats.byEntity).filter(([, v]) => v.create || v.update).map(([e, v]) => `${v.create ? `${v.create} new` : ''}${v.create && v.update ? ' + ' : ''}${v.update ? `${v.update} updated` : ''} ${ENTITY_LABEL[e] ?? e}`).join(' · ')}</div>
+            {!done && (
+              <div className="mt-4 flex flex-wrap items-center gap-3">
+                <Button variant="primary" disabled={!!missingRequired.length || job.stats.create + job.stats.update === 0} loading={commit.isPending} onClick={() => commit.mutate(undefined)}>
+                  Import {job.stats.create + job.stats.update} records{job.stats.error ? ` (skip ${job.stats.error} with errors)` : ''}</Button>
+                {missingRequired.length > 0 && <span className="text-sm text-red-600">Map a column to: {missingRequired.map((t) => t.label).join(', ')}</span>}
+                {busy && <span className="text-sm text-slate-500">Updating preview…</span>}
+              </div>
+            )}
+          </Card>
+          {!done && Object.keys(OPTION_LABEL[job.kind] ?? {}).length > 0 && (
+            <Card title="Options">
+              {Object.entries(OPTION_LABEL[job.kind]).map(([k, l]) => (
+                <label key={k} className="flex items-center gap-2 py-1 text-sm"><input type="checkbox" checked={job.options[k] !== false} onChange={(e) => preview({ options: { [k]: e.target.checked } })} /> {l}</label>
+              ))}
+            </Card>
+          )}
+          <div className="grid gap-4 xl:grid-cols-2">
+            {!done && (
+              <Card title="Column matching" pad={false}>
+                <table className="tbl">
+                  <thead><tr><th>Tisa field</th><th>Column in your file</th></tr></thead>
+                  <tbody>{job.targets.map((t) => (
+                    <tr key={t.key}>
+                      <td>{t.label}{t.required && <span className="text-red-500"> *</span>}{t.hint && <div className="text-[11px] text-slate-400">{t.hint}</div>}</td>
+                      <td><select className={cx('input', t.required && !job.mapping[t.key] && 'border-red-400')} value={job.mapping[t.key] ?? ''} onChange={(e) => preview({ mapping: { [t.key]: e.target.value || null } })}>
+                        <option value="">— not imported —</option>{job.headers.map((h) => <option key={h} value={h}>{h}</option>)}</select></td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </Card>
+            )}
+            <Card title={`Problems (${job.issues.length}${job.issuesTruncated ? '+' : ''})`} actions={job.issues.some((i) => i.row > 0) && <Button size="sm" onClick={downloadIssues}>Download rows with problems</Button>} pad={false}>
+              {job.issues.length ? (
+                <ul className="max-h-[480px] divide-y divide-slate-100 overflow-y-auto text-sm">
+                  {[...job.issues].sort((a, b) => (a.level === b.level ? a.row - b.row : a.level === 'error' ? -1 : 1)).map((i, k) => (
+                    <li key={k} className="flex gap-2 px-4 py-2"><Badge t={i.level === 'error' ? 'red' : 'amber'}>{i.level}</Badge><span className="text-slate-400">{i.row ? `Row ${i.row}` : 'File'}</span><span>{i.message}</span></li>
+                  ))}
+                </ul>
+              ) : <div className="p-6 text-center text-sm text-emerald-700">No problems found</div>}
+            </Card>
+          </div>
+          <Card title={done ? 'Imported records (sample)' : 'Preview (first rows)'} pad={false}>
+            <Table rows={job.rows.map((r) => ({ ...r, id: `${r.row}-${r.entity}` }))} cols={[
+              { key: 'row', label: 'Row' }, { key: 'action', label: 'Action', render: (r) => <Badge t={r.action === 'create' ? 'green' : r.action === 'update' ? 'blue' : r.action === 'error' ? 'red' : 'gray'}>{r.action}</Badge> },
+              { key: 'entity', label: 'As', render: (r) => label(r.entity) }, { key: 'label', label: 'Name' }, { key: 'detail', label: 'Details', render: (r) => <span className="text-xs text-slate-500">{r.detail}</span> },
+            ]} />
+          </Card>
+        </>
+      )}
+      {!job && !!recent.data?.length && (
+        <Card title="Recent imports" pad={false}>
+          <Table rows={recent.data} cols={[
+            { key: 'createdAt', label: 'When', render: (r: any) => new Date(r.createdAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) },
+            { key: 'fileName', label: 'File' }, { key: 'kind', label: 'Type', render: (r: any) => KIND_LABEL[r.kind] ?? r.kind },
+            { key: 'status', label: 'Status', render: (r: any) => <Badge t={r.status === 'DONE' ? 'green' : 'gray'}>{r.status === 'DONE' ? 'Imported' : 'Previewed only'}</Badge> },
+            { key: 'summary', label: 'Result', render: (r: any) => (r.summary ? `${r.summary.create} created · ${r.summary.update} updated · ${r.summary.error} errors` : '—') },
+          ]} />
+        </Card>
+      )}
     </div>
   );
 }

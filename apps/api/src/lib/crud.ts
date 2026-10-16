@@ -6,6 +6,7 @@ import type { ZodObject, ZodRawShape } from 'zod';
 import { db, type Tx } from '../db';
 import { requirePerm } from '../middleware/auth';
 import { audit } from './audit';
+import { applyDefaults, enforceFields, type FieldEntity } from './fields';
 import { notFound, pageParams } from './http';
 
 type CrudOptions = {
@@ -26,6 +27,8 @@ type CrudOptions = {
   afterCreate?: (row: any, req: Request) => Promise<void> | void;
   /** Deactivate (active=false) instead of hard delete. */
   softDelete?: boolean;
+  /** Apply admin field configuration (mandatory fields, defaults, custom fields). */
+  fields?: FieldEntity;
 };
 
 /** Builds list / get / create / update / delete endpoints for a master table. */
@@ -64,7 +67,8 @@ export function crudRouter(o: CrudOptions) {
   });
 
   r.post('/', requirePerm(`${o.perm}:create`), async (req, res) => {
-    const data = o.createSchema.parse(req.body);
+    let data = o.createSchema.parse(o.fields ? await applyDefaults(o.fields, req.body ?? {}) : req.body);
+    if (o.fields) data = await enforceFields(o.fields, data, 'create');
     const row = await db.transaction(async (tx) => {
       const values = o.beforeCreate ? await o.beforeCreate(data, tx, req) : data;
       const [created] = await tx.insert(o.table).values(values).returning();
@@ -76,7 +80,12 @@ export function crudRouter(o: CrudOptions) {
   });
 
   r.patch('/:id', requirePerm(`${o.perm}:edit`), async (req, res) => {
-    const data = o.createSchema.partial().parse(req.body);
+    let data = o.createSchema.partial().parse(req.body);
+    if (o.fields) {
+      const existing = await q().findFirst({ where: eq(o.table.id, req.params.id), columns: { customFields: true } });
+      if (!existing) throw notFound(o.entity);
+      data = await enforceFields(o.fields, data, 'update', existing.customFields);
+    }
     const row = await db.transaction(async (tx) => {
       const values = o.beforeUpdate ? await o.beforeUpdate(data, tx, req, req.params.id) : data;
       const [updated] = await tx.update(o.table).set(values).where(eq(o.table.id, req.params.id)).returning();

@@ -303,6 +303,7 @@ export function OrderDetail() {
                   {stages.map((st) => {
                     const s = l.stages.find((x) => x.stage === st.stage);
                     if (!s) return <td key={st.stage} className="num text-slate-300">n/a</td>;
+                    if (s.percent === 0) return <td key={st.stage} className="num text-slate-300">0% — not billed</td>;
                     return <td key={st.stage} className={cx('num', s.billedQty >= l.qty ? 'text-emerald-700' : s.billableQty > 0 ? 'text-amber-700' : 'text-slate-500')}>{qty(s.billedQty)} / {qty(s.eligibleQty)}</td>;
                   })}
                 </tr>
@@ -335,7 +336,7 @@ export function OrderDetail() {
         footer={<><span className="mr-auto self-center text-sm">Taxable value: <b>{inr(raTaxable)}</b> + GST</span><Button onClick={() => setRa(null)}>Cancel</Button><Button variant="primary" loading={createRa.isPending} disabled={raTaxable <= 0} onClick={() => createRa.mutate(undefined)}>Create draft bill</Button></>}>
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <span className="text-sm text-slate-600">Bill everything eligible for:</span>
-          {stages.map((s) => <Button key={s.stage} size="sm" onClick={() => fillStage(s.stage)}>{STAGE_LABEL[s.stage]}</Button>)}
+          {stages.filter((s) => s.percent > 0).map((s) => <Button key={s.stage} size="sm" onClick={() => fillStage(s.stage)}>{STAGE_LABEL[s.stage]}</Button>)}
           <Button size="sm" variant="ghost" onClick={() => setRa({})}>Clear</Button>
           <label className="ml-auto flex items-center gap-1.5 text-sm"><input type="checkbox" checked={proforma} onChange={(e) => setProforma(e.target.checked)} /> Proforma only</label>
         </div>
@@ -349,7 +350,7 @@ export function OrderDetail() {
                   {stages.map((st) => {
                     const s = l.stages.find((x) => x.stage === st.stage);
                     const k = `${l.orderItemId}|${st.stage}`;
-                    if (!s) return <td key={k} className="num text-slate-300">n/a</td>;
+                    if (!s || s.percent === 0) return <td key={k} className="num text-slate-300">{s ? '0%' : 'n/a'}</td>;
                     return <td key={k} className="text-right">
                       <input type="number" min={0} max={s.billableQty} step="any" disabled={s.billableQty <= 0} className="input w-20 text-right" value={ra?.[k] ?? ''} placeholder="0"
                         onChange={(e) => setRa({ ...(ra ?? {}), [k]: Math.min(Number(e.target.value), s.billableQty) })} />

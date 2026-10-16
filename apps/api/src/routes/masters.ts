@@ -27,6 +27,7 @@ const clientSchema = z.object({
   name: z.string().trim().min(2), type: z.string().default('CORPORATE'), gstin, pan: opt, billingAddress: opt, city: opt,
   stateName: opt, stateCode: opt, pincode: opt, contactName: opt, phone: opt, email: opt,
   paymentTermsDays: z.coerce.number().int().min(0).default(30), creditLimit: z.coerce.number().nullish(), notes: opt, active: z.boolean().default(true),
+  customFields: z.record(z.string(), z.unknown()).optional(),
 });
 
 r.get('/clients/:id/overview', requirePerm('clients:view'), async (req, res) => {
@@ -44,7 +45,7 @@ r.get('/clients/:id/overview', requirePerm('clients:view'), async (req, res) => 
 });
 
 r.use('/clients', crudRouter({
-  queryKey: 'clients', table: clients, perm: 'clients', entity: 'client', createSchema: clientSchema,
+  queryKey: 'clients', fields: 'clients', table: clients, perm: 'clients', entity: 'client', createSchema: clientSchema,
   searchCols: [clients.name, clients.code, clients.city, clients.gstin, clients.contactName, clients.phone],
   filters: { active: clients.active, type: clients.type }, orderBy: { col: clients.name, dir: 'asc' },
   with: { sites: { columns: { id: true, name: true, code: true } } }, softDelete: true,
@@ -57,11 +58,11 @@ const siteSchema = z.object({
   clientId: z.string(), name: z.string().trim().min(2), address: opt, city: opt, stateName: opt, stateCode: opt, pincode: opt, gstin,
   contactName: opt, phone: opt, email: opt, latitude: z.coerce.number().min(-90).max(90).nullish(),
   longitude: z.coerce.number().min(-180).max(180).nullish(), geofenceMeters: z.coerce.number().int().min(25).max(5000).default(300),
-  active: z.boolean().default(true),
+  active: z.boolean().default(true), customFields: z.record(z.string(), z.unknown()).optional(),
 });
 
 r.use('/sites', crudRouter({
-  queryKey: 'sites', table: sites, perm: 'sites', entity: 'site', createSchema: siteSchema,
+  queryKey: 'sites', fields: 'sites', table: sites, perm: 'sites', entity: 'site', createSchema: siteSchema,
   searchCols: [sites.name, sites.code, sites.city, sites.address], filters: { clientId: sites.clientId, active: sites.active },
   orderBy: { col: sites.name, dir: 'asc' }, with: { client: { columns: { id: true, name: true, code: true } } }, softDelete: true,
   beforeCreate: async (d, tx) => {
@@ -87,10 +88,10 @@ r.use('/categories', crudRouter({
 const itemSchema = z.object({
   sku: z.string().trim().min(1).optional(), name: z.string().trim().min(2), type: z.enum(['PRODUCT', 'ACCESSORY', 'SERVICE']),
   categoryId: z.string(), brand: opt, model: opt, description: opt, hsnSac: opt, unit: z.string().default('Nos'),
-  gstRate: z.coerce.number().refine((n) => [0, 0.25, 3, 5, 12, 18, 28].includes(n), 'GST rate must be 0, 0.25, 3, 5, 12, 18 or 28').default(18),
+  gstRate: z.coerce.number().refine((n) => [0, 0.25, 3, 5, 12, 18, 28, 40].includes(n), 'GST rate must be 0, 0.25, 3, 5, 12, 18, 28 or 40').default(18),
   purchasePrice: z.coerce.number().min(0).default(0), salePrice: z.coerce.number().min(0).default(0),
   reorderLevel: z.coerce.number().min(0).default(0), trackStock: z.boolean().optional(), warrantyMonths: z.coerce.number().int().nullish(),
-  active: z.boolean().default(true),
+  subCategory: opt, location: opt, active: z.boolean().default(true), customFields: z.record(z.string(), z.unknown()).optional(),
 });
 
 /** Item list with live stock on hand. */
@@ -100,6 +101,7 @@ r.get('/items/stock', requirePerm('items:view'), async (req, res) => {
     id: items.id, sku: items.sku, name: items.name, type: items.type, brand: items.brand, model: items.model, unit: items.unit,
     categoryId: items.categoryId, category: systemCategories.name, salePrice: items.salePrice, purchasePrice: items.purchasePrice,
     gstRate: items.gstRate, hsnSac: items.hsnSac, reorderLevel: items.reorderLevel, trackStock: items.trackStock,
+    subCategory: items.subCategory, location: items.location,
     onHand: sql<number>`coalesce(sum(${stockMovements.qty}), 0)::float`,
   }).from(items)
     .innerJoin(systemCategories, eq(items.categoryId, systemCategories.id))
@@ -111,8 +113,8 @@ r.get('/items/stock', requirePerm('items:view'), async (req, res) => {
 });
 
 r.use('/items', crudRouter({
-  queryKey: 'items', table: items, perm: 'items', entity: 'item', createSchema: itemSchema,
-  searchCols: [items.name, items.sku, items.brand, items.model, items.hsnSac],
+  queryKey: 'items', fields: 'items', table: items, perm: 'items', entity: 'item', createSchema: itemSchema,
+  searchCols: [items.name, items.sku, items.brand, items.model, items.hsnSac, items.subCategory],
   filters: { categoryId: items.categoryId, type: items.type, active: items.active }, orderBy: { col: items.name, dir: 'asc' },
   with: { category: true }, softDelete: true,
   beforeCreate: async (d, tx) => ({
@@ -123,10 +125,10 @@ r.use('/items', crudRouter({
 
 // ───────── Vendors ─────────
 r.use('/vendors', crudRouter({
-  queryKey: 'vendors', table: vendors, perm: 'vendors', entity: 'vendor',
+  queryKey: 'vendors', fields: 'vendors', table: vendors, perm: 'vendors', entity: 'vendor',
   createSchema: z.object({
     name: z.string().trim().min(2), gstin, pan: opt, address: opt, city: opt, stateName: opt, stateCode: opt, contactName: opt,
-    phone: opt, email: opt, paymentTermsDays: z.coerce.number().int().default(30), active: z.boolean().default(true),
+    phone: opt, email: opt, paymentTermsDays: z.coerce.number().int().default(30), active: z.boolean().default(true), customFields: z.record(z.string(), z.unknown()).optional(),
   }),
   searchCols: [vendors.name, vendors.code, vendors.city, vendors.gstin], orderBy: { col: vendors.name, dir: 'asc' }, softDelete: true,
   beforeCreate: async (d, tx) => ({ ...withState(d), code: await nextCode(tx, 'VENDOR', 'VN') }),
@@ -138,7 +140,7 @@ const leadSchema = z.object({
   companyName: z.string().trim().min(2), contactName: opt, phone: opt, email: opt, city: opt, address: opt, source: opt,
   status: z.enum(['NEW', 'CONTACTED', 'SITE_SURVEY', 'QUOTED', 'NEGOTIATION', 'WON', 'LOST']).default('NEW'),
   systems: z.array(z.string()).default([]), estimatedValue: z.coerce.number().nullish(), assignedToId: opt,
-  nextFollowUp: z.coerce.date().nullish(), lostReason: opt, notes: opt,
+  nextFollowUp: z.coerce.date().nullish(), lostReason: opt, notes: opt, customFields: z.record(z.string(), z.unknown()).optional(),
 });
 
 r.get('/leads/:id/activities', requirePerm('leads:view'), async (req, res) => {
@@ -176,7 +178,7 @@ r.post('/leads/:id/convert', requirePerm('leads:edit'), requirePerm('clients:cre
 });
 
 r.use('/leads', crudRouter({
-  queryKey: 'leads', table: leads, perm: 'leads', entity: 'lead', createSchema: leadSchema,
+  queryKey: 'leads', fields: 'leads', table: leads, perm: 'leads', entity: 'lead', createSchema: leadSchema,
   searchCols: [leads.companyName, leads.code, leads.contactName, leads.phone, leads.city],
   filters: { status: leads.status, assignedToId: leads.assignedToId, source: leads.source },
   extraWhere: (req) => (can(req.user, 'leads:view_all') ? undefined : eq(leads.assignedToId, req.user.id)),

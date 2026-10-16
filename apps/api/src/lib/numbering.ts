@@ -35,3 +35,15 @@ export async function nextCode(tx: DbOrTx, key: 'CLIENT' | 'SITE' | 'LEAD' | 'VE
     .returning({ next: numberSeries.next });
   return `${prefix}${String(row.next - 1).padStart(4, '0')}`;
 }
+
+/** Reserve `count` consecutive master codes in one round trip (used by bulk import). */
+export async function reserveCodes(tx: DbOrTx, key: 'CLIENT' | 'SITE' | 'LEAD' | 'VENDOR' | 'ITEM', prefix: string, count: number): Promise<string[]> {
+  if (count <= 0) return [];
+  const [row] = await tx
+    .insert(numberSeries)
+    .values({ key, fy: 'ALL', prefix, next: count + 1 })
+    .onConflictDoUpdate({ target: [numberSeries.key, numberSeries.fy], set: { next: sql`${numberSeries.next} + ${count}` } })
+    .returning({ next: numberSeries.next });
+  const first = row.next - count;
+  return Array.from({ length: count }, (_, i) => `${prefix}${String(first + i).padStart(4, '0')}`);
+}

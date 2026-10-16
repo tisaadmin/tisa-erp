@@ -33,6 +33,10 @@ All three use the same logins and the same role-based permissions.
 | 15 | Requisitions from mobile → desktop notification | Material, pending-work or repair requests with photos. **Real-time desktop alert** through Socket.IO and the browser, plus a push notification to approvers. The requester is told when it's approved or fulfilled |
 | 16 | Expenses with approval | Lines with receipts (photo or PDF) from mobile or desktop. Flow: **Employee → Reporting manager → Accounts → Paid**. Approvers can approve part of the amount, send back or reject. Full history is kept, and nobody can approve their own claim |
 
+**Data import (Settings → Data Import):** upload Excel/CSV exports of clients, contacts, items or sites. FFH ERP exports are recognised automatically. Columns are matched for you (and can be changed), every row is checked before saving, problem rows can be downloaded, and importing again updates records instead of duplicating them (matched on the source system's ID, GSTIN or name).
+
+**Forms & fields (Settings → Forms & Fields):** for clients, sites, leads, items and vendors you can rename fields, hide unused ones, make fields mandatory, set defaults, reorder, and add custom fields (text, number, date, dropdown, yes/no). Rules are enforced on the server and in the importer. Fields needed for GST/billing are locked.
+
 Also included: MIS dashboard (billing vs collections, receivables, pipeline, SLA breaches, AMC renewals, low stock, today's attendance, pending approvals), notifications centre, audit log, financial-year document numbering (`TTS/INV/26-27/0001`), and GST-safe invoice numbering (drafts get their final number only when issued, so there are no gaps).
 
 ---

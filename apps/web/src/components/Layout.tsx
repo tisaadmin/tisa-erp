@@ -1,5 +1,5 @@
 import {
-  Bell, Boxes, Building2, Camera, ClipboardCheck, ClipboardList, FileSignature, FileText, Gauge, HandCoins, LifeBuoy, LogOut, MapPin, Menu,
+  Bell, Boxes, ListChecks, Upload, Building2, Camera, ClipboardCheck, ClipboardList, FileSignature, FileText, Gauge, HandCoins, LifeBuoy, LogOut, MapPin, Menu,
   PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X,
 } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -51,6 +51,8 @@ const NAV: { group: string; items: NavItem[] }[] = [
     { to: '/users', label: 'Users', icon: <Users />, perm: 'users:view' },
     { to: '/roles', label: 'Roles & Access', icon: <ShieldCheck />, perm: 'roles:view' },
     { to: '/settings', label: 'Company Settings', icon: <Settings />, perm: 'settings:view' },
+    { to: '/settings/fields', label: 'Forms & Fields', icon: <ListChecks />, perm: 'settings:view' },
+    { to: '/settings/import', label: 'Data Import', icon: <Upload />, perm: 'settings:edit' },
   ] },
 ];
 
@@ -136,7 +138,7 @@ export default function Layout() {
             <div key={g.group}>
               <div className="px-2 pb-1 text-[10px] font-semibold tracking-widest text-slate-500 uppercase">{g.group}</div>
               {items.map((i) => (
-                <NavLink key={i.to} to={i.to} end={i.to === '/'}
+                <NavLink key={i.to} to={i.to} end={i.to === '/' || i.to === '/settings'}
                   className={({ isActive }) => cx('flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm [&>svg]:size-4', isActive ? 'bg-white/10 font-medium text-white' : 'hover:bg-white/5 hover:text-white')}>
                   {i.icon}{i.label}
                 </NavLink>

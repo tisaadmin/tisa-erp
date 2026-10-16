@@ -115,6 +115,7 @@ r.post('/invoices/running-bill', requirePerm('invoices:create'), async (req, res
       if (!l) throw badRequest(`Line ${i + 1} is not part of this order`);
       const st = l.stages.find((s) => s.stage === w.stage);
       if (!st) throw badRequest(`${l.description}: stage ${w.stage} is not in its payment schedule`);
+      if (st.percent === 0) throw badRequest(`${l.description}: ${STAGE_LABEL[w.stage]} is 0% on this order — nothing to bill`);
       const k = `${w.orderItemId}|${w.stage}`;
       const already = used.get(k) ?? 0;
       if (w.qty + already > st.billableQty + 1e-9) {

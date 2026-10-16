@@ -10,6 +10,7 @@ import { ALL_PERMISSIONS, MODULES } from '../lib/permissions';
 import { invalidateUserCache, requirePerm } from '../middleware/auth';
 import { clearCompanyCache } from '../services/company';
 import { GSTIN_REGEX, INDIAN_STATES } from '../lib/gst';
+import { FIELD_ENTITIES, REGISTRY, resolvedFields, saveFieldConfig, type FieldEntity } from '../lib/fields';
 
 const r = Router();
 const publicUser = { passwordHash: false, pushToken: false } as const;
@@ -124,6 +125,25 @@ r.put('/settings', requirePerm('settings:edit'), async (req, res) => {
   clearCompanyCache();
   audit(req, 'update', 'settings', '1', data);
   res.json(row);
+});
+
+// ── Configurable form fields ──
+r.get('/field-config', async (_req, res) => {
+  const out: Record<string, { title: string; fields: Awaited<ReturnType<typeof resolvedFields>> }> = {};
+  for (const e of FIELD_ENTITIES) out[e] = { title: REGISTRY[e].title, fields: await resolvedFields(e) };
+  res.json(out);
+});
+
+r.put('/field-config/:entity', requirePerm('settings:edit'), async (req, res) => {
+  const entity = req.params.entity as FieldEntity;
+  if (!FIELD_ENTITIES.includes(entity)) throw notFound('Form');
+  const { fields } = z.object({ fields: z.array(z.object({
+    fieldKey: z.string().min(1), isCustom: z.boolean().optional(), label: z.string().nullish(), type: z.enum(['text', 'number', 'date', 'select', 'checkbox', 'textarea', 'email']).nullish(),
+    options: z.array(z.string()).nullish(), visible: z.boolean().optional(), required: z.boolean().optional(), defaultValue: z.string().nullish(), sortOrder: z.number().optional(),
+  })) }).parse(req.body);
+  const saved = await saveFieldConfig(entity, fields);
+  audit(req, 'update', 'field_config', entity, fields);
+  res.json({ title: REGISTRY[entity].title, fields: saved });
 });
 
 export default r;

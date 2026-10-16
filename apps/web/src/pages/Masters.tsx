@@ -2,7 +2,7 @@ import { Calendar, MapPin, Phone, Plus, UserPlus } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
-import { EditorModal, MasterPage, useEditor, type FieldDef } from '../components/MasterPage';
+import { EditorModal, MasterPage, useConfiguredFields, useEditor, type FieldDef } from '../components/MasterPage';
 import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Select, Spinner, Status, Table, Tabs, Textarea } from '../components/ui';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -26,7 +26,7 @@ const clientFields: FieldDef[] = [
   { name: 'pan', label: 'PAN' },
   { name: 'stateCode', label: 'State (place of supply)', type: 'combo', options: stateOpts },
   { name: 'billingAddress', label: 'Billing address', type: 'textarea', span: 2 },
-  { name: 'city', label: 'City' },
+  { name: 'city', label: 'City' }, { name: 'pincode', label: 'Pincode' },
   { name: 'contactName', label: 'Contact person' }, { name: 'phone', label: 'Phone' }, { name: 'email', label: 'Email', type: 'email' },
   { name: 'paymentTermsDays', label: 'Credit days', type: 'number' }, { name: 'creditLimit', label: 'Credit limit (₹)', type: 'number' },
   { name: 'active', label: 'Active', type: 'checkbox' },
@@ -35,7 +35,7 @@ const clientFields: FieldDef[] = [
 
 export function ClientsPage() {
   return (
-    <MasterPage<any> title="Clients" singular="Client" path="/clients" perm="clients" fields={clientFields} defaults={{ type: 'CORPORATE', paymentTermsDays: 30, active: true }}
+    <MasterPage<any> entity="clients" title="Clients" singular="Client" path="/clients" perm="clients" fields={clientFields} defaults={{ type: 'CORPORATE', paymentTermsDays: 30, active: true }}
       to={(r) => `/clients/${r.id}`}
       cols={[
         { key: 'name', label: 'Client', render: (r) => <>{r.name}<div className="text-xs font-normal text-slate-400">{r.code}</div></> },
@@ -49,6 +49,7 @@ export function ClientsPage() {
   );
 }
 
+const siteBaseDefaults = { geofenceMeters: 300, active: true };
 export const siteFields: FieldDef[] = [
   { name: 'name', label: 'Site name', required: true, span: 2 },
   { name: 'stateCode', label: 'State', type: 'combo', options: stateOpts },
@@ -65,8 +66,10 @@ export function ClientDetail() {
   const { can } = useAuth();
   const { data } = useGet<any>(`/clients/${id}/overview`);
   const [tab, setTab] = useState<'sites' | 'orders' | 'invoices' | 'tickets' | 'amc'>('sites');
-  const clientEd = useEditor('/clients', clientFields);
-  const siteEd = useEditor('/sites', [{ name: 'clientId', label: '' }, ...siteFields], { clientId: id, geofenceMeters: 300, active: true });
+  const cCfg = useConfiguredFields('clients', clientFields);
+  const sCfg = useConfiguredFields('sites', siteFields, siteBaseDefaults);
+  const clientEd = useEditor('/clients', cCfg.fields);
+  const siteEd = useEditor('/sites', [{ name: 'clientId', label: '' }, ...sCfg.fields], { ...sCfg.defaults, clientId: id });
   if (!data) return <Spinner />;
   const c = data.client;
   return (
@@ -108,8 +111,8 @@ export function ClientDetail() {
         {tab === 'tickets' && <Table rows={data.tickets} to={(t: any) => `/tickets/${t.id}`} cols={[{ key: 'number', label: 'Ticket' }, { key: 'title', label: 'Issue' }, { key: 'site', label: 'Site', render: (t: any) => t.site?.name }, { key: 'priority', label: 'Priority', render: (t: any) => <Status s={t.priority} /> }, { key: 'status', label: 'Status', render: (t: any) => <Status s={t.status} /> }]} />}
         {tab === 'amc' && <Table rows={data.amcs} cols={[{ key: 'number', label: 'AMC' }, { key: 'site', label: 'Site', render: (a: any) => a.site?.name }, { key: 'period', label: 'Period', render: (a: any) => `${fmtDate(a.startDate)} → ${fmtDate(a.endDate)}` }, { key: 'value', label: 'Value', num: true, render: (a: any) => inr(a.value) }, { key: 'status', label: 'Status', render: (a: any) => <Status s={a.status} /> }]} />}
       </Card>
-      <EditorModal title="client" fields={clientFields} ed={clientEd} />
-      <EditorModal title="site" fields={siteFields} ed={siteEd} />
+      <EditorModal title="client" fields={cCfg.fields} ed={clientEd} />
+      <EditorModal title="site" fields={sCfg.fields} ed={siteEd} />
     </div>
   );
 }
@@ -120,7 +123,7 @@ export function SitesPage() {
   const clientOpts = (clients.data?.data ?? []).map((c) => ({ value: c.id, label: c.name, sub: c.code }));
   const fields: FieldDef[] = [{ name: 'clientId', label: 'Client', type: 'combo', options: clientOpts, required: true, createOnly: true }, ...siteFields];
   return (
-    <MasterPage<any> title="Sites" singular="Site" path="/sites" perm="sites" fields={fields} defaults={{ geofenceMeters: 300, active: true }}
+    <MasterPage<any> entity="sites" title="Sites" singular="Site" path="/sites" perm="sites" fields={fields} defaults={{ geofenceMeters: 300, active: true }}
       subtitle="Every client can have one or many sites — tickets, AMCs, deliveries and attendance are tracked per site."
       filters={(q, set) => <Combo className="w-64" options={clientOpts} value={q.clientId} onChange={(v) => set('clientId', v)} placeholder="All clients" />}
       cols={[
@@ -136,7 +139,7 @@ export function SitesPage() {
 // ───────── Vendors ─────────
 export function VendorsPage() {
   return (
-    <MasterPage<any> title="Vendors" singular="Vendor" path="/vendors" perm="vendors" defaults={{ paymentTermsDays: 30, active: true }}
+    <MasterPage<any> entity="vendors" title="Vendors" singular="Vendor" path="/vendors" perm="vendors" defaults={{ paymentTermsDays: 30, active: true }}
       fields={[
         { name: 'name', label: 'Vendor name', required: true, span: 2 }, { name: 'gstin', label: 'GSTIN' }, { name: 'pan', label: 'PAN' },
         { name: 'stateCode', label: 'State', type: 'combo', options: stateOpts }, { name: 'city', label: 'City' },
@@ -152,6 +155,7 @@ export function VendorsPage() {
 }
 
 // ───────── Inventory ─────────
+const itemBaseDefaults = { type: 'PRODUCT', unit: 'Nos', gstRate: '18', trackStock: true, active: true };
 export function InventoryPage() {
   const { can } = useAuth();
   const cats = useCategories();
@@ -164,17 +168,20 @@ export function InventoryPage() {
   const catOpts = (cats.data?.data ?? []).map((c) => ({ value: c.id, label: c.name }));
   const itemFields: FieldDef[] = [
     { name: 'name', label: 'Item name', required: true, span: 2 }, { name: 'type', label: 'Type', type: 'select', options: ['PRODUCT', 'ACCESSORY', 'SERVICE'], required: true },
-    { name: 'categoryId', label: 'System', type: 'combo', options: catOpts, required: true }, { name: 'brand', label: 'Brand' }, { name: 'model', label: 'Model' },
+    { name: 'categoryId', label: 'System', type: 'combo', options: catOpts, required: true }, { name: 'subCategory', label: 'Sub-category' },
+    { name: 'brand', label: 'Brand' }, { name: 'model', label: 'Model / part code' },
     { name: 'sku', label: 'SKU (auto if blank)', createOnly: true }, { name: 'hsnSac', label: 'HSN / SAC' }, { name: 'unit', label: 'Unit', placeholder: 'Nos, Mtr, Box, Set, Job…' },
-    { name: 'gstRate', label: 'GST %', type: 'select', options: [{ value: '0', label: '0%' }, { value: '5', label: '5%' }, { value: '12', label: '12%' }, { value: '18', label: '18%' }, { value: '28', label: '28%' }] },
+    { name: 'gstRate', label: 'GST %', type: 'select', options: [{ value: '0', label: '0%' }, { value: '5', label: '5%' }, { value: '12', label: '12%' }, { value: '18', label: '18%' }, { value: '28', label: '28%' }, { value: '40', label: '40%' }] },
     { name: 'purchasePrice', label: 'Purchase price (₹)', type: 'number' }, { name: 'salePrice', label: 'Sale price (₹)', type: 'number' },
     { name: 'reorderLevel', label: 'Reorder level', type: 'number' }, { name: 'warrantyMonths', label: 'Warranty (months)', type: 'number' },
+    { name: 'location', label: 'Store location / rack' },
     { name: 'trackStock', label: 'Track stock', type: 'checkbox', hint: 'Off for services' }, { name: 'description', label: 'Description', type: 'textarea', span: 3 },
     { name: 'active', label: 'Active', type: 'checkbox' },
   ];
-  const ed = useEditor('/items', itemFields, { type: 'PRODUCT', unit: 'Nos', gstRate: '18', trackStock: true, active: true });
+  const iCfg = useConfiguredFields('items', itemFields, itemBaseDefaults);
+  const ed = useEditor('/items', iCfg.fields, iCfg.defaults);
   const doAdjust = useAction((a: NonNullable<typeof adjust>) => api('/stock/adjust', { body: { reason: a.reason, note: a.note, lines: [{ itemId: a.itemId, qty: a.qty }] } }), { success: 'Stock updated', invalidate: [['/items'], ['/stock']], onSuccess: () => setAdjust(null) });
-  const rows = (stock.data ?? []).filter((i) => !search || `${i.name} ${i.sku} ${i.brand ?? ''} ${i.model ?? ''}`.toLowerCase().includes(search.toLowerCase()));
+  const rows = (stock.data ?? []).filter((i) => !search || `${i.name} ${i.sku} ${i.brand ?? ''} ${i.model ?? ''} ${i.subCategory ?? ''} ${i.location ?? ''}`.toLowerCase().includes(search.toLowerCase()));
   const itemOpts = (stock.data ?? []).filter((i) => i.trackStock).map((i) => ({ value: i.id, label: i.name, sub: i.sku }));
 
   return (
@@ -192,14 +199,15 @@ export function InventoryPage() {
         <div className="border-b border-slate-100 p-3"><Input className="max-w-xs" placeholder="Search items…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
         <Table rows={stock.data ? rows : undefined} onRow={(r: any) => can('items:edit') && api(`/items/${r.id}`).then((full) => ed.open({ ...full, gstRate: String(full.gstRate) }))} cols={[
           { key: 'name', label: 'Item', render: (r: any) => <>{r.name}<div className="text-xs text-slate-400">{[r.sku, r.brand, r.model].filter(Boolean).join(' · ')}</div></> },
-          { key: 'category', label: 'System' }, { key: 'type', label: 'Type', render: (r: any) => <Badge t={r.type === 'SERVICE' ? 'violet' : r.type === 'ACCESSORY' ? 'gray' : 'blue'}>{label(r.type)}</Badge> },
+          { key: 'category', label: 'System', render: (r: any) => <>{r.category}{r.subCategory && <div className="text-xs text-slate-400">{r.subCategory}</div>}</> }, { key: 'type', label: 'Type', render: (r: any) => <Badge t={r.type === 'SERVICE' ? 'violet' : r.type === 'ACCESSORY' ? 'gray' : 'blue'}>{label(r.type)}</Badge> },
           { key: 'hsnSac', label: 'HSN/SAC' }, { key: 'gstRate', label: 'GST', num: true, render: (r: any) => `${r.gstRate}%` },
           { key: 'purchasePrice', label: 'Purchase', num: true, render: (r: any) => inr(r.purchasePrice) }, { key: 'salePrice', label: 'Sale', num: true, render: (r: any) => inr(r.salePrice) },
+          { key: 'location', label: 'Location', render: (r: any) => r.location ?? '' },
           { key: 'onHand', label: 'On hand', num: true, render: (r: any) => r.trackStock
             ? <button className={`font-semibold hover:underline ${r.onHand <= r.reorderLevel ? 'text-red-600' : ''}`} onClick={(e) => { e.stopPropagation(); setLedgerFor(r); }}>{qty(r.onHand)} {r.unit}</button> : <span className="text-slate-400">—</span> },
         ]} />
       </Card>
-      <EditorModal title="item" fields={itemFields} ed={{ ...ed, save: { ...ed.save, mutate: (v: any) => ed.save.mutate({ ...v, gstRate: Number(v.gstRate) }) } as any }} />
+      <EditorModal title="item" fields={iCfg.fields} ed={{ ...ed, save: { ...ed.save, mutate: (v: any) => ed.save.mutate({ ...v, gstRate: Number(v.gstRate) }) } as any }} />
       <Modal open={!!ledgerFor} onClose={() => setLedgerFor(null)} title={`Stock ledger — ${ledgerFor?.name ?? ''}`} wide>
         <Table rows={ledger.data} empty="No movements" cols={[
           { key: 'createdAt', label: 'Date', render: (m: any) => fmtDateTime(m.createdAt) }, { key: 'refType', label: 'Type', render: (m: any) => label(m.refType) },
@@ -239,7 +247,7 @@ export function LeadsPage() {
   ];
   return (
     <>
-      <MasterPage<any> title="Leads" singular="Lead" path="/leads" perm="leads" fields={fields} defaults={{ status: 'NEW', systems: [] }}
+      <MasterPage<any> entity="leads" title="Leads" singular="Lead" path="/leads" perm="leads" fields={fields} defaults={{ status: 'NEW', systems: [] }}
         filters={(q, set) => {
           if (q.status === undefined && sp.get('status')) setTimeout(() => set('status', sp.get('status')));
           return <Select className="w-44" value={q.status ?? ''} onChange={(e) => set('status', e.target.value)} options={LEAD_STATUS} placeholder="All stages" />;

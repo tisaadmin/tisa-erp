@@ -121,6 +121,38 @@ export const numberSeries = pgTable('number_series', {
   next: integer().notNull().default(1),
 }, (t) => [uniqueIndex().on(t.key, t.fy)]);
 
+/** Admin overrides for form fields: labels, visibility, mandatory, defaults, order, and custom fields. */
+export const fieldConfigs = pgTable('field_configs', {
+  id: id(),
+  entity: text().notNull(), // clients, sites, leads, items, vendors, tickets
+  fieldKey: text().notNull(), // core column name, or custom field key
+  isCustom: boolean().notNull().default(false),
+  label: text(),
+  type: text(), // custom: text, number, date, select, checkbox, textarea
+  options: text().array(), // custom select options
+  visible: boolean().notNull().default(true),
+  required: boolean().notNull().default(false),
+  defaultValue: text(),
+  sortOrder: integer().notNull().default(0),
+  updatedAt: updatedAt(),
+}, (t) => [uniqueIndex().on(t.entity, t.fieldKey)]);
+
+/** Uploaded import file awaiting confirmation (rows already parsed and mapped). */
+export const importJobs = pgTable('import_jobs', {
+  id: id(),
+  kind: text().notNull(), // clients, items, contacts, sites
+  preset: text(),
+  fileName: text().notNull(),
+  headers: text().array().notNull(),
+  mapping: jsonb().$type<Record<string, string | null>>().notNull(),
+  options: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  rows: jsonb().$type<Record<string, unknown>[]>().notNull(),
+  status: text().notNull().default('PREVIEW'), // PREVIEW, DONE
+  summary: jsonb(),
+  createdById: text(),
+  createdAt: createdAt(),
+});
+
 export const auditLogs = pgTable('audit_logs', {
   id: id(),
   userId: text(),
@@ -153,6 +185,8 @@ export const clients = pgTable('clients', {
   creditLimit: money(),
   notes: text(),
   active: boolean().notNull().default(true),
+  customFields: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  externalRef: text(), // id in the system this record was imported from (e.g. FFH ERP)
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -175,6 +209,8 @@ export const sites = pgTable('sites', {
   longitude: doublePrecision(),
   geofenceMeters: integer().notNull().default(300),
   active: boolean().notNull().default(true),
+  customFields: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  externalRef: text(), // id in the system this record was imported from (e.g. FFH ERP)
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (t) => [index().on(t.clientId)]);
@@ -197,6 +233,8 @@ export const leads = pgTable('leads', {
   lostReason: text(),
   notes: text(),
   convertedClientId: text().references(() => clients.id),
+  customFields: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  externalRef: text(), // id in the system this record was imported from (e.g. FFH ERP)
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -236,6 +274,10 @@ export const items = pgTable('items', {
   trackStock: boolean().notNull().default(true),
   warrantyMonths: integer(),
   active: boolean().notNull().default(true),
+  subCategory: text(),
+  location: text(), // store / rack / bin
+  customFields: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  externalRef: text(), // id in the system this record was imported from (e.g. FFH ERP)
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (t) => [index().on(t.categoryId)]);
@@ -255,6 +297,8 @@ export const vendors = pgTable('vendors', {
   email: text(),
   paymentTermsDays: integer().notNull().default(30),
   active: boolean().notNull().default(true),
+  customFields: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  externalRef: text(), // id in the system this record was imported from (e.g. FFH ERP)
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -518,6 +562,7 @@ export const tickets = pgTable('tickets', {
   slaDueAt: ts(),
   resolvedAt: ts(),
   closedAt: ts(),
+  customFields: jsonb().$type<Record<string, unknown>>().notNull().default({}),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (t) => [index().on(t.status), index().on(t.assignedToId)]);

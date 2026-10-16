@@ -282,3 +282,81 @@ test('dashboard adapts to role', async () => {
   assert.equal(tech.billing, undefined);
   assert.ok(tech.me);
 });
+
+test('0% advance: allowed in payment terms, never billed', async () => {
+  const o = await ok('sales', 'POST', '/orders', {
+    clientId: ctx.client.id, siteId: ctx.site.id,
+    paymentTerms: [{ stage: 'ADVANCE', percent: 0 }, { stage: 'DELIVERY', percent: 70 }, { stage: 'COMMISSIONING', percent: 30 }],
+    lines: [{ itemId: ctx.cam.id, qty: 2 }],
+  });
+  const b = await ok('accounts', 'GET', `/orders/${o.id}/billing`);
+  const adv = b.lines[0].stages.find((s: any) => s.stage === 'ADVANCE');
+  assert.equal(adv.percent, 0);
+  assert.equal(adv.billableQty, 0);
+  const r = await call('accounts', 'POST', '/invoices/running-bill', { orderId: o.id, stages: ['ADVANCE'] });
+  assert.equal(r.status, 400, 'nothing billable at 0%');
+  const r2 = await call('accounts', 'POST', '/invoices/running-bill', { orderId: o.id, lines: [{ orderItemId: b.lines[0].orderItemId, stage: 'ADVANCE', qty: 1 }] });
+  assert.equal(r2.status, 400);
+});
+
+test('configurable fields: mandatory, defaults, custom fields; locked fields stay', async () => {
+  const cfg = await ok('admin', 'GET', '/field-config');
+  assert.ok(cfg.clients.fields.find((f: any) => f.key === 'name').lock === 'required');
+  await ok('admin', 'PUT', '/field-config/clients', { fields: [
+    { fieldKey: 'name', visible: false, required: false }, // locked: ignored
+    { fieldKey: 'pan', label: 'PAN no.', required: true },
+    { fieldKey: 'paymentTermsDays', defaultValue: '45' },
+    { fieldKey: 'societyRegNo', isCustom: true, label: 'Society reg. no.', type: 'text', required: true },
+    { fieldKey: 'segment', isCustom: true, label: 'Segment', type: 'select', options: ['Residential', 'Commercial'] },
+  ] });
+  const after = await ok('admin', 'GET', '/field-config');
+  const nameF = after.clients.fields.find((f: any) => f.key === 'name');
+  assert.equal(nameF.visible, true); assert.equal(nameF.required, true);
+  const missing = await call('sales', 'POST', '/clients', { name: 'Cfg Test Society' });
+  assert.equal(missing.status, 400);
+  assert.match(missing.data.error, /PAN no\. is required/);
+  assert.match(missing.data.error, /Society reg\. no\. is required/);
+  const bad = await call('sales', 'POST', '/clients', { name: 'Cfg Test Society', pan: 'AAAPL1234C', customFields: { societyRegNo: 'MUM/123', segment: 'Industrial' } });
+  assert.equal(bad.status, 400, 'select option enforced');
+  const c = await ok('sales', 'POST', '/clients', { name: 'Cfg Test Society', pan: 'AAAPL1234C', customFields: { societyRegNo: 'MUM/123', segment: 'Residential', junk: 1 } });
+  assert.equal(c.paymentTermsDays, 45, 'default applied');
+  assert.deepEqual(c.customFields, { societyRegNo: 'MUM/123', segment: 'Residential' });
+  const u = await ok('sales', 'PATCH', `/clients/${c.id}`, { city: 'Mumbai' });
+  assert.equal(u.customFields.societyRegNo, 'MUM/123', 'partial update keeps custom values');
+  assert.equal((await call('sales', 'PATCH', `/clients/${c.id}`, { pan: '' })).status, 400);
+  assert.equal((await call('sales', 'PUT', '/field-config/clients', { fields: [] })).status, 403, 'only settings:edit');
+  await ok('admin', 'PUT', '/field-config/clients', { fields: [] }); // reset
+});
+
+test('import: FFH-format client list → clients, vendors, prospects, sites; re-import updates', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Client List');
+  ws.addRow(['Companyid', 'Companyname', 'Relationtypename', 'Industrytypename', 'Gstn', 'Addressline1', 'Addressline2', 'Addressline3', 'Area', 'Pincode', 'City', 'State', 'Country', 'Phonenumber', 'Faxnumber', 'Emailid']);
+  ws.addRow([9001, 'Imported Towers CHS', 'Client', null, '27AAAPL1234C1Z5', 'Plot 4,', 'Sector 2,', 'Sector 2, Vashi', null, 400703, 'Navi Mumbai', 'Maharashtra', 'India', null, null, null]);
+  ws.addRow([9002, 'Gujarat Supplies', 'Supplier', null, '24AAACG1234D1Z2', 'GIDC', null, null, null, null, 'Vapi', null, null, null, null, null]);
+  ws.addRow([9003, 'Maybe Corp', 'Prospect', null, 'NA', null, null, null, null, null, null, null, null, null, null, null]);
+  ws.addRow([9004, null, 'Client', null, null, null, null, null, null, null, null, null, null, null, null, null]);
+  const buf = Buffer.from(await wb.xlsx.writeBuffer());
+  const fd = new FormData();
+  fd.append('file', new Blob([new Uint8Array(buf)]), 'ClientList.xlsx');
+  const up = await ok('admin', 'POST', '/imports/upload', undefined, fd);
+  assert.equal(up.kind, 'clients'); assert.equal(up.preset, 'FFH ERP');
+  assert.deepEqual([up.stats.create, up.stats.error], [3, 1]);
+  assert.equal((await call('sales', 'POST', `/imports/${up.id}/commit`)).status, 403);
+  const done = await ok('admin', 'POST', `/imports/${up.id}/commit`);
+  assert.equal(done.stats.byEntity.site.create, 1);
+  const cl = (await ok('admin', 'GET', '/clients?search=Imported Towers')).data[0];
+  assert.equal(cl.stateCode, '27');
+  assert.equal(cl.billingAddress, 'Plot 4, Sector 2, Vashi');
+  assert.equal(cl.sites.length, 1);
+  const vn = (await ok('admin', 'GET', '/vendors?search=Gujarat Supplies')).data[0];
+  assert.equal(vn.stateCode, '24', 'state from GSTIN');
+  // re-upload: updates, no duplicates
+  const fd2 = new FormData();
+  fd2.append('file', new Blob([new Uint8Array(buf)]), 'ClientList.xlsx');
+  const again = await ok('admin', 'POST', '/imports/upload', undefined, fd2);
+  assert.deepEqual([again.stats.create, again.stats.update], [0, 3]);
+  const csv = await call('admin', 'GET', `/imports/${again.id}/issues.csv`);
+  assert.ok(String(Buffer.from(csv.data)).includes('Name is empty'));
+});

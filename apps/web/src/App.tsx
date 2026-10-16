@@ -10,7 +10,7 @@ import { GrnDetail, GrnsPage, PoDetail, PoEditor, PurchaseOrdersPage } from './p
 import { InvoiceDetail, InvoiceEditor, InvoicesPage, ReceivablesPage } from './pages/Billing';
 import { NewTicket, ServiceReportDetail, ServiceReportsPage, SitePhotosPage, TicketDetail, TicketsPage } from './pages/Service';
 import { AttendancePage, ExpenseDetail, ExpenseEditor, ExpensesPage, RequisitionDetail, RequisitionsPage } from './pages/Field';
-import { RolesPage, SettingsPage } from './pages/Admin';
+import { FieldsPage, ImportPage, RolesPage, SettingsPage } from './pages/Admin';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -64,6 +64,8 @@ export default function App() {
         <Route path="users" element={<UsersPage />} />
         <Route path="roles" element={<RolesPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="settings/fields" element={<FieldsPage />} />
+        <Route path="settings/import" element={<ImportPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
