@@ -292,7 +292,7 @@ r.post('/order-imports/bulk/check', perm, bulkUpload.array('files', 100), async 
 
 /** Re-check (e.g. after choosing a default system) without uploading again. */
 r.post('/order-imports/bulk/recheck', perm, async (req, res) => {
-  const d = z.object({ jobIds: z.array(z.string()).max(200), defaultCategoryId: z.string().nullish() }).parse(req.body);
+  const d = z.object({ jobIds: z.array(z.string()).max(1000), defaultCategoryId: z.string().nullish() }).parse(req.body);
   const out = [];
   for (const id of d.jobIds) {
     const { job, doc } = await loadJob(id);

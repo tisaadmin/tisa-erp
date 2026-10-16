@@ -585,6 +585,7 @@ async function importOrders(tx: DbOrTx, rowsIn: Record<string, unknown>[], mappi
 
     // values: one summary line at the basic value; GST rate from the ratio of order value to basic value
     let total = num(r.total) ?? 0, basic = num(r.basic);
+    const basicSource = basic; // as stated by the source system — what the itemised order must add up to
     if (total < 0 || (basic ?? 0) < 0) return fail(res, row, 'order', label, 'Negative order value');
     if (basic == null) { basic = total ? Math.round((total / 1.18) * 100) / 100 : 0; if (total) warn(res, row, `${refRaw}: no basic value — assumed 18% GST`); }
     else if (total > 0 && total < basic) {
@@ -611,7 +612,7 @@ async function importOrders(tx: DbOrTx, rowsIn: Record<string, unknown>[], mappi
     const remark = str(r.remark);
     const sourceData: SourceData = {
       system: 'FFH', soNumber: refRaw, title, owner: str(r.owner), allocatedTo: str(r.allocatedTo), deliveryStatus, billingStatus,
-      installedStatus: str(r.installedStatus), approvalStatus: str(r.approvalStatus), soValue: total, basicValue: basic,
+      installedStatus: str(r.installedStatus), approvalStatus: str(r.approvalStatus), soValue: total, basicValue: basicSource ?? basic,
       summaryOnly: ex ? (ex.sourceData?.summaryOnly ?? false) : true, importedAt: new Date().toISOString(),
     };
     const notes = [`Imported from the FFH sales order list (SO ${refRaw}).`, title ? `Title: ${title}` : null, remark && remark !== title ? `Delivery remark: ${remark}` : null,
