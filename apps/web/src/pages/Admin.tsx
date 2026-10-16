@@ -330,6 +330,7 @@ export function ImportPage() {
           </Card>
         </>
       )}
+      {!job && <FfhHistoryCard />}
       {!job && !!recent.data?.length && (
         <Card title="Recent imports" pad={false}>
           <Table rows={recent.data} cols={[
@@ -382,5 +383,63 @@ export function WorkflowPage() {
         <p className="text-sm text-slate-600">Accessory sheets are approved by roles with <b>Accessories → Approve</b> (Roles &amp; Access). Nobody can approve a sheet they prepared.</p>
       </Card>
     </div>
+  );
+}
+
+// ═══════════════════════ FFH purchase / inward / outward history ═══════════════════════
+
+type HistResult = { id: string; fileName: string; stats: { po: { create: number; skip: number; error: number }; grn: { create: number; skip: number; error: number }; dc: { create: number; skip: number; error: number }; vendorsCreated: number; lines: number; linkedLines: number }; issues: { doc: string; message: string }[] };
+
+function FfhHistoryCard() {
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [r, setR] = useState<HistResult | null>(null);
+  const [done, setDone] = useState(false);
+  const check = async () => {
+    if (!file) return;
+    setBusy(true); setDone(false);
+    try { const fd = new FormData(); fd.append('file', file); setR(await api<HistResult>('/imports/ffh-history', { form: fd })); }
+    catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
+  };
+  const commit = async () => {
+    if (!r) return;
+    setBusy(true);
+    try { setR(await api<HistResult>(`/imports/ffh-history/${r.id}/commit`, { method: 'POST' })); setDone(true); toast.success('History imported'); }
+    catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
+  };
+  const row = (label: string, x: { create: number; skip: number; error: number }) => (
+    <tr><td>{label}</td><td className="num">{x.create}</td><td className="num">{x.skip}</td><td className={cx('num', x.error > 0 && 'text-amber-700')}>{x.error}</td></tr>
+  );
+  return (
+    <Card title="FFH purchase orders, material inward & outward (history)">
+      <p className="text-sm text-slate-600">Upload the history file exported from FFH (.json). Purchase orders come in as closed records, material inward as GRNs under their PO,
+        material outward as delivery challans under their order. <b>Stock and delivered quantities are not changed</b> — they already match FFH. Importing again skips what is already in.</p>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <input type="file" accept=".json,application/json" className="input max-w-md file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-sm" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setR(null); setDone(false); }} />
+        <Button disabled={!file} loading={busy && !r} onClick={check}>Check file</Button>
+        {r && !done && <Button variant="primary" loading={busy} disabled={r.stats.po.create + r.stats.grn.create + r.stats.dc.create === 0} onClick={commit}>
+          Import {r.stats.po.create} POs, {r.stats.grn.create} GRNs, {r.stats.dc.create} challans</Button>}
+        {done && <Badge t="green">Imported</Badge>}
+      </div>
+      {r && (
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <table className="tbl">
+            <thead><tr><th /><th className="text-right">{done ? 'Imported' : 'Will import'}</th><th className="text-right">Already in</th><th className="text-right">Not imported</th></tr></thead>
+            <tbody>
+              {row('Purchase orders (closed)', r.stats.po)}{row('Material inward → GRNs', r.stats.grn)}{row('Material outward → challans', r.stats.dc)}
+            </tbody>
+          </table>
+          <div className="text-sm text-slate-600">
+            <div>{r.stats.linkedLines} of {r.stats.lines} PO lines matched to inventory items</div>
+            {r.stats.vendorsCreated > 0 && <div>{r.stats.vendorsCreated} supplier{r.stats.vendorsCreated > 1 ? 's' : ''} not in Vendors will be created (from the client record where there is one)</div>}
+            {!!r.issues.length && (
+              <details className="mt-2"><summary className="cursor-pointer text-amber-800">{r.issues.length} note{r.issues.length > 1 ? 's' : ''} — documents not imported or imported with a remark</summary>
+                <ul className="mt-1 max-h-64 overflow-y-auto text-xs">{r.issues.map((x, i) => <li key={i}><b>{x.doc}</b>: {x.message}</li>)}</ul>
+              </details>
+            )}
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }

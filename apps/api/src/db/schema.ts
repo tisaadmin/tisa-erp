@@ -447,6 +447,8 @@ export const purchaseOrders = pgTable('purchase_orders', {
   status: text().notNull().default('DRAFT'), // DRAFT, PENDING_APPROVAL, APPROVED, SENT, PARTIALLY_RECEIVED, RECEIVED, CLOSED, CANCELLED
   terms: text(),
   notes: text(),
+  /** e.g. "FFH:PO:261016001" — the document this was imported from (history) */
+  sourceRef: text(),
   isInterState: boolean().notNull().default(false),
   ...totals(),
   createdById: text(),
@@ -473,6 +475,7 @@ export const goodsReceipts = pgTable('goods_receipts', {
   location: text().notNull().default('MAIN'),
   status: text().notNull().default('POSTED'), // POSTED, CANCELLED
   notes: text(),
+  sourceRef: text(), // imported from the old ERP (history — no stock was moved)
   receivedById: text(),
   createdAt: createdAt(),
 });
@@ -505,6 +508,7 @@ export const deliveryChallans = pgTable('delivery_challans', {
   status: text().notNull().default('DISPATCHED'), // DISPATCHED, DELIVERED, CANCELLED
   receivedBy: text(),
   notes: text(),
+  sourceRef: text(), // imported from the old ERP (history — no stock or delivered qty was moved)
   createdById: text(),
   createdAt: createdAt(),
 });

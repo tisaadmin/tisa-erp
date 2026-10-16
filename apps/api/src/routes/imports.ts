@@ -10,6 +10,7 @@ import { requirePerm } from '../middleware/auth';
 import { runImport, type ImportOptions, type ImportResult } from '../import/engine';
 import { readSheet } from '../import/parse';
 import { autoMap, detect, TARGETS, type ImportKind } from '../import/targets';
+import { historyFileOk, runFfhHistory, type HistoryFile } from '../import/ffhHistory';
 
 const r = Router();
 const KINDS = ['clients', 'contacts', 'items', 'sites', 'orders'] as const;
@@ -30,6 +31,32 @@ function view(job: typeof importJobs.$inferSelect, result: ImportResult) {
 }
 
 r.get('/imports/targets', perm, (_req, res) => res.json(TARGETS));
+
+// ── FFH purchase / inward / outward history (JSON exported from FFH) ──
+const jsonUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024, files: 1 } });
+
+r.post('/imports/ffh-history', perm, jsonUpload.single('file'), async (req, res) => {
+  if (!req.file) throw badRequest('Choose the FFH history file (.json)');
+  let data: unknown;
+  try { data = JSON.parse(req.file.buffer.toString('utf8')); } catch { throw badRequest('This is not a valid history file (JSON)'); }
+  if (!historyFileOk(data)) throw badRequest('This file does not contain FFH purchase orders, inwards and outwards');
+  const [job] = await db.insert(importJobs).values({
+    kind: 'ffh-history', preset: 'FFH ERP', fileName: req.file.originalname, headers: [], mapping: {}, options: {},
+    rows: [data as unknown as Record<string, unknown>], createdById: req.user.id,
+  }).returning();
+  const result = await runFfhHistory(data, true);
+  res.status(201).json({ id: job.id, fileName: job.fileName, ...result });
+});
+
+r.post('/imports/ffh-history/:id/commit', perm, async (req, res) => {
+  const job = await db.query.importJobs.findFirst({ where: eq(importJobs.id, req.params.id) });
+  if (!job || job.kind !== 'ffh-history') throw notFound('History import');
+  if (job.status === 'DONE') throw badRequest('This file has already been imported — upload it again to import anything new');
+  const result = await runFfhHistory(job.rows[0] as unknown as HistoryFile, false);
+  await db.update(importJobs).set({ status: 'DONE', summary: result.stats }).where(eq(importJobs.id, job.id));
+  audit(req, 'import', 'ffh-history', job.id, { stats: result.stats });
+  res.json({ id: job.id, fileName: job.fileName, ...result });
+});
 
 r.get('/imports', perm, async (_req, res) => {
   const jobs = await db.select({ id: importJobs.id, kind: importJobs.kind, preset: importJobs.preset, fileName: importJobs.fileName, status: importJobs.status,

@@ -29,6 +29,13 @@
       "when": 1792176283142,
       "tag": "0003_workflow_accessories",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1792178306803,
+      "tag": "0004_history_refs",
+      "breakpoints": true
     }
   ]
 }
