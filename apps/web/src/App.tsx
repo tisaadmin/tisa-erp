@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard';
 import { AmcPage, ClientDetail, ClientsPage, InventoryPage, LeadsPage, SitesPage, UsersPage, VendorsPage } from './pages/Masters';
 import { ChallanDetail, ChallansPage, NewChallan, OrderDetail, OrderEditor, OrdersPage, QuotationDetail, QuotationEditor, QuotationsPage } from './pages/Sales';
 import { OrderImportPage } from './pages/OrderImport';
+import { OrderBulkImportPage } from './pages/OrderBulkImport';
 import { GrnDetail, GrnsPage, PoDetail, PoEditor, PurchaseOrdersPage } from './pages/Purchase';
 import { InvoiceDetail, InvoiceEditor, InvoicesPage, ReceivablesPage } from './pages/Billing';
 import { NewTicket, ServiceReportDetail, ServiceReportsPage, SitePhotosPage, TicketDetail, TicketsPage } from './pages/Service';
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="orders" element={<OrdersPage />} />
         <Route path="orders/new" element={<OrderEditor />} />
         <Route path="orders/import" element={<OrderImportPage />} />
+        <Route path="orders/import-bulk" element={<OrderBulkImportPage />} />
         <Route path="orders/:id" element={<OrderDetail />} />
         <Route path="challans" element={<ChallansPage />} />
         <Route path="challans/new" element={<NewChallan />} />

@@ -103,13 +103,14 @@ export async function suggestItems(tx: DbOrTx, lines: DocLine[]): Promise<ItemSu
 const SERVICE_WORDS = /\b(charges?|testing|installation|commissioning|labou?r|service|servicing|modification|amc|visit|survey|programming|configuration|shifting|dismantl\w*|repair|work)\b/i;
 export const guessItemType = (description: string) => (SERVICE_WORDS.test(description) ? 'SERVICE' : 'PRODUCT');
 
+// whole words only, so e.g. "bracket" is not read as "rack"
 const SYSTEM_HINTS: [RegExp, string][] = [
-  [/sprinkler|hydrant|cpvc|fire\s*(pipe|cpvc|sol|fighting|extinguisher|pump)|hose|valve|\bms pipe|\bgi pipe/i, 'Fire Fighting'],
-  [/smoke|heat detector|fire alarm|hooter|mcp|manual call|panel.*(fire|addressable)|\bfas\b/i, 'Fire Alarm'],
-  [/camera|cctv|nvr|dvr|\bipc\b|bullet|dome/i, 'CCTV'],
-  [/door\s*phone|vdp|video door/i, 'Video Door Phones'],
-  [/switch|router|cat ?6|patch|rack|access point|wifi|fibre|fiber|\bsfp\b/i, 'Networking'],
-  [/access control|biometric|card reader|em lock|maglock|boom barrier/i, 'Access Control Systems'],
+  [/\b(sprinklers?|hydrants?|cpvc|fire\s*(pipe|cpvc|sol|fighting|extinguishers?|pumps?)|hose(s|\s*reel)?|valves?|ms\s*pipes?|gi\s*pipes?)\b/i, 'Fire Fighting'],
+  [/\b(smoke\s*detectors?|heat\s*detectors?|fire\s*alarm|hooters?|mcp|manual\s*call\s*points?|fire\s*alarm\s*panel|addressable|fas)\b/i, 'Fire Alarm'],
+  [/\b(cameras?|cctv|nvr|dvr|ipc|bullet|dome)\b/i, 'CCTV'],
+  [/\b(door\s*phones?|vdp|video\s*door)\b/i, 'Video Door Phones'],
+  [/\b(switch(es)?|routers?|cat\s*6a?|patch\s*(panel|cords?)|racks?|access\s*points?|wi-?fi|fibre|fiber|sfp|keystone|ups)\b/i, 'Networking'],
+  [/\b(access\s*control|biometric|card\s*readers?|em\s*locks?|mag\s*locks?|boom\s*barriers?|exit\s*(push\s*)?buttons?)\b/i, 'Access Control Systems'],
 ];
 /** Returns a function giving the best-guess system for a new item (by keywords), or null. */
 export async function systemGuesser(tx: DbOrTx) {

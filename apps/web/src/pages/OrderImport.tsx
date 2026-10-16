@@ -1,6 +1,6 @@
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, Upload } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Combo } from '../components/Combo';
 import { PaymentTermsEditor, Totals, totalsOf, type Term } from '../components/LineItems';
@@ -61,12 +61,25 @@ export function OrderImportPage() {
   const catOpts = (cats.data?.data ?? []).map((c) => ({ value: c.id, label: c.name }));
   const client = clients.data?.data.find((c) => c.id === clientId);
 
+  const [params] = useSearchParams();
+  const jobParam = params.get('job');
+  useEffect(() => {
+    if (!jobParam) return;
+    setBusy(true);
+    api<Parsed>(`/order-imports/${jobParam}`).then(applyParsed).catch((e) => toast.error((e as Error).message)).finally(() => setBusy(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobParam]);
+
   const upload = async () => {
     if (!file) return;
     setBusy(true);
     try {
       const fd = new FormData(); fd.append('file', file);
-      const r = await api<Parsed>('/order-imports/parse', { form: fd });
+      applyParsed(await api<Parsed>('/order-imports/parse', { form: fd }));
+    } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
+  };
+
+  function applyParsed(r: Parsed) {
       setP(r);
       setClientId(r.clientId); setSites(r.sites); setSiteId(r.siteId);
       const likely = r.clients.some((c) => c.score >= 50);
@@ -80,8 +93,7 @@ export function OrderImportPage() {
       setLines(r.lines);
       setHdr({ date: r.doc.date ?? '', clientPoNo: r.doc.poNo ?? '', clientPoDate: r.doc.poDate ?? '', expectedCompletion: '', notes: '' });
       setAllowDuplicate(false);
-    } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
-  };
+  }
 
   const pickClient = async (id: string | null) => {
     setClientId(id); setSiteId(null); setSites([]);
@@ -142,7 +154,10 @@ export function OrderImportPage() {
   return (
     <div className="space-y-4">
       <PageHeader back="/orders" title="Import sales order" subtitle="Upload one sales order (FFH ERP export or similar). Check the client, site and items, then create the order form."
-        actions={p && <Button variant="primary" loading={saving} disabled={problems.length > 0} onClick={commit}>Create order</Button>} />
+        actions={<>
+          <Link to="/orders/import-bulk"><Button>Import many files…</Button></Link>
+          {p && <Button variant="primary" loading={saving} disabled={problems.length > 0} onClick={commit}>Create order</Button>}
+        </>} />
 
       <Card>
         <div className="flex flex-wrap items-end gap-3">

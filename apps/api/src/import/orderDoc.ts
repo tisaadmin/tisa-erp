@@ -261,7 +261,7 @@ export async function parseOrderDocument(buf: Buffer, fileName: string): Promise
   }
   if (!lines.length) throw badRequest('No item lines were found under the Description / Quantity headings');
   if (skippedNoQty.length) warnings.push(`${skippedNoQty.length} line${skippedNoQty.length > 1 ? 's have' : ' has'} no quantity in the file and ${skippedNoQty.length > 1 ? 'were' : 'was'} left out: ${skippedNoQty.slice(0, 5).join('; ')}${skippedNoQty.length > 5 ? '…' : ''}`);
-  if (cols.gst == null && lines.some((l) => l.rate != null)) warnings.push('The file has no GST column — GST % comes from the item master (18% for new items); compare the total with the old ERP\'s order value below');
+  if (cols.gst == null && lines.some((l) => l.rate != null)) warnings.push('The file has no GST column — GST % comes from the item master (18% for new items); compare the total with the old ERP\'s order value');
   if (lines.some((l) => (l.billedQty ?? 0) > 0)) warnings.push('Some lines were already billed in the old ERP — billed quantities are shown per line; avoid billing them again here');
   if (!lines.some((l) => l.rate != null)) warnings.push('The file has no rates — rates are taken from the item master where the item is known; enter the rest before importing');
 

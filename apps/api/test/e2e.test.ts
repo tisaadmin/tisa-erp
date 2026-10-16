@@ -531,3 +531,51 @@ test('order import: FFH product-details export (ProductDetails_Id-<SO>) fills th
   assert.equal(o.taxable, 5000); assert.equal(o.total, 5900);
   assert.equal(o.items.find((l: any) => l.itemId === ctx.cam.id).deliveredQty, 2, 'opening delivered qty from the old ERP');
 });
+
+test('bulk order import: many product-details files matched by SO number; ready ones filled in, others explained', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const lw = new ExcelJS.Workbook(); const ls = lw.addWorksheet('Salesorderlist List');
+  ls.addRow(['Sales Order Id', 'Client Name', 'City', 'State', 'Title', 'Delivery Status', 'Billing Status', 'Open Date', 'So Value', 'Basic Value']);
+  ls.addRow([261099700, 'Imported Towers CHS', 'Mumbai', 'Maharashtra', 'Bulk A', 'Not Delivered', 'Not Billed', '01/10/2026', 2360, 2000]);
+  ls.addRow([261099701, 'Imported Towers CHS', 'Mumbai', 'Maharashtra', 'Bulk B', 'Not Delivered', 'Not Billed', '02/10/2026', 5900, 5000]);
+  ls.addRow([261099703, 'Imported Towers CHS', 'Mumbai', 'Maharashtra', 'Bulk C', 'Not Delivered', 'Not Billed', '03/10/2026', 1180, 1000]);
+  const lfd = new FormData(); lfd.append('file', new Blob([new Uint8Array(Buffer.from(await lw.xlsx.writeBuffer()))]), 'Salesorderlist List.xlsx');
+  await ok('admin', 'POST', `/imports/${(await ok('admin', 'POST', '/imports/upload', undefined, lfd)).id}/commit`);
+
+  const details = async (rows: [string, number, number][]) => {
+    const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('ProductDetails');
+    ws.addRow(['Product', 'Partcode', 'Hsn', 'Uom', 'Quantity', 'Rate', 'Final Amt(Wd)', 'Dis(%)', 'Remarks', 'Bill Qty', 'Delivered Qty']);
+    for (const [name, q, rate] of rows) ws.addRow([name, null, null, 'Number', q, rate, q * rate, null, null, 0, 0]);
+    return new Blob([new Uint8Array(Buffer.from(await wb.xlsx.writeBuffer()))]);
+  };
+  const fd = new FormData();
+  fd.append('files', await details([[ctx.cam.name, 1, 1000], ['Widget Q-77 bracket', 2, 500]]), 'ProductDetails_Id-261099700.xlsx'); // ready once a system is chosen
+  fd.append('files', await details([[ctx.cam.name, 1, 1000]]), 'ProductDetails_Id-261099701.xlsx'); // 1,000 vs basic 5,000
+  fd.append('files', await details([[ctx.cam.name, 1, 1000]]), 'ProductDetails_Id-261099702.xlsx'); // SO not in the ERP
+  fd.append('files', await details([['Widget Q-77 bracket', 2, 500]]), 'ProductDetails_Id-261099703.xlsx'); // same new product as 700
+  fd.append('files', await details([[ctx.cam.name, 1, 1000]]), 'ProductDetails_Id-261099600.xlsx'); // already filled earlier
+  fd.append('files', new Blob([new Uint8Array(Buffer.from('not a workbook'))]), 'notes.xlsx');
+  const checked = await ok('sales', 'POST', '/order-imports/bulk/check', undefined, fd);
+  const by = (so: string) => checked.find((r: any) => r.fileName.includes(so));
+  assert.equal(by('261099700').status, 'review'); assert.match(by('261099700').reasons[0], /system/);
+  assert.equal(by('261099701').status, 'review'); assert.match(by('261099701').reasons.join(' '), /basic value/);
+  assert.equal(by('261099702').status, 'no-order');
+  assert.equal(by('261099600').status, 'done');
+  assert.equal(checked.find((r: any) => r.fileName === 'notes.xlsx').status, 'error');
+
+  // choosing a default system for unknown items makes 700 and 703 ready
+  const ids = checked.filter((r: any) => r.jobId).map((r: any) => r.jobId);
+  const re = await ok('sales', 'POST', '/order-imports/bulk/recheck', { jobIds: ids, defaultCategoryId: ctx.cam.categoryId });
+  const readyIds = re.filter((r: any) => r.status === 'ready').map((r: any) => r.jobId);
+  assert.equal(readyIds.length, 2);
+  const done = await ok('sales', 'POST', '/order-imports/bulk/commit', { jobIds: [...readyIds, by('261099701').jobId], defaultCategoryId: ctx.cam.categoryId });
+  assert.equal(done.filter((r: any) => r.status === 'imported').length, 2);
+  assert.equal(done.find((r: any) => r.jobId === by('261099701').jobId).status, 'review', 'not-ready files are never imported');
+  const widgets = (await ok('admin', 'GET', '/items?search=Widget Q-77')).data;
+  assert.equal(widgets.length, 1, 'a new product shared by two files is created once');
+  const a = await ok('sales', 'GET', `/orders/${by('261099700').order.id}`);
+  assert.equal(a.items.length, 2); assert.equal(a.taxable, 2000); assert.equal(a.sourceData.summaryOnly, false);
+  // a flagged file can be reopened in the single-file screen
+  const reopened = await ok('sales', 'GET', `/order-imports/${by('261099701').jobId}`);
+  assert.equal(reopened.duplicate.number, by('261099701').order.number);
+});
