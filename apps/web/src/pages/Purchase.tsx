@@ -43,7 +43,12 @@ export function PoEditor() {
   const sites = useSites();
   const orders = useGet<Page<any>>('/orders', { pageSize: 200, status: '' });
   const existing = useGet<any>(id ? `/purchase-orders/${id}` : null);
-  const so = useGet<any>(sp.get('salesOrderId') ? `/orders/${sp.get('salesOrderId')}` : null);
+  const sheetId = sp.get('accessorySheetId');
+  const so = useGet<any>(sp.get('salesOrderId') && !sheetId ? `/orders/${sp.get('salesOrderId')}` : null);
+  const acc = useGet<any>(sheetId ? `/accessory-sheets/${sheetId}` : null);
+  const rules = useGet<{ key: string; enabled: boolean }[]>('/settings/workflow');
+  const { can } = useAuth();
+  const orderRequired = !!rules.data?.find((r) => r.key === 'poRequiresOrder')?.enabled && !can('purchase_orders:without_order');
   const [d, setD] = useState({ vendorId: null as string | null, salesOrderId: sp.get('salesOrderId'), deliverToSiteId: null as string | null, date: toInputDate(new Date()), expectedDate: '', terms: '', notes: '', lines: [emptyLine()] as Line[] });
   useEffect(() => {
     const p = existing.data;
@@ -54,6 +59,20 @@ export function PoEditor() {
     const o = so.data;
     if (o && !id) setD((x) => ({ ...x, deliverToSiteId: o.siteId, lines: o.items.filter((l: any) => l.itemId).map((l: any) => ({ itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: 0, discountPct: 0, gstRate: l.gstRate })) }));
   }, [so.data, id]);
+  useEffect(() => {
+    // From an approved accessory sheet: buy what stores can't cover (required − in stock), at the item's purchase price.
+    const s = acc.data;
+    if (!s || id) return;
+    const need = new Map<string, any>();
+    for (const l of s.lines) {
+      if (!l.itemId) continue;
+      const x = need.get(l.itemId) ?? { itemId: l.itemId, description: l.description, unit: l.unit, qty: 0, rate: l.rate };
+      x.qty += l.qty; need.set(l.itemId, x);
+    }
+    const lines = [...need.values()].map((x) => ({ ...x, qty: Math.max(0, Math.round((x.qty - (s.stock[x.itemId] ?? 0)) * 1000) / 1000) })).filter((x) => x.qty > 0)
+      .map((x) => ({ itemId: x.itemId, description: x.description, hsnSac: '', unit: x.unit, qty: x.qty, rate: x.rate, discountPct: 0, gstRate: 18 }));
+    setD((p) => ({ ...p, salesOrderId: s.order.id, deliverToSiteId: s.order.site?.id ?? null, notes: `Accessories for ${s.order.number} (${s.number})`, lines: lines.length ? lines : [emptyLine()] }));
+  }, [acc.data, id]);
   const vendor = vendors.data?.data.find((v) => v.id === d.vendorId);
   const inter = !!vendor?.stateCode && vendor.stateCode !== companyState;
   const save = useAction((submit: boolean) => {
@@ -68,7 +87,7 @@ export function PoEditor() {
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
           <Field label="Vendor" required><Combo options={(vendors.data?.data ?? []).map((v) => ({ value: v.id, label: v.name }))} value={d.vendorId} onChange={(v) => setD({ ...d, vendorId: v })} /></Field>
-          <Field label="Against sales order"><Combo options={(orders.data?.data ?? []).map((o) => ({ value: o.id, label: o.number, sub: o.client?.name }))} value={d.salesOrderId} onChange={(v) => setD({ ...d, salesOrderId: v })} /></Field>
+          <Field label="Against sales order" required={orderRequired} hint={orderRequired ? 'Required — POs are raised against an order form' : undefined}><Combo options={(orders.data?.data ?? []).map((o) => ({ value: o.id, label: o.number, sub: o.client?.name }))} value={d.salesOrderId} onChange={(v) => setD({ ...d, salesOrderId: v })} /></Field>
           <Field label="Deliver to site (blank = store)"><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={d.deliverToSiteId} onChange={(v) => setD({ ...d, deliverToSiteId: v })} /></Field>
           <Field label="PO date"><Input type="date" value={d.date} onChange={(e) => setD({ ...d, date: e.target.value })} /></Field>
           <Field label="Expected delivery"><Input type="date" value={d.expectedDate} onChange={(e) => setD({ ...d, expectedDate: e.target.value })} /></Field>

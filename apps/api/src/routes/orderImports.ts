@@ -13,7 +13,8 @@ import { audit } from '../lib/audit';
 import { badRequest, notFound } from '../lib/http';
 import { GSTIN_REGEX, INDIAN_STATES, stateFromGstin } from '../lib/gst';
 import { nextCode, reserveCodes } from '../lib/numbering';
-import { requirePerm } from '../middleware/auth';
+import { requirePerm, type AuthUser } from '../middleware/auth';
+import { enforceRule } from '../services/workflow';
 import { UNIT_MAP } from '../import/engine';
 import { parseOrderDocument, type ParsedOrderDoc } from '../import/orderDoc';
 import { guessItemType, suggestClients, suggestItems, suggestSites, systemGuesser } from '../import/orderMatch';
@@ -140,12 +141,15 @@ type CommitInput = z.infer<typeof commitSchema>;
 type Job = typeof importJobs.$inferSelect;
 
 /** Creates (or fills in) the order for one imported document. Shared by the single-file screen and bulk import. */
-async function commitOrderImport(job: Job, doc: ParsedOrderDoc, d: CommitInput, userId: string) {
+async function commitOrderImport(job: Job, doc: ParsedOrderDoc, d: CommitInput, user: AuthUser) {
+  const userId = user.id;
   if (job.status === 'DONE') throw badRequest('This document has already been imported — upload it again to import another copy');
   const sourceRef = sourceRefOf(doc);
   const dup = await duplicateOf(sourceRef);
   const fillIn = !!dup?.summaryOnly && !d.allowDuplicate; // complete the order-list entry instead of creating another order
   if (dup && !dup.summaryOnly && !d.allowDuplicate) throw badRequest(`This order (${doc.sourceNo}) was already imported as ${dup.number}`);
+  // filling in an order brought over from the old ERP is fine; a brand-new order follows the "orders from quotations" rule
+  if (!fillIn) await enforceRule('orderRequiresQuote', user, 'This document is not an order from the old ERP\'s order list, and new orders must be created from an approved quotation — ask for the "direct order" permission to import it as a new order');
 
   const lines = d.lines.filter((l) => l.include);
   if (!lines.length) throw badRequest('Include at least one line');
@@ -318,7 +322,7 @@ r.post('/order-imports/bulk/commit', perm, async (req, res) => {
         clientId: a.dup.clientId, site: a.dup.siteId ? { mode: 'existing', siteId: a.dup.siteId } : { mode: 'none' },
         paymentTerms: a.dup.paymentTerms as CommitInput['paymentTerms'],
         lines: a.linesFull.map((l) => ({ ...l, newItem: { ...l.newItem, categoryId: l.newItem.categoryId ?? d.defaultCategoryId ?? null } })),
-      }, req.user.id);
+      }, req.user);
       audit(req, 'import', 'order', result.order.id, { file: job.fileName, sourceRef: result.sourceRef, bulk: true, ...result.summary });
       out.push({ jobId: id, fileName: job.fileName, status: 'imported', summary: result.summary });
     } catch (e) {
@@ -338,7 +342,7 @@ r.get('/order-imports/:id', perm, async (req, res) => {
 
 r.post('/order-imports/:id/commit', perm, async (req, res) => {
   const { job, doc } = await loadJob(req.params.id);
-  const result = await commitOrderImport(job, doc, commitSchema.parse(req.body), req.user.id);
+  const result = await commitOrderImport(job, doc, commitSchema.parse(req.body), req.user);
   audit(req, 'import', 'order', result.order.id, { file: job.fileName, sourceRef: result.sourceRef, ...result.summary });
   res.status(201).json(result.summary);
 });

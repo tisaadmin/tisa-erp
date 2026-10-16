@@ -74,6 +74,8 @@ export const companySettings = pgTable('company_settings', {
   poTerms: text(),
   officeEmail: text(), // service reports & requisitions copied here
   workdayStart: text().notNull().default('09:30'),
+  /** Which steps must follow an earlier one (see services/workflow.ts) */
+  workflowRules: jsonb().$type<Record<string, boolean>>().notNull().default({}),
   updatedAt: updatedAt(),
 });
 
@@ -390,6 +392,47 @@ export const salesOrderItems = pgTable('sales_order_items', {
   deliveredQty: qty().notNull().default(0),
   installedQty: qty().notNull().default(0),
 });
+
+// ───────────────────────────── Accessories / consumables ─────────────────────────────
+
+/** Template: what one unit of an item needs, e.g. 1 IP camera → 2 RJ45 connectors + 1 junction box + 20 m CAT6. */
+export const itemAccessories = pgTable('item_accessories', {
+  id: id(),
+  itemId: text().notNull().references(() => items.id, { onDelete: 'cascade' }),
+  accessoryItemId: text().notNull().references(() => items.id),
+  qtyPer: qty().notNull(), // per 1 unit of the parent item
+  notes: text(),
+  sortOrder: integer().notNull().default(0),
+}, (t) => [index().on(t.itemId), uniqueIndex().on(t.itemId, t.accessoryItemId)]);
+
+/** Accessories / consumables needed to execute an order. Internal cost — not billed to the client. */
+export const accessorySheets = pgTable('accessory_sheets', {
+  id: id(),
+  number: text().notNull().unique(),
+  orderId: text().notNull().references(() => salesOrders.id),
+  status: text().notNull().default('DRAFT'), // DRAFT, SUBMITTED, APPROVED, REJECTED
+  notes: text(),
+  preparedById: text(),
+  approvedById: text(),
+  approvedAt: ts(),
+  estimatedCost: money().notNull().default(0),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [index().on(t.orderId)]);
+
+export const accessorySheetLines = pgTable('accessory_sheet_lines', {
+  id: id(),
+  sheetId: text().notNull().references(() => accessorySheets.id, { onDelete: 'cascade' }),
+  orderItemId: text(), // the order line it is for (null = for the whole order)
+  itemId: text(), // inventory item (null = free text)
+  description: text().notNull(),
+  unit: text().notNull().default('Nos'),
+  qty: qty().notNull(),
+  rate: money().notNull().default(0), // estimated cost (purchase price)
+  source: text().notNull().default('MANUAL'), // TEMPLATE, MANUAL
+  remarks: text(),
+  sortOrder: integer().notNull().default(0),
+}, (t) => [index().on(t.sheetId)]);
 
 // ───────────────────────────── Purchase cycle ─────────────────────────────
 
@@ -793,6 +836,16 @@ export const salesOrdersRel = relations(salesOrders, ({ one, many }) => ({
   items: many(salesOrderItems),
 }));
 export const salesOrderItemsRel = relations(salesOrderItems, ({ one }) => ({ order: one(salesOrders, { fields: [salesOrderItems.orderId], references: [salesOrders.id] }) }));
+
+export const accessorySheetsRel = relations(accessorySheets, ({ one, many }) => ({
+  order: one(salesOrders, { fields: [accessorySheets.orderId], references: [salesOrders.id] }),
+  lines: many(accessorySheetLines),
+}));
+export const accessorySheetLinesRel = relations(accessorySheetLines, ({ one }) => ({ sheet: one(accessorySheets, { fields: [accessorySheetLines.sheetId], references: [accessorySheets.id] }) }));
+export const itemAccessoriesRel = relations(itemAccessories, ({ one }) => ({
+  item: one(items, { fields: [itemAccessories.itemId], references: [items.id] }),
+  accessory: one(items, { fields: [itemAccessories.accessoryItemId], references: [items.id] }),
+}));
 
 export const purchaseOrdersRel = relations(purchaseOrders, ({ one, many }) => ({
   vendor: one(vendors, { fields: [purchaseOrders.vendorId], references: [vendors.id] }),

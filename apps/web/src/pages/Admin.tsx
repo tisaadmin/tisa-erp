@@ -343,3 +343,44 @@ export function ImportPage() {
     </div>
   );
 }
+
+// ═══════════════════════ Workflow rules ═══════════════════════
+
+type Rule = { key: string; label: string; help: string; exception: string; enabled: boolean };
+const EXCEPTION_LABEL: Record<string, string> = {
+  'orders:without_quote': 'Order Forms → Without quote', 'purchase_orders:without_order': 'Purchase Orders → Without order', 'challans:without_order': 'Challans → Without order',
+};
+
+export function WorkflowPage() {
+  const { can } = useAuth();
+  const rules = useGet<Rule[]>('/settings/workflow');
+  const save = useAction((patch: Record<string, boolean>) => api('/settings/workflow', { method: 'PUT', body: patch }), { success: 'Workflow rules saved', invalidate: [['/settings/workflow']] });
+  return (
+    <div className="space-y-4">
+      <PageHeader title="Workflow rules" subtitle="Steps that may only happen after an earlier one. Roles can be given an exception in Roles & Access." />
+      <Card pad={false}>
+        {!rules.data ? <Spinner /> : (
+          <ul className="divide-y divide-slate-100">
+            {rules.data.map((r) => (
+              <li key={r.key} className="flex items-start gap-4 p-4">
+                <label className="relative mt-0.5 inline-flex cursor-pointer items-center">
+                  <input type="checkbox" className="peer sr-only" checked={r.enabled} disabled={!can('settings:edit') || save.isPending} onChange={(e) => save.mutate({ [r.key]: e.target.checked })} />
+                  <span className="h-5 w-9 rounded-full bg-slate-300 transition peer-checked:bg-brand-600 peer-disabled:opacity-50" />
+                  <span className="absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow transition peer-checked:translate-x-4" />
+                </label>
+                <div className="flex-1">
+                  <div className="font-medium">{r.label} <Badge t={r.enabled ? 'green' : 'gray'}>{r.enabled ? 'On' : 'Off'}</Badge></div>
+                  <p className="mt-0.5 text-sm text-slate-600">{r.help}</p>
+                  <p className="mt-1 text-xs text-slate-500">Exception permission: <b>{EXCEPTION_LABEL[r.exception] ?? r.exception}</b> — give it to a role in <Link className="text-brand-700 underline" to="/roles">Roles &amp; Access</Link>.</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+      <Card title="Accessories approval">
+        <p className="text-sm text-slate-600">Accessory sheets are approved by roles with <b>Accessories → Approve</b> (Roles &amp; Access). Nobody can approve a sheet they prepared.</p>
+      </Card>
+    </div>
+  );
+}

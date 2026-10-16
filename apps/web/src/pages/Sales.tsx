@@ -8,6 +8,7 @@ import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, inr, label, qty, STAGE_LABEL, toInputDate } from '../lib/format';
 import { useAction, useClients, useGet, useSites, type Page } from '../lib/hooks';
+import { OrderAccessoriesCard } from './Accessories';
 
 export function useCompanyState() {
   const s = useGet<{ company: { stateCode: string } | null }>('/settings');
@@ -180,13 +181,17 @@ export function DocLines({ doc, extraCols }: { doc: any; extraCols?: { label: st
 export function OrdersPage() {
   const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50 });
   const { can } = useAuth();
+  const rules = useGet<{ key: string; enabled: boolean }[]>('/settings/workflow');
+  const directOrderAllowed = !rules.data?.find((r) => r.key === 'orderRequiresQuote')?.enabled || can('orders:without_quote');
   const list = useGet<Page<any>>('/orders', q);
   return (
     <div>
       <PageHeader title="Order forms" subtitle="Confirmed work orders — deliveries, running bills and purchase are driven from here"
         actions={can('orders:create') && <>
           <Link to="/orders/import"><Button icon={<Upload className="size-4" />}>Import from file</Button></Link>
-          <Link to="/orders/new"><Button variant="primary" icon={<Plus className="size-4" />}>New order</Button></Link>
+          {directOrderAllowed
+            ? <Link to="/orders/new"><Button variant="primary" icon={<Plus className="size-4" />}>New order</Button></Link>
+            : <Link to="/quotations" title="Order forms are created from an approved quotation (Workflow rules)"><Button variant="primary" icon={<Plus className="size-4" />}>New order from a quotation</Button></Link>}
         </>} />
       <Card pad={false}>
         <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
@@ -296,6 +301,8 @@ export function OrderDetail() {
           </Card>
         )}
       </div>
+
+      <OrderAccessoriesCard orderId={o.id} />
 
       <Card title="Execution & milestone billing" pad={false}>
         <div className="overflow-x-auto">

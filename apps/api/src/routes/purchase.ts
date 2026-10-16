@@ -15,6 +15,7 @@ import { lineSchema, priceLines } from '../services/lines';
 import { postStock } from '../services/stock';
 import { sendPdf } from './sales';
 
+import { enforceRule } from '../services/workflow';
 const r = Router();
 const opt = z.string().trim().nullish().transform((v) => (v === '' ? null : v));
 const qs = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
@@ -63,6 +64,7 @@ r.get('/purchase-orders/:id', requirePerm('purchase_orders:view'), async (req, r
 
 r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, res) => {
   const d = poSchema.parse(req.body);
+  if (!d.salesOrderId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be raised against an order form — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
   const { interState } = await poContext(d.vendorId);
   const company = await getCompany();
   const po = await db.transaction(async (tx) => {
@@ -84,6 +86,7 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
 
 r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, res) => {
   const d = poSchema.parse(req.body);
+  if (!d.salesOrderId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be linked to an order form — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
   const { interState } = await poContext(d.vendorId);
   const po = await db.transaction(async (tx) => {
     const ex = await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id) });

@@ -41,6 +41,10 @@ All three use the same logins and the same role-based permissions.
 
 **Bulk order files (Order Forms → Import from file → Import many files):** select any number of FFH product-details exports (`ProductDetails_Id-<SO no>.xlsx`) at once. Each file is linked to its order by the SO number; files whose items add up to the old ERP's basic value are filled in with one click (unknown items are created once, under a guessed or chosen system), and the rest are listed with the reason and a link to review them one by one.
 
+**Workflow rules (Settings → Workflow Rules):** switchable checks on the order of steps — orders only from an approved quotation, POs only against an order form, supply delivery challans only against an order form. Each rule has an exception permission (Roles & Access) for roles that need it, e.g. Purchase & Stores buying for stock.
+
+**Accessories & consumables (Sales → Accessory Sheets):** accessory templates per item (what one unit needs, e.g. 1 IP camera → 2 RJ45 + 20 m CAT6). After an order is created, its accessory sheet is calculated from the templates × order quantities, edited, submitted and approved by anyone with *Accessories → Approve* (never the preparer). Shows estimated cost and stock on hand; an approved sheet raises a PO for the shortfall. Internal cost only — the client's order and bills are unchanged.
+
 **Forms & fields (Settings → Forms & Fields):** for clients, sites, leads, items and vendors you can rename fields, hide unused ones, make fields mandatory, set defaults, reorder, and add custom fields (text, number, date, dropdown, yes/no). Rules are enforced on the server and in the importer. Fields needed for GST/billing are locked.
 
 Also included: MIS dashboard (billing vs collections, receivables, pipeline, SLA breaches, AMC renewals, low stock, today's attendance, pending approvals), notifications centre, audit log, financial-year document numbering (`TTS/INV/26-27/0001`), and GST-safe invoice numbering (drafts get their final number only when issued, so there are no gaps).

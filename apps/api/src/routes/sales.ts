@@ -18,6 +18,7 @@ import { lineSchema, priceLines } from '../services/lines';
 import { postStock } from '../services/stock';
 import { createSalesOrder, orderSchema } from '../services/orders';
 
+import { enforceRule } from '../services/workflow';
 const r = Router();
 const termsSchema = z.array(z.object({ stage: z.enum(['ADVANCE', 'DELIVERY', 'INSTALLATION', 'TESTING', 'COMMISSIONING', 'HANDOVER']), percent: z.coerce.number() }));
 const opt = z.string().trim().nullish().transform((v) => (v === '' ? null : v));
@@ -225,6 +226,7 @@ r.get('/orders/:id', requirePerm('orders:view'), async (req, res) => {
 });
 
 r.post('/orders', requirePerm('orders:create'), async (req, res) => {
+  await enforceRule('orderRequiresQuote', req.user, 'Order forms are created from an approved quotation — open the quotation and use "Convert to order" (or ask for the "direct order" permission)');
   const d = orderSchema.parse(req.body);
   const o = await db.transaction((tx) => createSalesOrder(tx, d, req.user.id));
   audit(req, 'create', 'order', o.id);
@@ -303,6 +305,7 @@ r.get('/challans/:id', requirePerm('challans:view'), async (req, res) => {
 
 r.post('/challans', requirePerm('challans:create'), async (req, res) => {
   const d = dcSchema.parse(req.body);
+  if (d.type === 'SUPPLY' && !d.orderId) await enforceRule('dcRequiresOrder', req.user, 'A supply delivery challan must be raised against an order form — open the order and use "Delivery challan" (returnable, job-work and site-transfer challans are allowed without one)');
   const dc = await db.transaction(async (tx) => {
     const client = await tx.query.clients.findFirst({ where: eq(clients.id, d.clientId) });
     if (!client) throw badRequest('Client not found');

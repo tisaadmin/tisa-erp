@@ -8,11 +8,12 @@ import { AmcPage, ClientDetail, ClientsPage, InventoryPage, LeadsPage, SitesPage
 import { ChallanDetail, ChallansPage, NewChallan, OrderDetail, OrderEditor, OrdersPage, QuotationDetail, QuotationEditor, QuotationsPage } from './pages/Sales';
 import { OrderImportPage } from './pages/OrderImport';
 import { OrderBulkImportPage } from './pages/OrderBulkImport';
+import { AccessorySheetDetail, AccessorySheetsPage, AccessoryTemplatesPage } from './pages/Accessories';
 import { GrnDetail, GrnsPage, PoDetail, PoEditor, PurchaseOrdersPage } from './pages/Purchase';
 import { InvoiceDetail, InvoiceEditor, InvoicesPage, ReceivablesPage } from './pages/Billing';
 import { NewTicket, ServiceReportDetail, ServiceReportsPage, SitePhotosPage, TicketDetail, TicketsPage } from './pages/Service';
 import { AttendancePage, ExpenseDetail, ExpenseEditor, ExpensesPage, RequisitionDetail, RequisitionsPage } from './pages/Field';
-import { FieldsPage, ImportPage, RolesPage, SettingsPage } from './pages/Admin';
+import { FieldsPage, ImportPage, RolesPage, SettingsPage, WorkflowPage } from './pages/Admin';
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -70,6 +71,10 @@ export default function App() {
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/fields" element={<FieldsPage />} />
         <Route path="settings/import" element={<ImportPage />} />
+        <Route path="settings/workflow" element={<WorkflowPage />} />
+        <Route path="accessories" element={<AccessorySheetsPage />} />
+        <Route path="accessories/templates" element={<AccessoryTemplatesPage />} />
+        <Route path="accessories/:id" element={<AccessorySheetDetail />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

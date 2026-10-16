@@ -12,6 +12,7 @@ import { clearCompanyCache } from '../services/company';
 import { GSTIN_REGEX, INDIAN_STATES } from '../lib/gst';
 import { FIELD_ENTITIES, REGISTRY, resolvedFields, saveFieldConfig, type FieldEntity } from '../lib/fields';
 
+import { WORKFLOW_RULES, workflowRules, type WorkflowRule } from '../services/workflow';
 const r = Router();
 const publicUser = { passwordHash: false, pushToken: false } as const;
 
@@ -115,6 +116,23 @@ const settingsSchema = z.object({
   bankName: z.string().nullish(), bankAccount: z.string().nullish(), bankIfsc: z.string().nullish(), bankBranch: z.string().nullish(),
   invoiceTerms: z.string().nullish(), quoteTerms: z.string().nullish(), poTerms: z.string().nullish(), officeEmail: z.string().nullish(),
   workdayStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+});
+
+// ── Workflow rules ──
+r.get('/settings/workflow', async (_req, res) => {
+  const rules = await workflowRules();
+  res.json(Object.entries(WORKFLOW_RULES).map(([key, r]) => ({ key, label: r.label, help: r.help, exception: r.exception, enabled: rules[key as WorkflowRule] })));
+});
+
+r.put('/settings/workflow', requirePerm('settings:edit'), async (req, res) => {
+  const d = z.record(z.enum(Object.keys(WORKFLOW_RULES) as [WorkflowRule, ...WorkflowRule[]]), z.boolean()).parse(req.body);
+  const company = await db.query.companySettings.findFirst();
+  if (!company) throw badRequest('Save the company settings first');
+  await db.update(companySettings).set({ workflowRules: { ...(company.workflowRules ?? {}), ...d } }).where(eq(companySettings.id, 1));
+  clearCompanyCache();
+  audit(req, 'update', 'workflow_rules', '1', d);
+  const rules = await workflowRules();
+  res.json(Object.entries(WORKFLOW_RULES).map(([key, r]) => ({ key, label: r.label, help: r.help, exception: r.exception, enabled: rules[key as WorkflowRule] })));
 });
 
 r.put('/settings', requirePerm('settings:edit'), async (req, res) => {
