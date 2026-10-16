@@ -4,7 +4,8 @@
  * (stock already equals FFH's current stock; delivered quantities came with the orders). Re-importing skips
  * documents already brought in (matched on sourceRef).
  */
-import { inArray, isNotNull } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
+import { inArray, isNotNull, sql } from 'drizzle-orm';
 import { db, type DbOrTx } from '../db';
 import {
   clients, deliveryChallanItems, deliveryChallans, goodsReceiptItems, goodsReceipts, items, purchaseOrderItems, purchaseOrders,
@@ -47,7 +48,54 @@ const dateOf = (s: string | null | undefined) => {
 const unitOf = (u: unknown) => { const s = String(u ?? '').trim(); return s ? UNIT_MAP[s.toLowerCase()] ?? s : 'Nos'; };
 const cleanName = (s: unknown) => String(s ?? '').split('^')[0].replace(/\s+/g, ' ').trim();
 
-export async function runFfhHistory(data: HistoryFile, dryRun: boolean): Promise<HistoryResult> {
+/**
+ * FFH gaps, filled before planning:
+ *  - some POs have no item lines in FFH (made from the inward screen) → rebuild them from their inwards;
+ *  - "Purchase" inwards with no PO (direct purchases) → a closed direct-purchase PO is created for each, so the GRN has a home.
+ * Rejection-in / returnable inwards are material coming back, not purchases — still left out.
+ */
+export function fillFfhGaps(data: HistoryFile): HistoryFile {
+  const pos = (data.pos ?? []).map((p) => ({ ...p, lines: [...(p.lines ?? [])] }));
+  const poById = new Map(pos.map((p) => [p.id, p]));
+  const poIdByNo = new Map(pos.map((p) => [norm(p.no), p.id]));
+  const hasQty = (p: { lines: HLine[] }) => p.lines.some((l) => num(l[4]) > 0);
+  const mis = (data.mis ?? []).map((m0) => {
+    const m = { ...m0, poId: m0.poId || (m0.poNo ? poIdByNo.get(norm(m0.poNo)) ?? null : null) };
+    if (!/purchase/i.test(m.status ?? '')) return m;
+    const lines = (m.lines ?? []).filter((l) => num(l[4]) > 0);
+    if (!lines.length) return m;
+    const po = m.poId ? poById.get(m.poId) : undefined;
+    if (po) {
+      if (!hasQty(po) || (po as { rebuilt?: boolean }).rebuilt) { po.lines.push(...lines); (po as { rebuilt?: boolean }).rebuilt = true; }
+      return m;
+    }
+    // direct purchase (no PO, or a PO FFH doesn't list)
+    const id = `MI-${m.id}`;
+    const dp = { id, no: `FFH-DP/${m.id}`, date: m.date, vendorRef: m.vendorRef, vendorName: m.vendorName, soId: m.soId, status: 'Direct purchase (no PO in FFH)', remark: m.remark, amount: m.amount, lines };
+    pos.push(dp as (typeof pos)[number]); poById.set(id, dp as (typeof pos)[number]);
+    return { ...m, poId: id };
+  });
+  // PO lines FFH saved without a product name ("0") → take the name from an inward line that isn't on the PO
+  const blank = (v: unknown) => !cleanName(v) || String(v).trim() === '0';
+  for (const p of pos) {
+    const empty = p.lines.filter((l) => blank(l[0]));
+    if (!empty.length) continue;
+    const named = new Set(p.lines.filter((l) => !blank(l[0])).map((l) => norm(cleanName(l[0]))));
+    const spare = mis.filter((m) => m.poId === p.id).flatMap((m) => m.lines ?? []).filter((l) => !blank(l[0]) && !named.has(norm(cleanName(l[0]))));
+    for (const l of empty) {
+      const k = spare.findIndex((s) => num(s[4]) === num(l[4]));
+      const s = spare.splice(k >= 0 ? k : 0, 1)[0];
+      if (!s) break;
+      l[0] = s[0]; if (!l[1]) l[1] = s[1]; if (!l[3]) l[3] = s[3];
+      named.add(norm(cleanName(s[0])));
+    }
+  }
+  for (const p of pos) if ((p as { rebuilt?: boolean }).rebuilt) p.remark = [p.remark, 'Item lines rebuilt from its material inward(s) — FFH had none on the PO.'].filter(Boolean).join('\n');
+  return { ...data, pos, mis };
+}
+
+export async function runFfhHistory(data0: HistoryFile, dryRun: boolean, progress?: (step: string) => void): Promise<HistoryResult> {
+  const data = fillFfhGaps(data0);
   const res: HistoryResult = {
     stats: { order: { create: 0, skip: 0, error: 0 }, po: { create: 0, skip: 0, error: 0 }, grn: { create: 0, skip: 0, error: 0 }, dc: { create: 0, skip: 0, error: 0 }, vendorsCreated: 0, lines: 0, linkedLines: 0 },
     issues: [],
@@ -188,87 +236,118 @@ export async function runFfhHistory(data: HistoryFile, dryRun: boolean): Promise
   res.stats.vendorsCreated = newVendors.size;
   if (dryRun) return res;
 
-  // ══════════ write (one transaction) ══════════
+  // ══════════ write (one transaction, bulk inserts — the live database is far away, so few round trips) ══════════
+  const chunks = <T,>(arr: T[], n = 300) => { const out: T[][] = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+  const bulk = async (tx: DbOrTx, table: Parameters<DbOrTx['insert']>[0], rows: Record<string, unknown>[]) => { for (const c of chunks(rows)) if (c.length) await tx.insert(table).values(c as never); };
+  progress?.('Saving vendors and clients');
   await db.transaction(async (tx) => {
     // vendors
     const vIds = new Map<string, string>();
     const nv = [...newVendors.values()];
     const vCodes = await reserveCodes(tx, 'VENDOR', 'VN', nv.length);
-    for (const [k, v] of nv.entries()) {
-      const c = v.client;
-      const [row] = await tx.insert(vendors).values({
-        code: vCodes[k], name: v.name, externalRef: v.ref, stateCode: c?.stateCode ?? null, stateName: c?.stateCode ? INDIAN_STATES[c.stateCode] ?? null : null,
-        gstin: c?.gstin ?? null, address: c?.billingAddress ?? null, city: c?.city ?? null, contactName: c?.contactName ?? null, phone: c?.phone ?? null, email: c?.email ?? null,
-      }).returning({ id: vendors.id });
-      vIds.set(v.key, row.id);
-    }
+    await bulk(tx, vendors, nv.map((v, k) => {
+      const c = v.client; const vid = randomUUID(); vIds.set(v.key, vid);
+      return { id: vid, code: vCodes[k], name: v.name, externalRef: v.ref, stateCode: c?.stateCode ?? null, stateName: c?.stateCode ? INDIAN_STATES[c.stateCode] ?? null : null,
+        gstin: c?.gstin ?? null, address: c?.billingAddress ?? null, city: c?.city ?? null, contactName: c?.contactName ?? null, phone: c?.phone ?? null, email: c?.email ?? null };
+    }));
     const vendorId = (key: string) => vIds.get(key) ?? key;
     // clients that only appear on outwards
     const cIds = new Map<string, string>();
     const nc = [...newClients.entries()];
     const cCodes = await reserveCodes(tx, 'CLIENT', 'CL', nc.length);
-    for (const [k, [key, c]] of nc.entries()) {
-      const [row] = await tx.insert(clients).values({ code: cCodes[k], name: c.name, externalRef: c.ref, notes: 'Created by the FFH outward import' }).returning({ id: clients.id });
-      cIds.set(key, row.id);
-    }
+    await bulk(tx, clients, nc.map(([key, c], k) => { const cid = randomUUID(); cIds.set(key, cid); return { id: cid, code: cCodes[k], name: c.name, externalRef: c.ref, notes: 'Created by the FFH outward import' }; }));
     const clientId = (key: string) => cIds.get(key) ?? key;
 
     // POs (closed history)
-    const poLineIds = new Map<string, { id: string; itemId: string | null; description: string; model: string | null; qty: number }[]>();
+    progress?.(`Saving ${planPos.length} purchase orders`);
+    type PL = { id: string; itemId: string | null; description: string; model: string | null; qty: number };
+    const poLineIds = new Map<string, PL[]>();
+    const poVendor = new Map<string, string>();
+    const poRows: Record<string, unknown>[] = [], poItemRows: Record<string, unknown>[] = [];
     for (const p of planPos) {
       const calc = calcTotals(p.lines, p.inter);
-      const [po] = await tx.insert(purchaseOrders).values({
-        number: uniqueNumber(p.no, `FFH-PO/${p.ffhId}`), date: p.date, vendorId: vendorId(p.vendorKey), salesOrderId: p.orderId, status: 'CLOSED', isInterState: p.inter,
+      const poId = randomUUID();
+      poRows.push({
+        id: poId, number: uniqueNumber(p.no, `FFH-PO/${p.ffhId}`), date: p.date, vendorId: vendorId(p.vendorKey), salesOrderId: p.orderId, status: 'CLOSED', isInterState: p.inter,
         notes: [`Imported from FFH (PO ${p.no}; FFH status: ${p.status ?? '—'}). History only — closed.`, p.remark].filter(Boolean).join('\n'), sourceRef: p.ref, ...calc.totals,
-      }).returning({ id: purchaseOrders.id });
-      const rows = await tx.insert(purchaseOrderItems).values(p.lines.map((l, i) => ({
-        poId: po.id, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate,
-        taxable: calc.lines[i].taxable, taxAmount: calc.lines[i].taxAmount, amount: calc.lines[i].amount, sortOrder: i,
-      }))).returning({ id: purchaseOrderItems.id });
-      poLineIds.set(p.ffhId, p.lines.map((l, i) => ({ id: rows[i].id, itemId: l.itemId, description: l.description, model: l.model, qty: l.qty })));
-      existingPoByRef.set(p.ffhId, po.id);
+      });
+      const pls: PL[] = [];
+      p.lines.forEach((l, i) => {
+        const lid = randomUUID();
+        poItemRows.push({ id: lid, poId, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate,
+          taxable: calc.lines[i].taxable, taxAmount: calc.lines[i].taxAmount, amount: calc.lines[i].amount, sortOrder: i });
+        pls.push({ id: lid, itemId: l.itemId, description: l.description, model: l.model, qty: l.qty });
+      });
+      poLineIds.set(p.ffhId, pls);
+      existingPoByRef.set(p.ffhId, poId);
+      poVendor.set(poId, vendorId(p.vendorKey));
     }
     // POs imported earlier (re-run): load their lines so inwards can link to them
     const missingPo = [...new Set(planGrns.map((g) => g.ffhPoId))].filter((id) => !existingPoByRef.has(id));
-    if (missingPo.length) {
-      const old = await tx.query.purchaseOrders.findMany({ where: inArray(purchaseOrders.sourceRef, missingPo.map((id) => `FFH:PO:${id}`)), with: { items: true } });
+    for (const ids of chunks(missingPo, 500)) {
+      const old = await tx.query.purchaseOrders.findMany({ where: inArray(purchaseOrders.sourceRef, ids.map((id) => `FFH:PO:${id}`)), with: { items: true } });
       for (const o of old) {
         const ffhId = o.sourceRef!.split(':')[2];
         existingPoByRef.set(ffhId, o.id);
+        poVendor.set(o.id, o.vendorId);
         poLineIds.set(ffhId, o.items.map((it) => ({ id: it.id, itemId: it.itemId, description: it.description, model: null, qty: it.qty })));
       }
     }
 
     // GRNs: no stock movement; PO line received qty from the inwards
+    progress?.(`Saving ${planGrns.length} material inwards`);
     const received = new Map<string, number>();
+    const grnRows: Record<string, unknown>[] = [], grnItemRows: Record<string, unknown>[] = [];
     for (const g of planGrns) {
       const poId = existingPoByRef.get(g.ffhPoId);
+      if (!poId) { res.stats.grn.create--; res.stats.grn.error++; issue(`Inward ${g.no}`, 'Its purchase order could not be found — not imported'); continue; }
       const pls = poLineIds.get(g.ffhPoId) ?? [];
-      const po = await tx.query.purchaseOrders.findFirst({ where: (t, { eq }) => eq(t.id, poId!), columns: { vendorId: true } });
       const matched = g.lines.map((l) => ({ l, pl: pls.find((x) => (l.itemId && x.itemId === l.itemId) || norm(x.description) === norm(l.name) || (l.part && norm(x.model) === norm(l.part))) }));
-      const usable = matched.filter((x) => x.pl);
-      if (!usable.length || !po) { res.stats.grn.create--; res.stats.grn.error++; issue(`Inward ${g.no}`, 'None of its items match the PO lines — not imported'); continue; }
-      if (usable.length < matched.length) issue(`Inward ${g.no}`, `${matched.length - usable.length} line(s) not on the PO were left out`);
-      const [grn] = await tx.insert(goodsReceipts).values({
-        number: uniqueNumber(g.no, g.no), date: g.date, poId: poId!, vendorId: g.vendorKey ? vendorId(g.vendorKey) : po.vendorId, status: 'POSTED', sourceRef: g.ref,
+      // received but not on FFH's PO → added to the PO as a zero-value line, so the PO total still matches FFH
+      const extra = matched.filter((x) => !x.pl);
+      extra.forEach((x, i) => {
+        const lid = randomUUID();
+        poItemRows.push({ id: lid, poId, itemId: x.l.itemId, description: `${x.l.name || 'Item'} (received — not on the FFH PO)`, unit: 'Nos', qty: x.l.qty, rate: 0, discountPct: 0, gstRate: 0,
+          taxable: 0, taxAmount: 0, amount: 0, sortOrder: 900 + pls.length + i });
+        x.pl = { id: lid, itemId: x.l.itemId, description: x.l.name || 'Item', model: x.l.part, qty: x.l.qty };
+        pls.push(x.pl);
+      });
+      if (extra.length) { poLineIds.set(g.ffhPoId, pls); issue(`Inward ${g.no}`, `${extra.length} item(s) received but not on the FFH PO — added to the PO at zero value`); }
+      const grnId = randomUUID();
+      grnRows.push({
+        id: grnId, number: uniqueNumber(g.no, g.no), date: g.date, poId, vendorId: g.vendorKey ? vendorId(g.vendorKey) : poVendor.get(poId), status: 'POSTED', sourceRef: g.ref,
         notes: ['Imported from FFH material inward (history — stock not moved again).', g.remark].filter(Boolean).join('\n'),
-      }).returning({ id: goodsReceipts.id });
-      await tx.insert(goodsReceiptItems).values(usable.map(({ l, pl }) => ({ grnId: grn.id, poItemId: pl!.id, itemId: pl!.itemId, description: pl!.description, receivedQty: l.qty, acceptedQty: l.qty })));
-      for (const { l, pl } of usable) received.set(pl!.id, (received.get(pl!.id) ?? 0) + l.qty);
+      });
+      for (const { l, pl } of matched) {
+        grnItemRows.push({ grnId, poItemId: pl!.id, itemId: pl!.itemId, description: pl!.description, receivedQty: l.qty, acceptedQty: l.qty });
+        received.set(pl!.id, (received.get(pl!.id) ?? 0) + l.qty);
+      }
     }
-    for (const [lineId, q] of received) {
-      await tx.update(purchaseOrderItems).set({ receivedQty: r2(q) }).where(inArray(purchaseOrderItems.id, [lineId]));
+    // new PO lines get their received qty straight away; lines of earlier-imported POs are updated in one statement
+    for (const r of poItemRows) if (received.has(r.id as string)) { r.receivedQty = r2(received.get(r.id as string)!); received.delete(r.id as string); }
+    await bulk(tx, purchaseOrders, poRows);
+    await bulk(tx, purchaseOrderItems, poItemRows);
+    await bulk(tx, goodsReceipts, grnRows);
+    await bulk(tx, goodsReceiptItems, grnItemRows);
+    for (const c of chunks([...received], 500)) {
+      if (!c.length) continue;
+      await tx.execute(sql`update purchase_order_items as t set received_qty = v.q from (values ${sql.join(c.map(([id, q]) => sql`(${id}, ${r2(q)}::numeric)`), sql`, `)}) as v(id, q) where t.id = v.id`);
     }
 
     // challans: no stock movement, order delivered qty unchanged (it came with the order import)
+    progress?.(`Saving ${planDcs.length} material outwards`);
+    const dcRows: Record<string, unknown>[] = [], dcItemRows: Record<string, unknown>[] = [];
     for (const d of planDcs) {
-      const [dc] = await tx.insert(deliveryChallans).values({
-        number: uniqueNumber(d.no, `FFH-DC/${d.ref.split(':')[2]}`), date: d.date, type: d.type, orderId: d.orderId, clientId: clientId(d.clientKey), siteId: d.siteId,
+      const dcId = randomUUID();
+      dcRows.push({
+        id: dcId, number: uniqueNumber(d.no, `FFH-DC/${d.ref.split(':')[2]}`), date: d.date, type: d.type, orderId: d.orderId, clientId: clientId(d.clientKey), siteId: d.siteId,
         transporter: d.transport && !/^by self/i.test(d.transport) ? d.transport : null, status: 'DELIVERED', sourceRef: d.ref,
         notes: [`Imported from FFH material outward (FFH status: ${d.status || '—'}). History — stock and delivered quantities not changed.`, d.remark].filter(Boolean).join('\n'),
-      }).returning({ id: deliveryChallans.id });
-      await tx.insert(deliveryChallanItems).values(d.lines.map((l) => ({ challanId: dc.id, orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos })));
+      });
+      for (const l of d.lines) dcItemRows.push({ challanId: dcId, orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos });
     }
+    await bulk(tx, deliveryChallans, dcRows);
+    await bulk(tx, deliveryChallanItems, dcItemRows);
   });
   return res;
 }

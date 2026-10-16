@@ -48,14 +48,33 @@ r.post('/imports/ffh-history', perm, jsonUpload.single('file'), async (req, res)
   res.status(201).json({ id: job.id, fileName: job.fileName, ...result });
 });
 
+// runs in the background (the live database is far away; a big history file takes a while) — the page polls the job
+const runningHistory = new Set<string>();
 r.post('/imports/ffh-history/:id/commit', perm, async (req, res) => {
   const job = await db.query.importJobs.findFirst({ where: eq(importJobs.id, req.params.id) });
   if (!job || job.kind !== 'ffh-history') throw notFound('History import');
   if (job.status === 'DONE') throw badRequest('This file has already been imported — upload it again to import anything new');
-  const result = await runFfhHistory(job.rows[0] as unknown as HistoryFile, false);
-  await db.update(importJobs).set({ status: 'DONE', summary: result.stats }).where(eq(importJobs.id, job.id));
-  audit(req, 'import', 'ffh-history', job.id, { stats: result.stats });
-  res.json({ id: job.id, fileName: job.fileName, ...result });
+  if (runningHistory.has(job.id) || runningHistory.size) throw badRequest('A history import is already running — wait for it to finish');
+  runningHistory.add(job.id);
+  const setState = (status: string, summary: Record<string, unknown>) => db.update(importJobs).set({ status, summary }).where(eq(importJobs.id, job.id)).catch(() => undefined);
+  await setState('RUNNING', { step: 'Starting', startedAt: new Date().toISOString() });
+  const started = Date.now();
+  void (async () => {
+    try {
+      const result = await runFfhHistory(job.rows[0] as unknown as HistoryFile, false, (step) => { void setState('RUNNING', { step, seconds: Math.round((Date.now() - started) / 1000) }); });
+      await setState('DONE', { ...result.stats, issues: result.issues, seconds: Math.round((Date.now() - started) / 1000) } as Record<string, unknown>);
+      audit(req, 'import', 'ffh-history', job.id, { stats: result.stats });
+    } catch (e) {
+      await setState('FAILED', { error: (e as Error).message });
+    } finally { runningHistory.delete(job.id); }
+  })();
+  res.status(202).json({ id: job.id, status: 'RUNNING' });
+});
+
+r.get('/imports/ffh-history/:id/status', perm, async (req, res) => {
+  const job = await db.query.importJobs.findFirst({ where: eq(importJobs.id, req.params.id), columns: { id: true, status: true, summary: true, fileName: true } });
+  if (!job) throw notFound('History import');
+  res.json(job);
 });
 
 r.get('/imports', perm, async (_req, res) => {

@@ -401,11 +401,22 @@ function FfhHistoryCard() {
     try { const fd = new FormData(); fd.append('file', file); setR(await api<HistResult>('/imports/ffh-history', { form: fd })); }
     catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
   };
+  const [step, setStep] = useState<string | null>(null);
   const commit = async () => {
     if (!r) return;
-    setBusy(true);
-    try { setR(await api<HistResult>(`/imports/ffh-history/${r.id}/commit`, { method: 'POST' })); setDone(true); toast.success('History imported'); }
-    catch (e) { toast.error((e as Error).message); } finally { setBusy(false); }
+    setBusy(true); setStep('Starting');
+    try {
+      await api(`/imports/ffh-history/${r.id}/commit`, { method: 'POST' });
+      // runs on the server in the background — poll until it finishes
+      for (;;) {
+        await new Promise((ok) => setTimeout(ok, 3000));
+        const j = await api<{ status: string; summary: (HistResult['stats'] & { issues?: HistResult['issues']; step?: string; seconds?: number; error?: string }) | null }>(`/imports/ffh-history/${r.id}/status`);
+        if (j.status === 'RUNNING') { setStep(`${j.summary?.step ?? 'Working'}…${j.summary?.seconds ? ` (${j.summary.seconds}s)` : ''}`); continue; }
+        if (j.status === 'FAILED') throw new Error(`Import failed: ${j.summary?.error ?? 'unknown error'} — nothing was saved; you can try again`);
+        if (j.status === 'DONE' && j.summary) { const { issues, ...stats } = j.summary; setR({ ...r, stats: stats as HistResult['stats'], issues: issues ?? [] }); setDone(true); toast.success('History imported'); }
+        break;
+      }
+    } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); setStep(null); }
   };
   const row = (label: string, x: { create: number; skip: number; error: number }) => (
     <tr><td>{label}</td><td className="num">{x.create}</td><td className="num">{x.skip}</td><td className={cx('num', x.error > 0 && 'text-amber-700')}>{x.error}</td></tr>
@@ -420,6 +431,7 @@ function FfhHistoryCard() {
         {r && !done && <Button variant="primary" loading={busy} disabled={r.stats.order.create + r.stats.po.create + r.stats.grn.create + r.stats.dc.create === 0} onClick={commit}>
           Import {r.stats.order.create ? `${r.stats.order.create} orders, ` : ''}{r.stats.po.create} POs, {r.stats.grn.create} GRNs, {r.stats.dc.create} challans</Button>}
         {done && <Badge t="green">Imported</Badge>}
+        {step && <span className="text-sm text-brand-800">{step} — you can leave this page; it carries on.</span>}
       </div>
       {r && (
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
