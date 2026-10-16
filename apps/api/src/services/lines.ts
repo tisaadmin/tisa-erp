@@ -13,7 +13,7 @@ export const lineSchema = z.object({
   qty: z.coerce.number().positive(),
   rate: z.coerce.number().min(0).optional(),
   discountPct: z.coerce.number().min(0).max(100).default(0),
-  gstRate: z.coerce.number().min(0).max(28).optional(),
+  gstRate: z.coerce.number().min(0).max(40).optional(),
   paymentTerms: z.array(z.object({ stage: z.string(), percent: z.number() })).nullish(),
 });
 export type LineIn = z.infer<typeof lineSchema>;

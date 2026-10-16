@@ -360,3 +360,75 @@ test('import: FFH-format client list → clients, vendors, prospects, sites; re-
   const csv = await call('admin', 'GET', `/imports/${again.id}/issues.csv`);
   assert.ok(String(Buffer.from(csv.data)).includes('Name is empty'));
 });
+
+test('order import: FFH sales-order print → client/site/items matched, new site & items created, duplicate blocked', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const cam = ctx.cam;
+  const wb = new ExcelJS.Workbook();
+  wb.addWorksheet('Table 1').addRow(['PROFORMA INVOICE', 'Original Copy']);
+  const ws = wb.addWorksheet('Table 2');
+  const put = (addr: string, v: unknown, merge?: string) => { ws.getCell(addr).value = v as never; if (merge) ws.mergeCells(merge); };
+  put('A1', 'Seller'); put('C1', 'GSTIN : 27AADCT2237Q1ZW'); put('F1', 'Contact Rohan Mehta'); put('G1', 'SO No:\n261099001'); put('L1', 'SalesOrder No');
+  put('L2', '261099001\nDate                       16/10/2026');
+  put('G3', 'PO No: WO/45');
+  put('L4', 'Due Amount 1180.00\nDate NA');
+  put('A5', 'Billed To', 'A5:D5'); put('E5', 'State: 27'); put('F5', 'Despatched To', 'F5:G5'); put('H5', 'State: 27');
+  put('A6', 'Imported Towers CHS Vashi, Navi Mumbai, Maharashtra PAN :NA', 'A6:E6'); put('F6', 'Wing B, Imported Towers, Vashi', 'F6:H6');
+  put('A7', 'Sr.No.'); put('B7', 'Description', 'B7:J7'); put('K7', 'Units', 'K7:L7'); put('M7', 'Quantity');
+  const line = (r: number, sr: unknown, desc: string, qty: number) => { put(`A${r}`, sr); put(`B${r}`, desc, `B${r}:J${r}`); put(`K${r}`, 'Number', `K${r}:L${r}`); put(`M${r}`, qty); };
+  line(8, 1, 'Smoke detection kit for lift lobby\nManufacturer: ACME', 1);
+  line(9, '(a)', `${cam.name}\nManufacturer: ${cam.brand ?? 'X'}`, 2);
+  line(10, '(b)', 'Brand new widget XYZ-9', 3);
+  line(11, 2, 'Pressure Testing Charges', 1);
+  put('E14', 'Delivery Remark'); put('E15', 'Deliver to Wing B security cabin');
+  wb.addWorksheet('Table 3').addRow(['Digital Document generated on CRM System, Signature authentication not required.']);
+  const buf = Buffer.from(await wb.xlsx.writeBuffer());
+  const file = () => { const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(buf)]), 'ImportedTowersCHS_SalesOrder_261099001_16-10-2026_10-00-00.xlsx'); return fd; };
+
+  assert.equal((await call('tech', 'POST', '/order-imports/parse', undefined, file())).status, 403);
+  const p = await ok('sales', 'POST', '/order-imports/parse', undefined, file());
+  assert.equal(p.doc.source, 'FFH ERP'); assert.equal(p.doc.sourceNo, '261099001'); assert.equal(p.doc.date, '2026-10-16');
+  assert.equal(p.doc.poNo, 'WO/45'); assert.equal(p.doc.dueAmount, 1180); assert.equal(p.doc.remark, 'Deliver to Wing B security cabin');
+  assert.equal(p.sourceRef, 'FFH:261099001'); assert.equal(p.duplicate, null);
+  const client = (await ok('admin', 'GET', '/clients?search=Imported Towers')).data[0];
+  assert.equal(p.clientId, client.id, 'client matched from the file name');
+  assert.equal(p.siteId, client.sites[0].id, 'only site suggested');
+  assert.equal(p.lines.length, 4);
+  assert.deepEqual(p.lines.map((l: any) => l.parentKey), [null, '1', '1', null]);
+  assert.equal(p.lines[1].action, 'match'); assert.equal(p.lines[1].itemId, cam.id);
+  assert.equal(p.lines[2].action, 'new'); assert.equal(p.lines[3].newItem.type, 'SERVICE');
+  assert.equal(p.lines[0].unit, 'Nos');
+
+  const body = {
+    clientId: p.clientId, site: { mode: 'new', name: 'Imported Towers — Wing B', address: p.doc.shipTo.text, stateCode: '27' },
+    date: p.doc.date, clientPoNo: p.doc.poNo, paymentTerms: [{ stage: 'ADVANCE', percent: 0 }, { stage: 'DELIVERY', percent: 100 }],
+    lines: p.lines.map((l: any, i: number) => ({ ...l, rate: [500, l.rate || 100, 50, 0][i], newItem: { ...l.newItem, categoryId: i === 2 ? null : l.newItem.categoryId ?? ctx.cam.categoryId } })),
+  };
+  const bad = await call('sales', 'POST', `/order-imports/${p.id}/commit`, body);
+  assert.equal(bad.status, 400); assert.match(bad.data.error ?? JSON.stringify(bad.data), /system/);
+  body.lines[2].newItem.categoryId = ctx.cam.categoryId;
+  const done = await ok('sales', 'POST', `/order-imports/${p.id}/commit`, body);
+  assert.equal(done.itemsCreated, 3); assert.equal(done.siteCreated, 'Imported Towers — Wing B'); assert.equal(done.lines, 4);
+  const o = await ok('sales', 'GET', `/orders/${done.orderId}`);
+  assert.equal(o.site.name, 'Imported Towers — Wing B'); assert.equal(o.clientPoNo, 'WO/45'); assert.equal(o.sourceRef, 'FFH:261099001');
+  assert.equal(o.items.length, 4); assert.ok(o.items.every((l: any) => l.itemId));
+  assert.ok(o.notes.includes('261099001'));
+  // importing the same document again is blocked
+  const again = await ok('sales', 'POST', '/order-imports/parse', undefined, file());
+  assert.equal(again.duplicate.number, o.number);
+  assert.equal(again.lines[2].action, 'match', 'item created by the first import is now matched');
+  assert.equal((await call('sales', 'POST', `/order-imports/${again.id}/commit`, { ...body, site: { mode: 'existing', siteId: o.site.id } })).status, 400);
+  // a client that is not in the ERP yet: created from the document
+  const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(buf)]), 'SunriseHeights_SalesOrder_261099001_16-10-2026_10-00-00.xlsx');
+  const p3 = await ok('sales', 'POST', '/order-imports/parse', undefined, fd);
+  assert.equal(p3.doc.clientHint, 'Sunrise Heights');
+  assert.equal(p3.clients[0].reason, 'Name appears in the billed-to address', 'falls back to the billed-to block');
+  assert.equal(p3.doc.billTo.city, 'Navi Mumbai');
+  const d3 = await ok('sales', 'POST', `/order-imports/${p3.id}/commit`, {
+    ...body, clientId: null, allowDuplicate: true, newClient: { name: 'Sunrise Heights CHS', type: 'RESIDENTIAL_SOCIETY', stateCode: '27', contactName: p3.doc.contact },
+    site: { mode: 'new', address: p3.doc.shipTo.text }, lines: again.lines.map((l: any) => ({ ...l, rate: 10 })),
+  });
+  assert.equal(d3.clientCreated, 'Sunrise Heights CHS'); assert.equal(d3.siteCreated, 'Sunrise Heights CHS — Main'); assert.equal(d3.itemsCreated, 0);
+  const o3 = await ok('sales', 'GET', `/orders/${d3.orderId}`);
+  assert.equal(o3.client.contactName, 'Rohan Mehta'); assert.equal(o3.sourceRef, null, 'second copy carries no source ref');
+});

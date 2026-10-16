@@ -1,4 +1,4 @@
-import { FileDown, Plus, Receipt, Truck } from 'lucide-react';
+import { FileDown, Plus, Receipt, Truck, Upload } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
@@ -184,7 +184,10 @@ export function OrdersPage() {
   return (
     <div>
       <PageHeader title="Order forms" subtitle="Confirmed work orders — deliveries, running bills and purchase are driven from here"
-        actions={can('orders:create') && <Link to="/orders/new"><Button variant="primary" icon={<Plus className="size-4" />}>New order</Button></Link>} />
+        actions={can('orders:create') && <>
+          <Link to="/orders/import"><Button icon={<Upload className="size-4" />}>Import from file</Button></Link>
+          <Link to="/orders/new"><Button variant="primary" icon={<Plus className="size-4" />}>New order</Button></Link>
+        </>} />
       <Card pad={false}>
         <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
           <SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} />
@@ -276,7 +279,7 @@ export function OrderDetail() {
         </>} />
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Order details" className="lg:col-span-2">
-          <KV cols={3} items={[['Date', fmtDate(o.date)], ['Client PO', o.clientPoNo ? `${o.clientPoNo}${o.clientPoDate ? ` · ${fmtDate(o.clientPoDate)}` : ''}` : null], ['Target completion', fmtDate(o.expectedCompletion)], ['Place of supply', o.placeOfSupply], ['Order value', inr(o.total)], ['Payment terms', stages.map((t) => `${t.percent}% ${STAGE_LABEL[t.stage]}`).join(', ')]]} />
+          <KV cols={3} items={[['Date', fmtDate(o.date)], ['Client PO', o.clientPoNo ? `${o.clientPoNo}${o.clientPoDate ? ` · ${fmtDate(o.clientPoDate)}` : ''}` : null], ['Target completion', fmtDate(o.expectedCompletion)], ['Place of supply', o.placeOfSupply], ...(o.sourceRef ? [['Imported from', o.sourceRef.replace(/^FFH:/, 'FFH SO ')] as [string, string]] : []), ['Order value', inr(o.total)], ['Payment terms', stages.map((t) => `${t.percent}% ${STAGE_LABEL[t.stage]}`).join(', ')]]} />
         </Card>
         {billing.data && (
           <Card title="Billing progress">

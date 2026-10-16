@@ -2,6 +2,7 @@ import { Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { FormFields, type FieldDef } from '../components/MasterPage';
 import { toast } from 'sonner';
+import { Link } from 'react-router-dom';
 import { Badge, Button, Card, Field, Input, PageHeader, Spinner, Stat, Table, Tabs, cx } from '../components/ui';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -226,7 +227,8 @@ export function ImportPage() {
   const missingRequired = job?.targets.filter((t) => t.required && !job.mapping[t.key]) ?? [];
   return (
     <div className="space-y-4">
-      <PageHeader title="Data import" subtitle="Bring clients, vendors, contacts, sites and inventory in from Excel or CSV — including FFH ERP exports." />
+      <PageHeader title="Data import" subtitle="Bring clients, vendors, contacts, sites and inventory in from Excel or CSV — including FFH ERP exports."
+        actions={<Link to="/orders/import"><Button>Import a sales order…</Button></Link>} />
       {!job && (
         <Card title="Upload a file">
           <ol className="mb-4 list-inside list-decimal space-y-0.5 text-sm text-slate-600">

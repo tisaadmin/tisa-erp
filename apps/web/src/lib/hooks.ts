@@ -30,7 +30,7 @@ export function useAction<TVars = any, TRes = any>(fn: (v: TVars) => Promise<TRe
 
 // ── Lookups (masters are small; cache them) ──
 const lookup = <T,>(path: string, params?: Record<string, unknown>) =>
-  useQuery<Page<T>>({ queryKey: [path, { ...params, pageSize: 500 }], queryFn: () => api(`${path}${qsOf({ ...params, pageSize: 500 })}`), staleTime: 60_000 });
+  useQuery<Page<T>>({ queryKey: [path, { ...params, pageSize: 10000, all: 1 }], queryFn: () => api(`${path}${qsOf({ ...params, pageSize: 10000, all: 1 })}`), staleTime: 60_000 });
 
 export type ClientLite = { id: string; name: string; code: string; stateCode?: string; email?: string; sites: { id: string; name: string; code: string }[] };
 export type SiteLite = { id: string; name: string; code: string; clientId: string; latitude?: number; longitude?: number; client?: { name: string } };

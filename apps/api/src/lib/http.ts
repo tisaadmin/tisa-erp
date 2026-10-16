@@ -32,7 +32,8 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
 /** Pagination & search query params shared by list endpoints. */
 export function pageParams(q: Request['query']) {
   const page = Math.max(1, Number(q.page ?? 1) || 1);
-  const pageSize = Math.min(500, Math.max(1, Number(q.pageSize ?? 50) || 50));
+  // pickers load whole masters (all=1, e.g. ~2,000 items); normal lists page at up to 500
+  const pageSize = Math.min(q.all === '1' ? 10000 : 500, Math.max(1, Number(q.pageSize ?? 50) || 50));
   const search = typeof q.search === 'string' && q.search.trim() ? q.search.trim() : undefined;
   return { page, pageSize, offset: (page - 1) * pageSize, search };
 }

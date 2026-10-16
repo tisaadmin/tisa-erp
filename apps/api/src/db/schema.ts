@@ -365,11 +365,13 @@ export const salesOrders = pgTable('sales_orders', {
   expectedCompletion: ts(),
   terms: text(),
   notes: text(),
+  /** Reference of the document this order was imported from, e.g. "FFH:261016001" — blocks importing it twice */
+  sourceRef: text(),
   ...totals(),
   createdById: text(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-});
+}, (t) => [index().on(t.sourceRef)]);
 
 export const salesOrderItems = pgTable('sales_order_items', {
   id: id(),

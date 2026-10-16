@@ -16,6 +16,7 @@ import { getCompany, resolvePlaceOfSupply } from '../services/company';
 import { challanPdf, orderPdf, quotationPdf } from '../services/documents';
 import { lineSchema, priceLines } from '../services/lines';
 import { postStock } from '../services/stock';
+import { createSalesOrder, orderSchema } from '../services/orders';
 
 const r = Router();
 const termsSchema = z.array(z.object({ stage: z.enum(['ADVANCE', 'DELIVERY', 'INSTALLATION', 'TESTING', 'COMMISSIONING', 'HANDOVER']), percent: z.coerce.number() }));
@@ -195,12 +196,6 @@ r.get('/quotations/:id/pdf', requirePerm('quotations:view'), async (req, res) =>
 
 // ═══════════════════════ Order forms ═══════════════════════
 
-const orderSchema = z.object({
-  clientId: z.string(), siteId: opt, date: z.coerce.date().optional(), clientPoNo: opt, clientPoDate: z.coerce.date().nullish(),
-  paymentTerms: termsSchema.min(1), expectedCompletion: z.coerce.date().nullish(), terms: opt, notes: opt,
-  lines: z.array(lineSchema).min(1),
-});
-
 r.get('/orders', requirePerm('orders:view'), async (req, res) => {
   const { pageSize, offset, search } = pageParams(req.query);
   const where = listWhere([
@@ -231,19 +226,7 @@ r.get('/orders/:id', requirePerm('orders:view'), async (req, res) => {
 
 r.post('/orders', requirePerm('orders:create'), async (req, res) => {
   const d = orderSchema.parse(req.body);
-  validateTerms(d.paymentTerms);
-  for (const [i, l] of d.lines.entries()) validateTerms(l.paymentTerms as never, `Line ${i + 1} payment terms`);
-  const o = await db.transaction(async (tx) => {
-    const ctx = await resolvePlaceOfSupply(tx, d.clientId, d.siteId);
-    const { rows, totals } = await priceLines(tx, d.lines, ctx.isInterState);
-    const [o] = await tx.insert(salesOrders).values({
-      number: await nextNumber(tx, 'ORDER', d.date), date: d.date ?? new Date(), clientId: d.clientId, siteId: d.siteId,
-      clientPoNo: d.clientPoNo, clientPoDate: d.clientPoDate, placeOfSupply: ctx.placeOfSupply, paymentTerms: d.paymentTerms,
-      expectedCompletion: d.expectedCompletion, terms: d.terms, notes: d.notes, ...totals, createdById: req.user.id,
-    }).returning();
-    await tx.insert(salesOrderItems).values(rows.map((l) => ({ ...l, paymentTerms: (l.paymentTerms as never) ?? null, orderId: o.id })));
-    return o;
-  });
+  const o = await db.transaction((tx) => createSalesOrder(tx, d, req.user.id));
   audit(req, 'create', 'order', o.id);
   res.status(201).json(o);
 });

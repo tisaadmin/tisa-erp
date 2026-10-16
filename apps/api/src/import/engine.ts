@@ -262,7 +262,7 @@ const GROUP_TO_SYSTEM: Record<string, string> = {
   services: 'General Services', 'amc services': 'General Services', 'installation charges': 'General Services', service: 'General Services',
 };
 const SERVICE_GROUPS = /^(services?|amc services|installation charges)$/i;
-const UNIT_MAP: Record<string, string> = {
+export const UNIT_MAP: Record<string, string> = {
   number: 'Nos', nos: 'Nos', no: 'Nos', pcs: 'Nos', pc: 'Nos', piece: 'Nos', pieces: 'Nos', unit: 'Nos', units: 'Nos', each: 'Nos', ea: 'Nos',
   meter: 'Mtr', meters: 'Mtr', metre: 'Mtr', mtr: 'Mtr', m: 'Mtr', litres: 'Ltr', litre: 'Ltr', liter: 'Ltr', ltr: 'Ltr', packs: 'Pack', pack: 'Pack',
   kg: 'Kg', kgs: 'Kg', 'running ft': 'Rft', rft: 'Rft', 'sq ft': 'Sqft', sqft: 'Sqft', set: 'Set', sets: 'Set', box: 'Box', roll: 'Roll', job: 'Job', lot: 'Lot',
