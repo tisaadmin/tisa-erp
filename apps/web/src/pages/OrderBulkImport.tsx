@@ -1,5 +1,5 @@
 import { CheckCircle2, CircleAlert, CircleX, Files, Upload } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Badge, Button, Card, Field, PageHeader, Select, Stat, cx } from '../components/ui';
@@ -30,6 +30,13 @@ export function OrderBulkImportPage() {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
   const catOpts = (cats.data?.data ?? []).map((c) => ({ value: c.id, label: c.name }));
 
+  // leaving the page stops the import after the current batch — warn before that happens
+  useEffect(() => {
+    if (!progress) return;
+    const h = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [progress]);
   const counts = useMemo(() => rows.reduce((m, r) => ({ ...m, [r.status]: (m[r.status] ?? 0) + 1 }), {} as Record<string, number>), [rows]);
   const ready = rows.filter((r) => r.status === 'ready' && r.jobId);
 
@@ -100,6 +107,15 @@ export function OrderBulkImportPage() {
         </p>
       </Card>
 
+      {progress && (
+        <div className="sticky top-0 z-30 rounded-md border border-brand-200 bg-brand-50 p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <span className="font-medium text-brand-900">Importing… {progress.done} of {progress.total} files</span>
+            <span className="text-brand-800">Keep this page open until it finishes — open other pages in a new tab.</span>
+          </div>
+          <div className="mt-2 h-2.5 rounded-full bg-white"><div className="h-2.5 rounded-full bg-brand-600 transition-all" style={{ width: `${Math.round((progress.done / Math.max(1, progress.total)) * 100)}%` }} /></div>
+        </div>
+      )}
       {rows.length > 0 && (
         <>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
@@ -133,8 +149,8 @@ export function OrderBulkImportPage() {
                       <tr key={`${r.fileName}-${i}`}>
                         <td className="max-w-[16rem]"><div className="truncate" title={r.fileName}>{r.fileName}</div>{r.sourceNo && <div className="text-xs text-slate-400">SO {r.sourceNo}</div>}</td>
                         <td>
-                          {r.summary ? <Link className="text-brand-700" to={`/orders/${r.summary.orderId}`}>{r.summary.number}</Link>
-                            : r.order ? <Link className="text-brand-700" to={`/orders/${r.order.id}`}>{r.order.number}</Link> : <span className="text-slate-400">—</span>}
+                          {r.summary ? <Link className="text-brand-700" target="_blank" to={`/orders/${r.summary.orderId}`}>{r.summary.number}</Link>
+                            : r.order ? <Link className="text-brand-700" target="_blank" to={`/orders/${r.order.id}`}>{r.order.number}</Link> : <span className="text-slate-400">—</span>}
                           {r.order?.title && <div className="max-w-[14rem] truncate text-xs text-slate-400" title={r.order.title}>{r.order.title}</div>}
                         </td>
                         <td className="num">{r.lines ?? '—'}{r.lines != null && <div className="text-xs text-slate-400">{r.matched} matched{r.newItems ? ` · ${r.newItems} new` : ''}</div>}</td>
@@ -146,7 +162,7 @@ export function OrderBulkImportPage() {
                             {r.status === 'imported' ? <CheckCircle2 className="size-4 text-emerald-600" /> : r.status === 'ready' ? <CheckCircle2 className="size-4 text-sky-600" /> : r.status === 'review' ? <CircleAlert className="size-4 text-amber-600" /> : r.status === 'done' ? <CheckCircle2 className="size-4 text-slate-400" /> : <CircleX className="size-4 text-red-600" />}
                             <Badge t={STATUS[r.status].tone}>{STATUS[r.status].label}</Badge>
                             {r.summary && <span className="text-xs text-slate-500">{r.summary.lines} lines{r.summary.itemsCreated ? ` · ${r.summary.itemsCreated} new items` : ''}</span>}
-                            {(r.status === 'review' || r.status === 'no-order') && r.jobId && <Link className="ml-auto text-xs text-brand-700 underline" to={`/orders/import?job=${r.jobId}`}>Review…</Link>}
+                            {(r.status === 'review' || r.status === 'no-order') && r.jobId && <Link className="ml-auto text-xs text-brand-700 underline" target="_blank" to={`/orders/import?job=${r.jobId}`}>Review…</Link>}
                           </div>
                           {!!r.reasons?.length && r.status !== 'imported' && <ul className="mt-1 text-xs text-slate-600">{r.reasons.map((x) => <li key={x}>• {x}</li>)}</ul>}
                           {!!r.warnings?.length && r.status !== 'imported' && <ul className="mt-1 text-xs text-slate-400">{r.warnings.map((x) => <li key={x}>• {x}</li>)}</ul>}
