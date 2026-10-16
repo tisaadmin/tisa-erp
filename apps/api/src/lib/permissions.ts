@@ -29,6 +29,8 @@ export const MODULES = {
   roles: ['view', 'edit'],
   settings: ['view', 'edit'],
   reports: ['view'],
+  /** delete & merge master records (clean-up of duplicates) — Super Admin only by default */
+  records: ['delete'],
 } as const;
 
 export type Module = keyof typeof MODULES;
@@ -53,7 +55,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: st
   { name: 'Super Admin', description: 'Full access to everything', permissions: ['*'] },
   {
     name: 'Management', description: 'Directors — view everything, approve anything',
-    permissions: ALL_PERMISSIONS.filter((p) => !p.startsWith('roles:edit') && !p.startsWith('users:')).concat(['users:view']),
+    permissions: ALL_PERMISSIONS.filter((p) => !p.startsWith('roles:edit') && !p.startsWith('users:') && p !== 'records:delete').concat(['users:view']),
   },
   {
     name: 'Sales', description: 'Leads, clients, quotations, order forms',

@@ -8,6 +8,7 @@ import { AmcPage, ClientDetail, ClientsPage, InventoryPage, LeadsPage, SitesPage
 import { ChallanDetail, ChallansPage, NewChallan, OrderDetail, OrderEditor, OrdersPage, QuotationDetail, QuotationEditor, QuotationsPage } from './pages/Sales';
 import { OrderImportPage } from './pages/OrderImport';
 import { OrderBulkImportPage } from './pages/OrderBulkImport';
+import { CleanupPage } from './pages/Cleanup';
 import { AccessorySheetDetail, AccessorySheetsPage, AccessoryTemplatesPage } from './pages/Accessories';
 import { GrnDetail, GrnsPage, PoDetail, PoEditor, PurchaseOrdersPage } from './pages/Purchase';
 import { InvoiceDetail, InvoiceEditor, InvoicesPage, ReceivablesPage } from './pages/Billing';
@@ -72,6 +73,7 @@ export default function App() {
         <Route path="settings/fields" element={<FieldsPage />} />
         <Route path="settings/import" element={<ImportPage />} />
         <Route path="settings/workflow" element={<WorkflowPage />} />
+        <Route path="settings/cleanup" element={<CleanupPage />} />
         <Route path="accessories" element={<AccessorySheetsPage />} />
         <Route path="accessories/templates" element={<AccessoryTemplatesPage />} />
         <Route path="accessories/:id" element={<AccessorySheetDetail />} />

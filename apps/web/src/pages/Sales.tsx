@@ -9,6 +9,7 @@ import { useAuth } from '../lib/auth';
 import { fmtDate, inr, label, qty, STAGE_LABEL, toInputDate } from '../lib/format';
 import { useAction, useClients, useGet, useSites, type Page } from '../lib/hooks';
 import { OrderAccessoriesCard } from './Accessories';
+import { DeleteOrderButton } from './Cleanup';
 
 export function useCompanyState() {
   const s = useGet<{ company: { stateCode: string } | null }>('/settings');
@@ -281,6 +282,7 @@ export function OrderDetail() {
           {can('challans:create') && <Link to={`/challans/new?orderId=${o.id}`}><Button icon={<Truck className="size-4" />}>Delivery challan</Button></Link>}
           {can('purchase_orders:create') && <Link to={`/purchase-orders/new?salesOrderId=${o.id}`}><Button>Raise PO</Button></Link>}
           {can('invoices:create') && <Button variant="primary" icon={<Receipt className="size-4" />} onClick={() => setRa({})}>Running bill</Button>}
+          <DeleteOrderButton orderId={o.id} onDeleted={() => nav('/orders')} />
           {can('orders:edit') && o.status !== 'CLOSED' && <Select className="w-36" value="" onChange={(e) => e.target.value && setStatus.mutate(e.target.value)} options={['IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']} placeholder="Set status…" />}
         </>} />
       {o.sourceData?.summaryOnly && (

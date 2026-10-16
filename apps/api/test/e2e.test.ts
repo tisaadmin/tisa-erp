@@ -653,3 +653,64 @@ test('accessories: templates per item → sheet calculated from the order → su
   const notes = await ok('sales', 'GET', '/notifications');
   assert.ok(notes.data.some((n: any) => /Accessories (approved|sent back)/.test(n.title)));
 });
+
+test('clean-up: find duplicates, merge clients / sites / items (documents move over), delete only unused records; Super Admin only', async () => {
+  // only "records:delete" (Super Admin) — Management doesn't have it
+  assert.equal((await call('director', 'GET', '/records/duplicates?entity=clients')).status, 403);
+  assert.equal((await call('sales', 'DELETE', `/records/clients/${ctx.client.id}`)).status, 403);
+
+  const keep = await ok('admin', 'POST', '/clients', { name: 'Dupe Check Industries Pvt Ltd', city: 'Thane' });
+  const dupe = await ok('admin', 'POST', '/clients', { name: 'Dupe Check Industries Private Limited', gstin: '27AABCT1332L1ZT', phone: '9820000000' });
+  const groups = await ok('admin', 'GET', '/records/duplicates?entity=clients');
+  const g = groups.find((x: any[]) => x.some((r) => r.id === keep.id));
+  assert.ok(g && g.some((r: any) => r.id === dupe.id), 'the two spellings are grouped');
+
+  const dSite = await ok('admin', 'POST', '/sites', { clientId: dupe.id, name: 'Dupe Check Wagle plant' });
+  const q = await ok('admin', 'POST', '/quotations', { clientId: dupe.id, siteId: dSite.id, subject: 'dupe test', lines: [{ itemId: ctx.cam.id, qty: 1 }] });
+  const u = await ok('admin', 'GET', `/records/clients/${dupe.id}/usage`);
+  assert.ok(u.usage.some((x: any) => x.label === 'Quotations' && x.count === 1));
+  const del = await call('admin', 'DELETE', `/records/clients/${dupe.id}`);
+  assert.equal(del.status, 409, 'a client in use cannot be deleted');
+
+  assert.equal((await call('admin', 'POST', `/records/sites/${dSite.id}/merge`, { intoId: ctx.site.id })).status, 400, 'sites of different clients cannot be merged');
+  const m = await ok('admin', 'POST', `/records/clients/${dupe.id}/merge`, { intoId: keep.id });
+  assert.ok(m.moved.some((x: any) => x.label === 'Quotations'));
+  assert.equal((await call('admin', 'GET', `/records/clients/${dupe.id}/usage`)).status, 404, 'duplicate removed');
+  const kept = await ok('admin', 'GET', `/clients/${keep.id}`);
+  assert.equal(kept.gstin, '27AABCT1332L1ZT', 'blank GSTIN filled from the duplicate');
+  assert.equal(kept.city, 'Thane', 'existing details kept');
+  assert.match(kept.notes ?? '', /Merged with Dupe Check Industries Private Limited/);
+  const q2 = await ok('admin', 'GET', `/quotations/${q.id}`);
+  assert.equal(q2.clientId, keep.id);
+
+  // its sites came along — merge one site into another of the same client
+  const sitesNow = (await ok('admin', 'GET', `/clients/${keep.id}`)).sites;
+  assert.ok(sitesNow.some((s: any) => s.id === dSite.id));
+  const other = sitesNow.find((s: any) => s.id !== dSite.id) ?? await ok('admin', 'POST', '/sites', { clientId: keep.id, name: 'Dupe Check Wagle Plant (main)' });
+  await ok('admin', 'POST', `/records/sites/${dSite.id}/merge`, { intoId: other.id });
+  assert.equal((await ok('admin', 'GET', `/quotations/${q.id}`)).siteId, other.id);
+
+  // items: accessory templates on both don't clash
+  const catId = ctx.cam.categoryId ?? (await ok('admin', 'GET', `/items/${ctx.cam.id}`)).categoryId;
+  const a = await ok('admin', 'POST', '/items', { name: 'Dupe Cable Clip', type: 'ACCESSORY', categoryId: catId });
+  const b = await ok('admin', 'POST', '/items', { name: 'Dupe cable clip.', type: 'ACCESSORY', categoryId: catId, model: 'DC-1' });
+  const host1 = await ok('admin', 'POST', '/items', { name: 'Dupe Host Camera', type: 'PRODUCT', categoryId: catId });
+  await ok('admin', 'PUT', `/items/${host1.id}/accessories`, { lines: [{ accessoryItemId: a.id, qtyPer: 1 }, { accessoryItemId: b.id, qtyPer: 2 }] });
+  await ok('admin', 'POST', `/records/items/${b.id}/merge`, { intoId: a.id });
+  const tpl = await ok('admin', 'GET', `/items/${host1.id}/accessories`);
+  const tplLines = tpl.lines ?? tpl;
+  assert.equal(tplLines.filter((l: any) => l.accessoryItemId === a.id).length, 1, 'no duplicate template row');
+  assert.equal((await ok('admin', 'GET', `/items/${a.id}`)).model, 'DC-1');
+
+  // an unused item deletes; a used one doesn't
+  const spare = await ok('admin', 'POST', '/items', { name: 'Dupe Unused Thing', type: 'ACCESSORY', categoryId: catId });
+  await ok('admin', 'DELETE', `/records/items/${spare.id}`);
+  assert.equal((await call('admin', 'DELETE', `/records/items/${ctx.cam.id}`)).status, 409);
+
+  // orders: one with challans can't be deleted; a fresh one can
+  assert.equal((await call('admin', 'DELETE', `/records/orders/${ctx.order.id}`)).status, 409);
+  const o = await ok('admin', 'POST', '/orders', { clientId: keep.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 1 }] });
+  await ok('admin', 'DELETE', `/records/orders/${o.id}`);
+  assert.equal((await call('admin', 'GET', `/orders/${o.id}`)).status, 404);
+  assert.equal((await call('admin', 'POST', `/records/orders/${o.id}/merge`, { intoId: ctx.order.id })).status, 400);
+});
