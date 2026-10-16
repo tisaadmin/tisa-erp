@@ -1,5 +1,5 @@
 import { Router, type Response } from 'express';
-import { and, desc, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
 import {
@@ -202,7 +202,7 @@ r.get('/orders', requirePerm('orders:view'), async (req, res) => {
     qs(req.query.status) ? eq(salesOrders.status, qs(req.query.status)!) : undefined,
     qs(req.query.clientId) ? eq(salesOrders.clientId, qs(req.query.clientId)!) : undefined,
     qs(req.query.siteId) ? eq(salesOrders.siteId, qs(req.query.siteId)!) : undefined,
-    search ? or(ilike(salesOrders.number, `%${search}%`), ilike(salesOrders.clientPoNo, `%${search}%`)) : undefined,
+    search ? or(ilike(salesOrders.number, `%${search}%`), ilike(salesOrders.clientPoNo, `%${search}%`), ilike(salesOrders.sourceRef, `%${search}%`), sql`${salesOrders.sourceData}->>'title' ilike ${`%${search}%`}`) : undefined,
   ]);
   const [data, total] = await Promise.all([
     db.query.salesOrders.findMany({

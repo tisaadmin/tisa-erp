@@ -1,5 +1,5 @@
 {
-  "id": "adfdd1e3-20a3-482d-a6ca-633ed96b2d3d",
+  "id": "156f8816-f782-4dba-bec5-eafc0036e3e9",
   "prevId": "82ad4217-3f0f-45a0-bcde-043f91a9d399",
   "version": "7",
   "dialect": "postgresql",
@@ -4389,6 +4389,12 @@
         "source_ref": {
           "name": "source_ref",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source_data": {
+          "name": "source_data",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },

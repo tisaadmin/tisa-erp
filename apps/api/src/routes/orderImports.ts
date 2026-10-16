@@ -17,7 +17,7 @@ import { requirePerm } from '../middleware/auth';
 import { UNIT_MAP } from '../import/engine';
 import { parseOrderDocument, type ParsedOrderDoc } from '../import/orderDoc';
 import { guessItemType, suggestClients, suggestItems, suggestSites, systemGuesser } from '../import/orderMatch';
-import { createSalesOrder, termsSchema } from '../services/orders';
+import { createSalesOrder, replaceOrderLines, termsSchema } from '../services/orders';
 
 const r = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
@@ -29,10 +29,14 @@ const unitOf = (u: string | null, type: string) => {
 };
 const sourceRefOf = (doc: ParsedOrderDoc) => (doc.sourceNo ? `${doc.source === 'FFH ERP' ? 'FFH' : 'DOC'}:${doc.sourceNo}` : null);
 
+/** An order already carrying this source reference. `summaryOnly` = it came from the order list and still awaits its items. */
 async function duplicateOf(ref: string | null) {
   if (!ref) return null;
-  const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.sourceRef, ref), columns: { id: true, number: true } });
-  return o ?? null;
+  const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.sourceRef, ref),
+    columns: { id: true, number: true, clientId: true, siteId: true, total: true, taxable: true, sourceData: true, paymentTerms: true, clientPoNo: true } });
+  if (!o) return null;
+  return { id: o.id, number: o.number, summaryOnly: !!o.sourceData?.summaryOnly, clientId: o.clientId, siteId: o.siteId, total: o.total, taxable: o.taxable,
+    basicValue: o.sourceData?.basicValue ?? null, soValue: o.sourceData?.soValue ?? null, title: o.sourceData?.title ?? null, paymentTerms: o.paymentTerms, clientPoNo: o.clientPoNo };
 }
 
 async function loadJob(id: string) {
@@ -49,11 +53,13 @@ r.post('/order-imports/parse', perm, upload.single('file'), async (req, res) => 
     rows: [doc as unknown as Record<string, unknown>], createdById: req.user.id,
   }).returning();
 
+  const existing = await duplicateOf(sourceRefOf(doc));
   const clientSuggestions = await suggestClients(db, doc);
   const top = clientSuggestions[0];
-  const clientId = top && top.score >= 80 && (clientSuggestions[1]?.score ?? 0) < top.score ? top.id : null;
+  // an order-list entry for this SO already knows its client and site
+  const clientId = existing?.clientId ?? (top && top.score >= 80 && (clientSuggestions[1]?.score ?? 0) < top.score ? top.id : null);
   const siteSuggestions = clientId ? await suggestSites(db, clientId, doc) : [];
-  const siteId = siteSuggestions[0] && siteSuggestions[0].score >= 60 ? siteSuggestions[0].id : null;
+  const siteId = existing ? existing.siteId : siteSuggestions[0] && siteSuggestions[0].score >= 60 ? siteSuggestions[0].id : null;
   const itemSuggestions = await suggestItems(db, doc.lines);
   const guessSystem = await systemGuesser(db);
 
@@ -77,7 +83,7 @@ r.post('/order-imports/parse', perm, upload.single('file'), async (req, res) => 
   });
   const sourceRef = sourceRefOf(doc);
   res.status(201).json({
-    id: job.id, fileName: job.fileName, doc, sourceRef, duplicate: await duplicateOf(sourceRef),
+    id: job.id, fileName: job.fileName, doc, sourceRef, duplicate: existing,
     clients: clientSuggestions, clientId, sites: siteSuggestions, siteId, lines,
   });
 });
@@ -123,7 +129,8 @@ r.post('/order-imports/:id/commit', perm, async (req, res) => {
   const d = commitSchema.parse(req.body);
   const sourceRef = sourceRefOf(doc);
   const dup = await duplicateOf(sourceRef);
-  if (dup && !d.allowDuplicate) throw badRequest(`This order (${doc.sourceNo}) was already imported as ${dup.number}`);
+  const fillIn = !!dup?.summaryOnly && !d.allowDuplicate; // complete the order-list entry instead of creating another order
+  if (dup && !dup.summaryOnly && !d.allowDuplicate) throw badRequest(`This order (${doc.sourceNo}) was already imported as ${dup.number}`);
 
   const lines = d.lines.filter((l) => l.include);
   if (!lines.length) throw badRequest('Include at least one line');
@@ -190,7 +197,7 @@ r.post('/order-imports/:id/commit', perm, async (req, res) => {
       d.notes || null,
     ].filter(Boolean);
 
-    const order = await createSalesOrder(tx, {
+    const input = {
       clientId: client.id, siteId, date: d.date, clientPoNo: d.clientPoNo || null, clientPoDate: d.clientPoDate ?? null,
       expectedCompletion: d.expectedCompletion ?? null, paymentTerms: d.paymentTerms, terms: d.terms || null, notes: noteParts.join('\n'),
       sourceRef: dup && d.allowDuplicate ? null : sourceRef,
@@ -198,9 +205,12 @@ r.post('/order-imports/:id/commit', perm, async (req, res) => {
         itemId: l.action === 'match' ? l.itemId : l.action === 'new' ? newIds.get(l.key)! : null,
         description: l.description, hsnSac: l.hsnSac || null, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate,
       })),
-    }, req.user.id);
+    };
+    const order = fillIn
+      ? await replaceOrderLines(tx, dup!.id, input, `Items imported from ${job.fileName} on ${new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' })}.`)
+      : await createSalesOrder(tx, input, req.user.id);
 
-    const summary = { orderId: order.id, number: order.number, total: order.total, itemsCreated: toCreate.length, siteCreated, clientCreated, lines: lines.length };
+    const summary = { orderId: order.id, number: order.number, total: order.total, itemsCreated: toCreate.length, siteCreated, clientCreated, lines: lines.length, filledIn: fillIn };
     await tx.update(importJobs).set({ status: 'DONE', summary }).where(eq(importJobs.id, job.id));
     return { order, summary };
   });

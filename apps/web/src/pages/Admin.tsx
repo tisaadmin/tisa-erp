@@ -193,12 +193,18 @@ type Job = {
   stats: { total: number; create: number; update: number; skip: number; error: number; warnings: number; byEntity: Record<string, { create: number; update: number }> };
   rows: { row: number; action: string; entity: string; label: string; detail?: string }[]; issues: { row: number; level: string; message: string }[]; issuesTruncated: boolean;
 };
-const KIND_LABEL: Record<string, string> = { clients: 'Clients, vendors & prospects', contacts: 'Contact persons', items: 'Inventory items', sites: 'Sites' };
-const ENTITY_LABEL: Record<string, string> = { client: 'clients', vendor: 'vendors', lead: 'prospects (leads)', site: 'sites', item: 'items', system: 'systems', stock: 'opening stock entries', contact: 'contacts' };
+const KIND_LABEL: Record<string, string> = { clients: 'Clients, vendors & prospects', contacts: 'Contact persons', items: 'Inventory items', sites: 'Sites', orders: 'Sales order list' };
+const ENTITY_LABEL: Record<string, string> = { client: 'clients', vendor: 'vendors', lead: 'prospects (leads)', site: 'sites', item: 'items', system: 'systems', stock: 'opening stock entries', contact: 'contacts', order: 'orders' };
 const OPTION_LABEL: Record<string, Record<string, string>> = {
   clients: { createSites: 'Create a "Main" site for each new client from its address', updateExisting: 'Update records that already exist (matched by source ID, GSTIN or name)' },
   items: { importStock: 'Bring in current stock as opening stock (new items only)', ignoreDefaultReorder: 'Ignore a stock-alert level of 1 (FFH default)', updateExisting: 'Update items that already exist' },
   sites: { updateExisting: 'Update sites that already exist' }, contacts: {},
+  orders: {
+    createClients: 'Create clients that are not in the client master (leads are converted; suppliers are copied)',
+    createSites: 'Create a site from the delivery address when it differs from the client\'s address',
+    closeBilled: 'Mark orders that are fully billed in the old ERP as Closed',
+    updateExisting: 'Update orders already imported (matched by the old SO number) — items imported later are kept',
+  },
 };
 
 export function ImportPage() {
@@ -267,6 +273,13 @@ export function ImportPage() {
               <Stat label="Errors (not imported)" value={job.stats.error} accent={job.stats.error ? 'red' : undefined} />
               <Stat label="Warnings" value={job.stats.warnings} accent={job.stats.warnings ? 'amber' : undefined} />
             </div>
+            {job.kind === 'orders' && (
+              <div className="mt-4 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+                An order list has no line items, so each order comes in with <b>one summary line at its basic value</b> — totals, client, site and status match the old ERP.
+                Later, import each order's detail (Order Forms → <Link className="underline" to="/orders/import">Import from file</Link>): it is matched by the SO number and the summary line is replaced by the actual items.
+                Payment terms start as 100% against delivery; change them on an order before its first bill.
+              </div>
+            )}
             <div className="mt-3 text-sm text-slate-600">{Object.entries(job.stats.byEntity).filter(([, v]) => v.create || v.update).map(([e, v]) => `${v.create ? `${v.create} new` : ''}${v.create && v.update ? ' + ' : ''}${v.update ? `${v.update} updated` : ''} ${ENTITY_LABEL[e] ?? e}`).join(' · ')}</div>
             {!done && (
               <div className="mt-4 flex flex-wrap items-center gap-3">

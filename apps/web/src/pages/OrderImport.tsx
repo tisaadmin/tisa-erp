@@ -25,7 +25,7 @@ type ImpLine = {
 };
 type ClientSug = { id: string; name: string; code: string; city: string | null; score: number; reason: string };
 type SiteSug = { id: string; name: string; code: string; address: string | null; city: string | null; score: number };
-type Parsed = { id: string; fileName: string; doc: Doc; sourceRef: string | null; duplicate: { id: string; number: string } | null; clients: ClientSug[]; clientId: string | null; sites: SiteSug[]; siteId: string | null; lines: ImpLine[] };
+type Parsed = { id: string; fileName: string; doc: Doc; sourceRef: string | null; duplicate: { id: string; number: string; summaryOnly: boolean; total: number; taxable: number; basicValue: number | null; soValue: number | null; title: string | null; paymentTerms: Term[]; clientPoNo: string | null } | null; clients: ClientSug[]; clientId: string | null; sites: SiteSug[]; siteId: string | null; lines: ImpLine[] };
 type NewSite = { name: string; address: string; city: string; stateCode: string; contactName: string; phone: string };
 type NewClient = { name: string; type: string; gstin: string; billingAddress: string; city: string; stateCode: string; contactName: string; phone: string; email: string };
 const CLIENT_TYPES = [{ value: 'CORPORATE', label: 'Corporate' }, { value: 'RESIDENTIAL_SOCIETY', label: 'Residential society' }, { value: 'BUILDER', label: 'Builder' }, { value: 'GOVERNMENT', label: 'Government' }, { value: 'INDIVIDUAL', label: 'Individual' }];
@@ -71,6 +71,7 @@ export function OrderImportPage() {
       setClientId(r.clientId); setSites(r.sites); setSiteId(r.siteId);
       const likely = r.clients.some((c) => c.score >= 50);
       setClientMode(r.clientId || likely ? 'existing' : 'new');
+      if (r.duplicate?.summaryOnly) setTerms(r.duplicate.paymentTerms);
       setSiteMode(r.clientId && r.siteId ? 'existing' : 'new');
       const ship = r.doc.shipTo, bill = r.doc.billTo;
       const name = r.doc.clientHint ?? bill.name ?? '';
@@ -114,7 +115,7 @@ export function OrderImportPage() {
     ...included.filter((l) => l.action === 'match' && !l.itemId).map((l) => `Line ${l.key}: pick the inventory item`),
     ...included.filter((l) => l.action === 'new' && !l.newItem.categoryId).map((l) => `Line ${l.key}: choose a system for the new item`),
     ...included.filter((l) => !(l.qty > 0)).map((l) => `Line ${l.key}: quantity must be more than 0`),
-    p?.duplicate && !allowDuplicate && `Already imported as ${p.duplicate.number}`,
+    p?.duplicate && !p.duplicate.summaryOnly && !allowDuplicate && `Already imported as ${p.duplicate.number}`,
   ].filter(Boolean) as string[];
   const zeroRate = included.filter((l) => !l.rate).length;
 
@@ -122,7 +123,7 @@ export function OrderImportPage() {
     if (!p) return;
     setSaving(true);
     try {
-      const r = await api<{ orderId: string; number: string; itemsCreated: number; siteCreated: string | null; clientCreated: string | null }>(`/order-imports/${p.id}/commit`, {
+      const r = await api<{ orderId: string; number: string; itemsCreated: number; siteCreated: string | null; clientCreated: string | null; filledIn: boolean }>(`/order-imports/${p.id}/commit`, {
         body: {
           clientId: clientMode === 'existing' ? clientId : null, newClient: clientMode === 'new' ? newClient : null, allowDuplicate,
           site: siteMode === 'existing' && clientMode === 'existing' ? { mode: 'existing', siteId } : siteMode === 'new' ? { mode: 'new', ...newSite } : { mode: 'none' },
@@ -131,7 +132,7 @@ export function OrderImportPage() {
           lines: lines.map(({ suggestions: _s, srNo: _n, parentKey: _p, manufacturer: _m, ...l }) => l),
         },
       });
-      toast.success(`Order ${r.number} created${r.clientCreated ? ` · client "${r.clientCreated}" added` : ''}${r.itemsCreated ? ` · ${r.itemsCreated} new item${r.itemsCreated > 1 ? 's' : ''} added to inventory` : ''}${r.siteCreated ? ` · site "${r.siteCreated}" added` : ''}`);
+      toast.success(`Order ${r.number} ${r.filledIn ? 'updated with its items' : 'created'}${r.clientCreated ? ` · client "${r.clientCreated}" added` : ''}${r.itemsCreated ? ` · ${r.itemsCreated} new item${r.itemsCreated > 1 ? 's' : ''} added to inventory` : ''}${r.siteCreated ? ` · site "${r.siteCreated}" added` : ''}`);
       nav(`/orders/${r.orderId}`);
     } catch (e) { toast.error((e as Error).message); } finally { setSaving(false); }
   };
@@ -156,7 +157,15 @@ export function OrderImportPage() {
 
       {p && (
         <>
-          {p.duplicate && (
+          {p.duplicate?.summaryOnly && (
+            <div className="flex flex-wrap items-center gap-3 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              <CheckCircle2 className="size-4" />
+              <span>FFH SO {p.doc.sourceNo} is already in the ERP from the order list as <Link className="font-semibold underline" to={`/orders/${p.duplicate.id}`}>{p.duplicate.number}</Link>{p.duplicate.title ? ` (${p.duplicate.title})` : ''}.
+                Importing will <b>replace its summary line with these items</b>; the order number stays the same.</span>
+              <label className="ml-auto flex items-center gap-2"><input type="checkbox" checked={allowDuplicate} onChange={(e) => setAllowDuplicate(e.target.checked)} /> Create a separate order instead</label>
+            </div>
+          )}
+          {p.duplicate && !p.duplicate.summaryOnly && (
             <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               <AlertTriangle className="size-4" />
               <span>This document ({p.doc.sourceNo}) was already imported as <Link className="font-semibold underline" to={`/orders/${p.duplicate.id}`}>{p.duplicate.number}</Link>.</span>
@@ -314,6 +323,8 @@ export function OrderImportPage() {
             <div className="flex flex-wrap items-start justify-between gap-4 border-t border-slate-100 p-4">
               <div className="space-y-1 text-sm">
                 {zeroRate > 0 && <p className="text-amber-700">{zeroRate} included line{zeroRate > 1 ? 's have' : ' has'} no rate (₹0). Enter rates, or leave them at 0 for parts that are covered by the main line's price.</p>}
+                {p.duplicate?.summaryOnly && p.duplicate.basicValue != null && <p className={cx(Math.abs(t.taxable - p.duplicate.basicValue) < 1 ? 'text-emerald-700' : 'text-amber-800')}>
+                  FFH basic value of this order: <b>{inr(p.duplicate.basicValue)}</b> · items here: <b>{inr(t.taxable)}</b>{Math.abs(t.taxable - p.duplicate.basicValue) < 1 ? ' — matches' : ` — difference ${inr(t.taxable - p.duplicate.basicValue)}`}</p>}
                 {p.doc.dueAmount != null && <p className={cx(Math.abs(t.total - p.doc.dueAmount) < 1 ? 'text-emerald-700' : 'text-slate-600')}>
                   Due amount on the document: <b>{inr(p.doc.dueAmount)}</b> · this order: <b>{inr(t.total)}</b>{Math.abs(t.total - p.doc.dueAmount) < 1 ? ' — matches' : ` — difference ${inr(t.total - p.doc.dueAmount)}`}</p>}
               </div>

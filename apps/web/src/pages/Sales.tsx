@@ -190,12 +190,13 @@ export function OrdersPage() {
         </>} />
       <Card pad={false}>
         <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
-          <SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} />
+          <SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} placeholder="Order no., FFH SO no., PO or title…" />
           <Select className="w-44" value={q.status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} placeholder="All statuses" options={['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']} />
         </div>
         <Table rows={list.data?.data} to={(r) => `/orders/${r.id}`} cols={[
-          { key: 'number', label: 'Order' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
-          { key: 'client', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="text-xs text-slate-400">{r.site?.name}</div></> },
+          { key: 'number', label: 'Order', render: (r) => <>{r.number}{r.sourceData?.soNumber && <div className="text-xs text-slate-400">FFH {r.sourceData.soNumber}{r.sourceData.summaryOnly && <span className="ml-1 text-amber-600" title="Items not imported yet">· summary</span>}</div>}</> },
+          { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
+          { key: 'client', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="max-w-xs truncate text-xs text-slate-400">{r.site?.name ?? r.sourceData?.title}</div></> },
           { key: 'clientPoNo', label: 'Client PO', render: (r) => r.clientPoNo ?? '—' },
           { key: 'terms', label: 'Payment terms', render: (r) => <span className="text-xs">{r.paymentTerms.map((t: Term) => `${t.percent}% ${STAGE_LABEL[t.stage].replace('Against ', '')}`).join(' · ')}</span> },
           { key: 'total', label: 'Value', num: true, render: (r) => inr(r.total) }, { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
@@ -277,9 +278,16 @@ export function OrderDetail() {
           {can('invoices:create') && <Button variant="primary" icon={<Receipt className="size-4" />} onClick={() => setRa({})}>Running bill</Button>}
           {can('orders:edit') && o.status !== 'CLOSED' && <Select className="w-36" value="" onChange={(e) => e.target.value && setStatus.mutate(e.target.value)} options={['IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']} placeholder="Set status…" />}
         </>} />
+      {o.sourceData?.summaryOnly && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span>This order came from the FFH order list with <b>one summary line</b> ({inr(o.sourceData.basicValue ?? o.taxable)} basic). Import FFH SO {o.sourceData.soNumber} to bring in its items before delivering or billing item-wise.</span>
+          {can('orders:create') && <Link to="/orders/import" className="ml-auto"><Button size="sm">Import items</Button></Link>}
+        </div>
+      )}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Order details" className="lg:col-span-2">
-          <KV cols={3} items={[['Date', fmtDate(o.date)], ['Client PO', o.clientPoNo ? `${o.clientPoNo}${o.clientPoDate ? ` · ${fmtDate(o.clientPoDate)}` : ''}` : null], ['Target completion', fmtDate(o.expectedCompletion)], ['Place of supply', o.placeOfSupply], ...(o.sourceRef ? [['Imported from', o.sourceRef.replace(/^FFH:/, 'FFH SO ')] as [string, string]] : []), ['Order value', inr(o.total)], ['Payment terms', stages.map((t) => `${t.percent}% ${STAGE_LABEL[t.stage]}`).join(', ')]]} />
+          <KV cols={3} items={[['Date', fmtDate(o.date)], ['Client PO', o.clientPoNo ? `${o.clientPoNo}${o.clientPoDate ? ` · ${fmtDate(o.clientPoDate)}` : ''}` : null], ['Target completion', fmtDate(o.expectedCompletion)], ['Place of supply', o.placeOfSupply], ...(o.sourceRef ? [['Imported from', o.sourceRef.replace(/^FFH:/, 'FFH SO ')] as [string, string]] : []),
+            ...(o.sourceData ? [['FFH title', o.sourceData.title ?? '—'], ['FFH status', [o.sourceData.deliveryStatus, o.sourceData.billingStatus, o.sourceData.installedStatus].filter(Boolean).join(' · ') || '—'], ['FFH owner', o.sourceData.owner ?? '—']] as [string, string][] : []), ['Order value', inr(o.total)], ['Payment terms', stages.map((t) => `${t.percent}% ${STAGE_LABEL[t.stage]}`).join(', ')]]} />
         </Card>
         {billing.data && (
           <Card title="Billing progress">

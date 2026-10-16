@@ -47,3 +47,24 @@ export async function reserveCodes(tx: DbOrTx, key: 'CLIENT' | 'SITE' | 'LEAD' |
   const first = row.next - count;
   return Array.from({ length: count }, (_, i) => `${prefix}${String(first + i).padStart(4, '0')}`);
 }
+
+/**
+ * Reserve document numbers for many documents at once (bulk import). Numbers are handed out in the order of
+ * `dates` within each financial year, one round trip per financial year.
+ */
+export async function reserveNumbers(tx: DbOrTx, key: SeriesKey, dates: Date[]): Promise<string[]> {
+  const out: string[] = new Array(dates.length);
+  const byFy = new Map<string, number[]>();
+  dates.forEach((d, i) => { const fy = financialYear(d); byFy.set(fy, [...(byFy.get(fy) ?? []), i]); });
+  const prefix = SERIES[key];
+  for (const [fy, idx] of byFy) {
+    const [row] = await tx
+      .insert(numberSeries)
+      .values({ key, fy, prefix, next: idx.length + 1 })
+      .onConflictDoUpdate({ target: [numberSeries.key, numberSeries.fy], set: { next: sql`${numberSeries.next} + ${idx.length}` } })
+      .returning({ next: numberSeries.next });
+    const first = row.next - idx.length;
+    idx.forEach((i, k) => { out[i] = `${COMPANY_PREFIX}/${prefix}/${fy}/${String(first + k).padStart(4, '0')}`; });
+  }
+  return out;
+}

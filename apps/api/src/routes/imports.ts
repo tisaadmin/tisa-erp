@@ -12,11 +12,11 @@ import { readSheet } from '../import/parse';
 import { autoMap, detect, TARGETS, type ImportKind } from '../import/targets';
 
 const r = Router();
-const KINDS = ['clients', 'contacts', 'items', 'sites'] as const;
+const KINDS = ['clients', 'contacts', 'items', 'sites', 'orders'] as const;
 const sheetUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024, files: 1 } });
 const perm = requirePerm('settings:edit');
 
-const DEFAULT_OPTIONS: ImportOptions = { createSites: true, updateExisting: true, ignoreDefaultReorder: true, importStock: true };
+const DEFAULT_OPTIONS: ImportOptions = { createSites: true, updateExisting: true, ignoreDefaultReorder: true, importStock: true, createClients: true, closeBilled: true };
 
 /** Trim a result for the browser: all stats, all issues (capped), first rows + every error row. */
 function view(job: typeof importJobs.$inferSelect, result: ImportResult) {
@@ -43,7 +43,7 @@ r.post('/imports/upload', perm, sheetUpload.single('file'), async (req, res) => 
   const det = detect(sheet.headers);
   const requested = typeof req.body.kind === 'string' && (KINDS as readonly string[]).includes(req.body.kind) ? (req.body.kind as ImportKind) : null;
   const kind = requested ?? det.kind;
-  if (!kind) throw badRequest('Could not tell what this file contains — choose the import type (clients, contacts, items or sites) and upload again');
+  if (!kind) throw badRequest('Could not tell what this file contains — choose the import type (clients, contacts, items, sites or orders) and upload again');
   const preset = det.kind === kind ? det.preset : null;
   const [job] = await db.insert(importJobs).values({
     kind, preset, fileName: req.file.originalname, headers: sheet.headers, mapping: autoMap(kind, sheet.headers, preset),
@@ -56,7 +56,7 @@ r.post('/imports/upload', perm, sheetUpload.single('file'), async (req, res) => 
 r.post('/imports/:id/preview', perm, async (req, res) => {
   const d = z.object({
     kind: z.enum(KINDS).optional(), mapping: z.record(z.string(), z.string().nullable()).optional(),
-    options: z.object({ createSites: z.boolean(), updateExisting: z.boolean(), ignoreDefaultReorder: z.boolean(), importStock: z.boolean() }).partial().optional(),
+    options: z.object({ createSites: z.boolean(), updateExisting: z.boolean(), ignoreDefaultReorder: z.boolean(), importStock: z.boolean(), createClients: z.boolean(), closeBilled: z.boolean() }).partial().optional(),
   }).parse(req.body ?? {});
   const job = await db.query.importJobs.findFirst({ where: eq(importJobs.id, req.params.id) });
   if (!job) throw notFound('Import');

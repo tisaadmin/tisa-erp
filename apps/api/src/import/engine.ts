@@ -1,9 +1,10 @@
 /* Import engine: normalise mapped rows, match against existing records, preview (dry run) or write. */
 import { and, eq, isNull } from 'drizzle-orm';
 import { db, type DbOrTx } from '../db';
-import { clients, items, leads, sites, stockMovements, systemCategories, vendors } from '../db/schema';
-import { GSTIN_REGEX, INDIAN_STATES, stateFromGstin } from '../lib/gst';
-import { reserveCodes } from '../lib/numbering';
+import { clients, items, leads, salesOrderItems, salesOrders, sites, stockMovements, systemCategories, vendors, type SourceData } from '../db/schema';
+import { calcTotals, GSTIN_REGEX, INDIAN_STATES, stateFromGstin } from '../lib/gst';
+import { reserveCodes, reserveNumbers } from '../lib/numbering';
+import { getCompany } from '../services/company';
 import type { ImportKind } from './targets';
 
 export type Issue = { row: number; level: 'error' | 'warning'; message: string };
@@ -13,7 +14,7 @@ export type ImportResult = {
   rows: RowResult[];
   issues: Issue[];
 };
-export type ImportOptions = { createSites?: boolean; updateExisting?: boolean; ignoreDefaultReorder?: boolean; importStock?: boolean };
+export type ImportOptions = { createSites?: boolean; updateExisting?: boolean; ignoreDefaultReorder?: boolean; importStock?: boolean; createClients?: boolean; closeBilled?: boolean };
 
 // ───────── value helpers ─────────
 const str = (v: unknown): string | null => {
@@ -440,8 +441,252 @@ async function importSites(tx: DbOrTx, rowsIn: Record<string, unknown>[], mappin
   return res;
 }
 
+// ════════════════════════ Sales orders (order list / register) ════════════════════════
+
+/** dd/mm/yyyy (FFH), yyyy-mm-dd, or an Excel date already turned into yyyy-mm-dd → Date at IST midday. */
+function dateOf(v: unknown): Date | null {
+  const s = str(v);
+  if (!s) return null;
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return new Date(`${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}T12:00:00+05:30`);
+  m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})/);
+  if (m) {
+    const y = m[3].length === 2 ? `20${m[3]}` : m[3], mo = Number(m[2]), d = Number(m[1]);
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return new Date(`${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}T12:00:00+05:30`);
+  }
+  return null;
+}
+const keyOf = (s: string | null | undefined) => (s ?? '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, '');
+const STD_GST = [0, 5, 12, 18, 28, 40];
+
+/** FFH delivery / billing status → order status. */
+function orderStatusOf(delivery: string | null, billing: string | null, closeBilled: boolean) {
+  const d = lower(delivery), b = lower(billing).replace(/\s+/g, ' ');
+  if (closeBilled && b === 'billed') return 'CLOSED';
+  if (d.startsWith('part') || d === 'delivered' || b.startsWith('part') || b === 'billed') return 'IN_PROGRESS';
+  return 'OPEN';
+}
+
+/**
+ * Imports an order list (e.g. FFH "Sales Order List"): one order per row with its header, values and status.
+ * The list has no line items, so each order gets one summary line at the basic value — totals match the source.
+ * Importing the detailed order later (Order Forms → Import from file) replaces the summary line with the items.
+ */
+async function importOrders(tx: DbOrTx, rowsIn: Record<string, unknown>[], mapping: Record<string, string | null>, opts: ImportOptions, dryRun: boolean): Promise<ImportResult> {
+  const res = emptyResult(rowsIn.length);
+  const company = await getCompany();
+  const cl = await tx.select({ id: clients.id, name: clients.name, stateCode: clients.stateCode, billingAddress: clients.billingAddress }).from(clients);
+  const st = await tx.select({ id: sites.id, clientId: sites.clientId, name: sites.name, address: sites.address, stateCode: sites.stateCode }).from(sites);
+  const existing = await tx.select({ id: salesOrders.id, sourceRef: salesOrders.sourceRef, sourceData: salesOrders.sourceData, number: salesOrders.number })
+    .from(salesOrders);
+  const orderByRef = new Map(existing.filter((o) => o.sourceRef).map((o) => [o.sourceRef!, o]));
+  const clientByKey = new Map(cl.map((c) => [keyOf(c.name), c]));
+  // FFH lets you raise orders for prospects and suppliers too: reuse their details instead of a bare new client
+  const leadRows = await tx.select().from(leads);
+  const vendorRows = await tx.select().from(vendors);
+  const leadByKey = new Map(leadRows.filter((l) => !l.convertedClientId).map((l) => [keyOf(l.companyName), l]));
+  const vendorByKey = new Map(vendorRows.map((v) => [keyOf(v.name), v]));
+  const sitesByClient = new Map<string, typeof st>();
+  for (const x of st) sitesByClient.set(x.clientId, [...(sitesByClient.get(x.clientId) ?? []), x]);
+
+  type NewClient = { key: string; values: Record<string, unknown>; leadId?: string };
+  type NewSite = { key: string; clientKey: string; values: Record<string, unknown> };
+  const newClients = new Map<string, NewClient>();
+  const newSites = new Map<string, NewSite>(); // key = clientKey|addressKey
+  const bump = (entity: string) => { (res.stats.byEntity[entity] ??= { create: 0, update: 0 }).create += 1; };
+  const seen = new Set<string>();
+  type Prepared = {
+    row: number; ref: string; existingId: string | null; summaryOnly: boolean; clientKey: string; siteKey: string | null; date: Date;
+    header: Record<string, unknown>; line: { description: string; unit: string; qty: number; rate: number; discountPct: number; gstRate: number; hsnSac: null; itemId: null };
+    interState: boolean; sourceTotal: number;
+  };
+  const prepared: Prepared[] = [];
+
+  rowsIn.forEach((raw, i) => {
+    const row = i + 2;
+    const r = mapRow(raw, mapping);
+    const refRaw = str(r.externalRef);
+    const clientName = str(r.clientName);
+    const label = `${refRaw ?? '(no number)'} · ${clientName ?? '(no client)'}`;
+    if (!refRaw) return fail(res, row, 'order', label, 'Order number is empty');
+    if (seen.has(refRaw)) return fail(res, row, 'order', label, `Order ${refRaw} appears twice in the file`);
+    seen.add(refRaw);
+    if (!clientName) return fail(res, row, 'order', label, 'Client name is empty');
+    const date = dateOf(r.date);
+    if (!date) return fail(res, row, 'order', label, `Order date "${str(r.date) ?? ''}" is not a date`);
+    const sourceRef = `FFH:${refRaw}`;
+    const ex = orderByRef.get(sourceRef) ?? null;
+    if (ex && opts.updateExisting === false) return record(res, { row, action: 'skip', entity: 'order', label, detail: `Already imported as ${ex.number}` });
+
+    // client
+    const ck = keyOf(clientName);
+    let client = clientByKey.get(ck) ?? null;
+    const stateCode = stateCodeOf(str(r.state), null);
+    if (!client && !newClients.has(ck)) {
+      if (opts.createClients === false) return fail(res, row, 'order', label, `Client "${clientName}" is not in the ERP — import clients first, or allow creating them`);
+      const lead = leadByKey.get(ck), vendor = vendorByKey.get(ck);
+      const fromOrder = {
+        name: clientName, stateCode, stateName: stateCode ? INDIAN_STATES[stateCode] : null, city: str(r.city),
+        billingAddress: joinAddress([str(r.billingAddress) ?? str(r.deliveryAddress), str(r.area)]), contactName: str(r.contactName),
+        phone: str(r.phone), email: str(r.email)?.toLowerCase() ?? null,
+      };
+      if (vendor) {
+        const vs = vendor.stateCode ?? stateCode;
+        newClients.set(ck, { key: ck, values: { ...fromOrder, name: vendor.name, gstin: vendor.gstin, pan: vendor.pan, billingAddress: vendor.address ?? fromOrder.billingAddress,
+          city: vendor.city ?? fromOrder.city, stateCode: vs, stateName: vs ? INDIAN_STATES[vs] : null, contactName: vendor.contactName ?? fromOrder.contactName,
+          phone: vendor.phone ?? fromOrder.phone, email: vendor.email ?? fromOrder.email, externalRef: vendor.externalRef, notes: 'Also a supplier — created from the vendor record by the FFH order list import' } });
+        warn(res, row, `${clientName}: is a supplier in the ERP — a client record will be created from the vendor's details`);
+      } else if (lead) {
+        newClients.set(ck, { key: ck, leadId: lead.id, values: { ...fromOrder, name: lead.companyName, city: lead.city ?? fromOrder.city,
+          billingAddress: lead.address ?? fromOrder.billingAddress, contactName: lead.contactName ?? fromOrder.contactName, phone: lead.phone ?? fromOrder.phone,
+          email: lead.email ?? fromOrder.email, externalRef: lead.externalRef, notes: 'Converted from a lead by the FFH order list import' } });
+        warn(res, row, `${clientName}: is a lead in the ERP — it will be converted to a client`);
+      } else {
+        newClients.set(ck, { key: ck, values: { ...fromOrder, notes: 'Created by the FFH order list import' } });
+        warn(res, row, `${clientName}: not in the client master — will be created`);
+      }
+      bump('client');
+    }
+
+    // site: the delivery address, unless it is the client's own billing address
+    const delivery = joinAddress([str(r.deliveryAddress), str(r.area)]);
+    // FFH cuts the Title column at 40 characters; the delivery remark usually carries the full text
+    const titleRaw = str(r.title), remarkRaw = str(r.remark);
+    const title = titleRaw && remarkRaw && remarkRaw.length > titleRaw.length && remarkRaw.toLowerCase().startsWith(titleRaw.toLowerCase()) ? remarkRaw : titleRaw;
+    let siteKey: string | null = null;
+    const clientSites = client ? sitesByClient.get(client.id) ?? [] : [];
+    const sameAsBilling = !delivery || (client && keyOf(client.billingAddress) === keyOf(delivery))
+      || keyOf(str(r.billingAddress)) === keyOf(str(r.deliveryAddress));
+    if (sameAsBilling || opts.createSites === false) {
+      const main = clientSites.find((x) => /—\s*main$/i.test(x.name)) ?? (clientSites.length === 1 ? clientSites[0] : undefined);
+      siteKey = main ? `id:${main.id}` : client ? null : `${ck}|main`;
+      if (!client && opts.createSites !== false && !newSites.has(`${ck}|main`) && delivery) {
+        newSites.set(`${ck}|main`, { key: `${ck}|main`, clientKey: ck, values: { name: `${clientName} — Main`, address: delivery, city: str(r.city), stateCode, stateName: stateCode ? INDIAN_STATES[stateCode] : null, contactName: str(r.contactName), phone: str(r.phone) } });
+        bump('site');
+      }
+      if (!client && !delivery) siteKey = null;
+    } else {
+      const ak = keyOf(delivery);
+      const found = clientSites.find((x) => keyOf(x.address) === ak);
+      if (found) siteKey = `id:${found.id}`;
+      else {
+        siteKey = `${ck}|${ak}`;
+        if (!newSites.has(siteKey)) {
+          const name = (title ?? delivery!).replace(/\s+/g, ' ').slice(0, 70).replace(/[,\s]+$/, '');
+          newSites.set(siteKey, { key: siteKey, clientKey: ck, values: {
+            name, address: delivery, city: str(r.city), stateCode: stateCode ?? client?.stateCode ?? null,
+            stateName: (stateCode ?? client?.stateCode) ? INDIAN_STATES[(stateCode ?? client?.stateCode)!] : null, contactName: str(r.contactName), phone: str(r.phone),
+            email: str(r.email)?.toLowerCase() ?? null,
+          } });
+          bump('site');
+        }
+      }
+    }
+
+    // values: one summary line at the basic value; GST rate from the ratio of order value to basic value
+    let total = num(r.total) ?? 0, basic = num(r.basic);
+    if (total < 0 || (basic ?? 0) < 0) return fail(res, row, 'order', label, 'Negative order value');
+    if (basic == null) { basic = total ? Math.round((total / 1.18) * 100) / 100 : 0; if (total) warn(res, row, `${refRaw}: no basic value — assumed 18% GST`); }
+    else if (total > 0 && total < basic) {
+      warn(res, row, `${refRaw}: order value ₹${total} is less than the basic value ₹${basic} in the source — used the order value (assumed 18% GST); check this order`);
+      basic = Math.round((total / 1.18) * 100) / 100;
+    }
+    let gstRate = 18;
+    if (basic > 0 && total > 0) {
+      const eff = (total / basic - 1) * 100;
+      gstRate = STD_GST.reduce((a, b) => (Math.abs(b - eff) < Math.abs(a - eff) ? b : a), 18);
+      if (Math.abs(eff - gstRate) > 0.02) {
+        // mixed GST rates: carry the overall rate so the order value matches the source; billing is blocked until the items are imported
+        gstRate = Math.round(eff * 100) / 100;
+        warn(res, row, `${refRaw}: items carry mixed GST rates (overall ${gstRate}%) — the summary line keeps this rate so the value matches; import the detailed order before billing`);
+      }
+    }
+    if (!total && !basic) total = 0;
+    const siteState = siteKey?.startsWith('id:') ? st.find((x) => x.id === siteKey!.slice(3))?.stateCode : siteKey ? (newSites.get(siteKey)?.values.stateCode as string | null) : null;
+    const pos = siteState ?? client?.stateCode ?? stateCode ?? company.stateCode;
+    const interState = pos !== company.stateCode;
+
+    const deliveryStatus = str(r.deliveryStatus), billingStatus = str(r.billingStatus)?.replace(/\s+/g, ' ') ?? null;
+    const status = orderStatusOf(deliveryStatus, billingStatus, opts.closeBilled !== false);
+    const remark = str(r.remark);
+    const sourceData: SourceData = {
+      system: 'FFH', soNumber: refRaw, title, owner: str(r.owner), allocatedTo: str(r.allocatedTo), deliveryStatus, billingStatus,
+      installedStatus: str(r.installedStatus), approvalStatus: str(r.approvalStatus), soValue: total, basicValue: basic,
+      summaryOnly: ex ? (ex.sourceData?.summaryOnly ?? false) : true, importedAt: new Date().toISOString(),
+    };
+    const notes = [`Imported from the FFH sales order list (SO ${refRaw}).`, title ? `Title: ${title}` : null, remark && remark !== title ? `Delivery remark: ${remark}` : null,
+      str(r.contactName) ? `Contact: ${[str(r.contactName), str(r.phone), str(r.email)].filter(Boolean).join(', ')}` : null].filter(Boolean).join('\n');
+    prepared.push({
+      row, ref: refRaw, existingId: ex?.id ?? null, summaryOnly: sourceData.summaryOnly!, clientKey: ck, siteKey, date, interState, sourceTotal: total,
+      header: { date, clientPoNo: str(r.poNo), clientPoDate: dateOf(r.poDate), expectedCompletion: dateOf(r.dueDate), placeOfSupply: pos, status, notes, sourceRef, sourceData },
+      line: { description: `As per FFH SO ${refRaw}${title ? ` — ${title}` : ''}`, unit: 'Lot', qty: 1, rate: basic, discountPct: 0, gstRate, hsnSac: null, itemId: null },
+    });
+    record(res, { row, action: ex ? 'update' : 'create', entity: 'order', label: `${refRaw} · ${clientName}`,
+      detail: `₹${total.toLocaleString('en-IN')} · ${status.replace('_', ' ').toLowerCase()}${ex ? ` · ${ex.number}` : ''}` });
+  });
+  if (dryRun) return res;
+
+  /** Summary line + order totals that reproduce the source's value to the paisa (GST = order value − basic value). */
+  const summaryOf = (p: Prepared) => {
+    const calc = calcTotals([p.line], p.interState);
+    const basicV = p.line.rate;
+    if (!(p.sourceTotal > basicV)) return { item: { ...p.line, taxable: calc.lines[0].taxable, taxAmount: calc.lines[0].taxAmount, amount: calc.lines[0].amount }, totals: calc.totals };
+    const tax = Math.round((p.sourceTotal - basicV) * 100) / 100;
+    const half = Math.round((tax / 2) * 100) / 100;
+    const totals = { subtotal: basicV, discount: 0, taxable: basicV, cgst: p.interState ? 0 : half, sgst: p.interState ? 0 : Math.round((tax - half) * 100) / 100,
+      igst: p.interState ? tax : 0, roundOff: 0, total: Math.round((basicV + tax) * 100) / 100 };
+    return { item: { ...p.line, taxable: basicV, taxAmount: tax, amount: totals.total }, totals };
+  };
+
+  // clients, then sites (they may belong to new clients)
+  const ncl = [...newClients.values()];
+  const clientCodes = await reserveCodes(tx, 'CLIENT', 'CL', ncl.length);
+  const newClientIds = new Map<string, string>();
+  for (const [k, c] of ncl.entries()) {
+    const [row] = await tx.insert(clients).values({ ...c.values, code: clientCodes[k] } as never).returning({ id: clients.id });
+    newClientIds.set(c.key, row.id);
+    if (c.leadId) await tx.update(leads).set({ status: 'WON', convertedClientId: row.id }).where(eq(leads.id, c.leadId));
+  }
+  const clientIdOf = (key: string) => clientByKey.get(key)?.id ?? newClientIds.get(key)!;
+  const nst = [...newSites.values()];
+  const siteCodes = await reserveCodes(tx, 'SITE', 'ST', nst.length);
+  const newSiteIds = new Map<string, string>();
+  if (nst.length) {
+    const inserted = await tx.insert(sites).values(nst.map((x, k) => ({ ...x.values, clientId: clientIdOf(x.clientKey), code: siteCodes[k] })) as never)
+      .returning({ id: sites.id });
+    nst.forEach((x, k) => newSiteIds.set(x.key, inserted[k].id));
+  }
+  const siteIdOf = (key: string | null) => (!key ? null : key.startsWith('id:') ? key.slice(3) : newSiteIds.get(key) ?? null);
+
+  // new orders: numbered in date order
+  const creates = prepared.filter((p) => !p.existingId).sort((a, b) => a.date.getTime() - b.date.getTime() || a.ref.localeCompare(b.ref));
+  const numbers = await reserveNumbers(tx, 'ORDER', creates.map((p) => p.date));
+  const terms = [{ stage: 'DELIVERY' as const, percent: 100 }];
+  await chunked(creates.map((p, k) => ({ p, number: numbers[k] })), 100, async (chunk) => {
+    const rowsOut = chunk.map(({ p, number }) => {
+      const { item, totals } = summaryOf(p);
+      return { order: { ...p.header, number, clientId: clientIdOf(p.clientKey), siteId: siteIdOf(p.siteKey), paymentTerms: terms, ...totals }, item: { ...item, sortOrder: 0 } };
+    });
+    const ins = await tx.insert(salesOrders).values(rowsOut.map((x) => x.order) as never).returning({ id: salesOrders.id });
+    await tx.insert(salesOrderItems).values(rowsOut.map((x, k) => ({ ...x.item, orderId: ins[k].id })) as never);
+  });
+
+  // existing orders: refresh header & status; the summary line only while the detailed items have not been imported
+  for (const p of prepared.filter((x) => x.existingId)) {
+    const set: Record<string, unknown> = { ...nonEmpty({ clientPoNo: p.header.clientPoNo, clientPoDate: p.header.clientPoDate, expectedCompletion: p.header.expectedCompletion }),
+      status: p.header.status, sourceData: p.header.sourceData };
+    if (p.summaryOnly) {
+      const { item, totals } = summaryOf(p);
+      Object.assign(set, totals);
+      await tx.update(salesOrderItems).set(item).where(eq(salesOrderItems.orderId, p.existingId!));
+    }
+    await tx.update(salesOrders).set(set as never).where(eq(salesOrders.id, p.existingId!));
+  }
+  return res;
+}
+
 export async function runImport(kind: ImportKind, rows: Record<string, unknown>[], mapping: Record<string, string | null>, opts: ImportOptions, dryRun: boolean): Promise<ImportResult> {
-  const fn = { clients: importClients, contacts: importContacts, items: importItems, sites: importSites }[kind];
+  const fn = { clients: importClients, contacts: importContacts, items: importItems, sites: importSites, orders: importOrders }[kind];
   if (dryRun) return fn(db, rows, mapping, opts, true);
   return db.transaction((tx) => fn(tx, rows, mapping, opts, false));
 }

@@ -361,15 +361,15 @@ test('import: FFH-format client list → clients, vendors, prospects, sites; re-
   assert.ok(String(Buffer.from(csv.data)).includes('Name is empty'));
 });
 
-test('order import: FFH sales-order print → client/site/items matched, new site & items created, duplicate blocked', async () => {
+/** A sales-order print laid out like FFH ERP's export (merged cells, kit sub-lines, labels). */
+async function ffhOrderDoc(soNo: string, cam: { name: string; brand?: string | null }) {
   const ExcelJS = (await import('exceljs')).default;
-  const cam = ctx.cam;
   const wb = new ExcelJS.Workbook();
   wb.addWorksheet('Table 1').addRow(['PROFORMA INVOICE', 'Original Copy']);
   const ws = wb.addWorksheet('Table 2');
   const put = (addr: string, v: unknown, merge?: string) => { ws.getCell(addr).value = v as never; if (merge) ws.mergeCells(merge); };
-  put('A1', 'Seller'); put('C1', 'GSTIN : 27AADCT2237Q1ZW'); put('F1', 'Contact Rohan Mehta'); put('G1', 'SO No:\n261099001'); put('L1', 'SalesOrder No');
-  put('L2', '261099001\nDate                       16/10/2026');
+  put('A1', 'Seller'); put('C1', 'GSTIN : 27AADCT2237Q1ZW'); put('F1', 'Contact Rohan Mehta'); put('G1', `SO No:\n${soNo}`); put('L1', 'SalesOrder No');
+  put('L2', `${soNo}\nDate                       16/10/2026`);
   put('G3', 'PO No: WO/45');
   put('L4', 'Due Amount 1180.00\nDate NA');
   put('A5', 'Billed To', 'A5:D5'); put('E5', 'State: 27'); put('F5', 'Despatched To', 'F5:G5'); put('H5', 'State: 27');
@@ -382,7 +382,12 @@ test('order import: FFH sales-order print → client/site/items matched, new sit
   line(11, 2, 'Pressure Testing Charges', 1);
   put('E14', 'Delivery Remark'); put('E15', 'Deliver to Wing B security cabin');
   wb.addWorksheet('Table 3').addRow(['Digital Document generated on CRM System, Signature authentication not required.']);
-  const buf = Buffer.from(await wb.xlsx.writeBuffer());
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+test('order import: FFH sales-order print → client/site/items matched, new site & items created, duplicate blocked', async () => {
+  const cam = ctx.cam;
+  const buf = await ffhOrderDoc('261099001', cam);
   const file = () => { const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(buf)]), 'ImportedTowersCHS_SalesOrder_261099001_16-10-2026_10-00-00.xlsx'); return fd; };
 
   assert.equal((await call('tech', 'POST', '/order-imports/parse', undefined, file())).status, 403);
@@ -431,4 +436,65 @@ test('order import: FFH sales-order print → client/site/items matched, new sit
   assert.equal(d3.clientCreated, 'Sunrise Heights CHS'); assert.equal(d3.siteCreated, 'Sunrise Heights CHS — Main'); assert.equal(d3.itemsCreated, 0);
   const o3 = await ok('sales', 'GET', `/orders/${d3.orderId}`);
   assert.equal(o3.client.contactName, 'Rohan Mehta'); assert.equal(o3.sourceRef, null, 'second copy carries no source ref');
+});
+
+test('order list import: FFH order list → summary orders matching FFH values; lead converted; detail import fills the order in', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Salesorderlist List');
+  ws.addRow(['Sales Order Id', 'Lead Id', 'So Number', 'Client Name', 'Delivery Address', 'Billing Address', 'Area', 'City', 'State', 'Contact Name', 'Contact Email', 'Mobile', 'Title',
+    'So Owner', 'Created By', 'Po Number', 'Po Date', 'Allocated To', 'Next Actor', 'Delivery Remarks', 'Delivery Status', 'Billing Status', 'Approval Status', 'Installed Status',
+    'Open Date', 'Delivery Date', 'So Value', 'Basic Value']);
+  const row = (id: number, client: string, addr: string | null, title: string, remark: string, dlv: string, bill: string, date: string, value: number, basic: number, po: string | null = null) =>
+    ws.addRow([id, null, null, client, addr, addr ? 'Plot 4, Sector 2, Vashi' : null, null, 'Mumbai', 'Maharashtra', 'Asha Rao', null, null, title, 'Office Admin', 'Office Admin', po, po ? '01/04/2026' : null, 'Komal',
+      'Komal', remark, dlv, bill, 'Approved', 'Not Installed', date, date, value, basic]);
+  row(261099500, 'Imported Towers CHS', 'Wing C, Imported Towers, Sector 2, Vashi', 'Wing C CCTV upgrade', 'Wing C CCTV upgrade', 'Not Delivered', 'Not Billed', '15/10/2026', 11800, 10000, 'WO/77');
+  row(261099501, 'Maybe Corp', null, 'Mixed GST order with a title that FFH cuts at forty chars', 'Mixed GST order with a title that FFH cuts at forty chars — full', 'Part Delivered', 'Part  Billed', '20/03/2026', 11500, 10000);
+  row(261099502, 'Imported Towers CHS', null, 'Done job', 'Done job', 'Delivered', 'Billed', '10/01/2026', 5900, 5000);
+  row(261099503, 'Imported Towers CHS', null, 'Placeholder', '', 'Not Delivered', 'Not Billed', '11/01/2026', 0, 0);
+  const buf = Buffer.from(await wb.xlsx.writeBuffer());
+  const upload = async () => { const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(buf)]), 'Salesorderlist List.xlsx'); return ok('admin', 'POST', '/imports/upload', undefined, fd); };
+
+  const up = await upload();
+  assert.equal(up.kind, 'orders'); assert.equal(up.preset, 'FFH ERP');
+  assert.deepEqual([up.stats.create, up.stats.error], [4, 0]);
+  assert.ok(up.issues.some((i: any) => /is a lead in the ERP/.test(i.message)), 'prospect becomes a client');
+  assert.ok(up.issues.some((i: any) => /mixed GST rates \(overall 15%\)/.test(i.message)));
+  await ok('admin', 'POST', `/imports/${up.id}/commit`);
+
+  const find = async (so: string) => { const l = await ok('sales', 'GET', `/orders?search=${so}`); assert.equal(l.data.length, 1, so); return ok('sales', 'GET', `/orders/${l.data[0].id}`); };
+  const a = await find('261099500');
+  assert.equal(a.total, 11800); assert.equal(a.taxable, 10000); assert.equal(a.clientPoNo, 'WO/77'); assert.equal(a.status, 'OPEN');
+  assert.equal(a.sourceRef, 'FFH:261099500'); assert.equal(a.sourceData.summaryOnly, true); assert.equal(a.items.length, 1);
+  assert.equal(a.site.address, 'Wing C, Imported Towers, Sector 2, Vashi', 'site created from the delivery address');
+  const b = await find('261099501');
+  assert.equal(b.total, 11500, 'mixed-GST order keeps the source value'); assert.equal(b.status, 'IN_PROGRESS');
+  assert.equal(b.sourceData.title, 'Mixed GST order with a title that FFH cuts at forty chars — full');
+  assert.equal(b.client.name, 'Maybe Corp');
+  const lead = (await ok('admin', 'GET', '/leads?search=Maybe Corp')).data[0];
+  assert.equal(lead.status, 'WON'); assert.equal(lead.convertedClientId, b.client.id);
+  const ra = await call('accounts', 'POST', '/invoices/running-bill', { orderId: b.id, lines: [{ orderItemId: b.items[0].id, stage: 'DELIVERY', qty: 1 }] });
+  assert.equal(ra.status, 400); assert.match(ra.data.error, /import the detailed order/);
+  assert.equal((await find('261099502')).status, 'CLOSED');
+  assert.equal((await find('261099503')).total, 0);
+  assert.ok(/^TTS\/SO\/25-26\//.test(b.number), 'numbered in the financial year of its FFH date');
+
+  // re-import: updates, no duplicates
+  const again = await upload();
+  assert.deepEqual([again.stats.create, again.stats.update], [0, 4]);
+
+  // the detailed order fills in the summary order
+  const doc = await ffhOrderDoc('261099500', ctx.cam);
+  const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(doc)]), 'ImportedTowersCHS_SalesOrder_261099500_16-10-2026_10-00-00.xlsx');
+  const p = await ok('sales', 'POST', '/order-imports/parse', undefined, fd);
+  assert.equal(p.duplicate.id, a.id); assert.equal(p.duplicate.summaryOnly, true); assert.equal(p.duplicate.basicValue, 10000);
+  assert.equal(p.clientId, a.client.id); assert.equal(p.siteId, a.site.id, 'client and site come from the order list entry');
+  const lines = p.lines.map((l: any) => ({ ...l, action: l.itemId ? 'match' : 'text', rate: 2500 }));
+  const done = await ok('sales', 'POST', `/order-imports/${p.id}/commit`, { clientId: p.clientId, site: { mode: 'existing', siteId: p.siteId }, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines });
+  assert.equal(done.filledIn, true); assert.equal(done.orderId, a.id); assert.equal(done.number, a.number);
+  const filled = await ok('sales', 'GET', `/orders/${a.id}`);
+  assert.equal(filled.items.length, 4); assert.equal(filled.sourceData.summaryOnly, false); assert.equal(filled.clientPoNo, 'WO/77');
+  // list re-import keeps the imported items
+  await ok('admin', 'POST', `/imports/${(await upload()).id}/commit`);
+  assert.equal((await ok('sales', 'GET', `/orders/${a.id}`)).items.length, 4);
 });

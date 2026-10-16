@@ -348,6 +348,12 @@ export const quotationItems = pgTable('quotation_items', {
   ...lineCols(),
 });
 
+export type SourceData = {
+  system: string; soNumber: string; title?: string | null; owner?: string | null; allocatedTo?: string | null;
+  deliveryStatus?: string | null; billingStatus?: string | null; installedStatus?: string | null; approvalStatus?: string | null;
+  soValue?: number | null; basicValue?: number | null; summaryOnly?: boolean; importedAt?: string;
+};
+
 /** Order form / work order confirmed by the client. */
 export const salesOrders = pgTable('sales_orders', {
   id: id(),
@@ -367,6 +373,8 @@ export const salesOrders = pgTable('sales_orders', {
   notes: text(),
   /** Reference of the document this order was imported from, e.g. "FFH:261016001" — blocks importing it twice */
   sourceRef: text(),
+  /** Details carried over from the source system (FFH title, owner, statuses, values; summaryOnly = lines not imported yet) */
+  sourceData: jsonb().$type<SourceData>(),
   ...totals(),
   createdById: text(),
   createdAt: createdAt(),

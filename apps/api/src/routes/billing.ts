@@ -116,6 +116,7 @@ r.post('/invoices/running-bill', requirePerm('invoices:create'), async (req, res
       const st = l.stages.find((s) => s.stage === w.stage);
       if (!st) throw badRequest(`${l.description}: stage ${w.stage} is not in its payment schedule`);
       if (st.percent === 0) throw badRequest(`${l.description}: ${STAGE_LABEL[w.stage]} is 0% on this order — nothing to bill`);
+      if (![0, 0.25, 3, 5, 12, 18, 28, 40].includes(Number(l.gstRate))) throw badRequest(`${l.description}: GST ${l.gstRate}% is an overall rate carried over from the old ERP (items with different GST rates) — import the detailed order (Order Forms → Import from file) before billing`);
       const k = `${w.orderItemId}|${w.stage}`;
       const already = used.get(k) ?? 0;
       if (w.qty + already > st.billableQty + 1e-9) {

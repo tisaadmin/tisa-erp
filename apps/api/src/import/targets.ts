@@ -2,7 +2,7 @@
  * Import target definitions: what each import type can contain, how source columns are auto-matched,
  * and presets for known source systems (FFH ERP).
  */
-export type ImportKind = 'clients' | 'contacts' | 'items' | 'sites';
+export type ImportKind = 'clients' | 'contacts' | 'items' | 'sites' | 'orders';
 export type Target = { key: string; label: string; required?: boolean; synonyms: string[]; hint?: string };
 
 export const TARGETS: Record<ImportKind, Target[]> = {
@@ -79,6 +79,32 @@ export const TARGETS: Record<ImportKind, Target[]> = {
     { key: 'latitude', label: 'Latitude', synonyms: ['latitude', 'lat'] },
     { key: 'longitude', label: 'Longitude', synonyms: ['longitude', 'lng', 'long', 'lon'] },
   ],
+  orders: [
+    { key: 'externalRef', label: 'Order no. (source)', required: true, synonyms: ['salesorderid', 'sonumber', 'sono', 'orderno', 'ordernumber', 'orderid'], hint: 'Kept on the order and used to match on re-import and when the detailed order is imported' },
+    { key: 'clientName', label: 'Client name', required: true, synonyms: ['clientname', 'customername', 'companyname', 'partyname', 'client', 'customer'] },
+    { key: 'date', label: 'Order date', required: true, synonyms: ['opendate', 'sodate', 'orderdate', 'date'] },
+    { key: 'title', label: 'Title / project', synonyms: ['title', 'subject', 'project', 'projectname', 'description'] },
+    { key: 'deliveryAddress', label: 'Delivery / site address', synonyms: ['deliveryaddress', 'siteaddress', 'shiptoaddress', 'despatchaddress', 'dispatchaddress'] },
+    { key: 'billingAddress', label: 'Billing address', synonyms: ['billingaddress', 'billtoaddress'] },
+    { key: 'area', label: 'Area', synonyms: ['area', 'locality'] },
+    { key: 'city', label: 'City', synonyms: ['city'] },
+    { key: 'state', label: 'State', synonyms: ['state', 'statename'] },
+    { key: 'contactName', label: 'Contact name', synonyms: ['contactname', 'contactperson', 'contact'] },
+    { key: 'email', label: 'Contact email', synonyms: ['contactemail', 'email', 'emailid'] },
+    { key: 'phone', label: 'Mobile / phone', synonyms: ['mobile', 'mobileno', 'phone', 'contactno'] },
+    { key: 'poNo', label: 'Client PO no.', synonyms: ['ponumber', 'pono', 'clientpo', 'clientpono'] },
+    { key: 'poDate', label: 'Client PO date', synonyms: ['podate', 'clientpodate'] },
+    { key: 'dueDate', label: 'Delivery / target date', synonyms: ['deliverydate', 'targetdate', 'completiondate', 'duedate'] },
+    { key: 'remark', label: 'Delivery remarks', synonyms: ['deliveryremarks', 'remarks', 'remark', 'notes'] },
+    { key: 'total', label: 'Order value (incl. GST)', synonyms: ['sovalue', 'ordervalue', 'totalvalue', 'grandtotal', 'total'] },
+    { key: 'basic', label: 'Basic value (before GST)', synonyms: ['basicvalue', 'taxablevalue', 'basicamount', 'subtotal'] },
+    { key: 'deliveryStatus', label: 'Delivery status', synonyms: ['deliverystatus'] },
+    { key: 'billingStatus', label: 'Billing status', synonyms: ['billingstatus'] },
+    { key: 'installedStatus', label: 'Installed status', synonyms: ['installedstatus', 'installationstatus'] },
+    { key: 'approvalStatus', label: 'Approval status', synonyms: ['approvalstatus'] },
+    { key: 'owner', label: 'Order owner', synonyms: ['soowner', 'owner', 'salesperson'] },
+    { key: 'allocatedTo', label: 'Allocated to', synonyms: ['allocatedto', 'assignedto'] },
+  ],
 };
 
 export const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -104,6 +130,14 @@ const FFH: Record<ImportKind, { signature: string[]; map: Record<string, string>
       'Sales Current Stock': 'stock', Stockalertqty: 'reorderLevel', 'Product Location': 'location', Status: 'status' },
   },
   sites: { signature: ['__none__'], map: {} },
+  orders: {
+    signature: ['Sales Order Id', 'Client Name', 'So Value', 'Basic Value'],
+    map: { 'Sales Order Id': 'externalRef', 'Client Name': 'clientName', 'Open Date': 'date', Title: 'title', 'Delivery Address': 'deliveryAddress',
+      'Billing Address': 'billingAddress', Area: 'area', City: 'city', State: 'state', 'Contact Name': 'contactName', 'Contact Email': 'email', Mobile: 'phone',
+      'Po Number': 'poNo', 'Po Date': 'poDate', 'Delivery Date': 'dueDate', 'Delivery Remarks': 'remark', 'So Value': 'total', 'Basic Value': 'basic',
+      'Delivery Status': 'deliveryStatus', 'Billing Status': 'billingStatus', 'Installed Status': 'installedStatus', 'Approval Status': 'approvalStatus',
+      'So Owner': 'owner', 'Allocated To': 'allocatedTo' },
+  },
 };
 
 /** Guess the import type and preset from the headers. */
@@ -113,6 +147,7 @@ export function detect(headers: string[]): { kind: ImportKind | null; preset: st
     if (FFH[kind].signature.every((h) => set.has(h))) return { kind, preset: 'FFH ERP' };
   }
   const n = new Set(headers.map(norm));
+  if (n.has('sovalue') || (n.has('clientname') && (n.has('orderdate') || n.has('opendate') || n.has('sodate')))) return { kind: 'orders', preset: null };
   if (n.has('sitename')) return { kind: 'sites', preset: null };
   if (['productname', 'itemname', 'hsn', 'hsncode', 'sku'].some((h) => n.has(h))) return { kind: 'items', preset: null };
   if (n.has('contactname') && (n.has('companyname') || n.has('clientname'))) return { kind: 'contacts', preset: null };
