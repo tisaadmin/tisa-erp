@@ -8,23 +8,32 @@ import { inArray, isNotNull } from 'drizzle-orm';
 import { db, type DbOrTx } from '../db';
 import {
   clients, deliveryChallanItems, deliveryChallans, goodsReceiptItems, goodsReceipts, items, purchaseOrderItems, purchaseOrders,
-  salesOrderItems, salesOrders, vendors,
+  salesOrderItems, salesOrders, sites, vendors, type SourceData,
 } from '../db/schema';
 import { calcTotals, INDIAN_STATES } from '../lib/gst';
-import { reserveCodes } from '../lib/numbering';
+import { reserveCodes, reserveNumbers } from '../lib/numbering';
 import { getCompany } from '../services/company';
 import { UNIT_MAP } from './engine';
 
 /** [name, part, uom, hsn, qty, rate, disc, final, remarks, receivedMaterial, mircvd, qtyRcvd, billQty, tax1, tax2, tax3, serial] */
 export type HLine = (string | number | null)[];
 type Doc = { id: string; date: string | null; lines: HLine[]; remark?: string | null; status?: string | null; amount?: number | null };
+export type HOrder = {
+  id: string; date: string | null; clientRef: string | null; clientName: string | null; contactName?: string | null; title?: string | null; remark?: string | null;
+  address?: string | null; deliveryDate?: string | null; deliveryStatus?: string | null; billingStatus?: string | null; installedStatus?: string | null;
+  approval?: string | null; owner?: string | null; allocatedTo?: string | null; value?: number | null; basic?: number | null;
+  /** [name, part, uom, qty, rate, disc, final, remarks, billQty, deliveredQty, poQty] */
+  lines: (string | number | null)[][];
+};
 export type HistoryFile = {
+  /** sales orders not in the ERP yet (e.g. closed ones that were not in FFH's open order list) */
+  orders?: HOrder[];
   pos: (Doc & { no: string; vendorRef: string | null; vendorName: string | null; soId: string | null })[];
   mis: (Doc & { poId: string | null; poNo: string | null; vendorRef: string | null; vendorName: string | null; soId: string | null })[];
   mos: (Doc & { no: string | null; soId: string | null; clientRef: string | null; clientName: string | null; transport?: string | null })[];
 };
 export type HistoryResult = {
-  stats: Record<'po' | 'grn' | 'dc', { create: number; skip: number; error: number }> & { vendorsCreated: number; lines: number; linkedLines: number };
+  stats: Record<'order' | 'po' | 'grn' | 'dc', { create: number; skip: number; error: number }> & { vendorsCreated: number; lines: number; linkedLines: number };
   issues: { doc: string; message: string }[];
 };
 
@@ -40,11 +49,13 @@ const cleanName = (s: unknown) => String(s ?? '').split('^')[0].replace(/\s+/g, 
 
 export async function runFfhHistory(data: HistoryFile, dryRun: boolean): Promise<HistoryResult> {
   const res: HistoryResult = {
-    stats: { po: { create: 0, skip: 0, error: 0 }, grn: { create: 0, skip: 0, error: 0 }, dc: { create: 0, skip: 0, error: 0 }, vendorsCreated: 0, lines: 0, linkedLines: 0 },
+    stats: { order: { create: 0, skip: 0, error: 0 }, po: { create: 0, skip: 0, error: 0 }, grn: { create: 0, skip: 0, error: 0 }, dc: { create: 0, skip: 0, error: 0 }, vendorsCreated: 0, lines: 0, linkedLines: 0 },
     issues: [],
   };
   const issue = (doc: string, message: string) => res.issues.push({ doc, message });
   const company = await getCompany();
+  // sales orders first (written straight away on a real run, so POs and challans below can link to them)
+  const plannedSo = await importOrders(data.orders ?? [], dryRun, res, issue);
 
   // ── lookups ──
   const [itemRows, vendorRows, clientRows, orderRows, existingPo, existingGrn, existingDc] = await Promise.all([
@@ -116,7 +127,7 @@ export async function runFfhHistory(data: HistoryFile, dryRun: boolean): Promise
     const lines = (p.lines ?? []).map(poLine).filter((l) => l.qty > 0);
     if (!lines.length) { res.stats.po.error++; issue(p.no || p.id, 'PO has no item lines with a quantity'); continue; }
     const order = p.soId ? orderBySo.get(p.soId) : undefined;
-    if (p.soId && !order) issue(p.no || p.id, `Linked SO ${p.soId} is not in the ERP — PO imported without the order link`);
+    if (p.soId && !order && !plannedSo.has(p.soId)) issue(p.no || p.id, `Linked SO ${p.soId} is not in the ERP — PO imported without the order link`);
     planPos.push({ ref, no: p.no, date, vendorKey: v.key, inter: !!v.stateCode && v.stateCode !== company.stateCode, orderId: order?.id ?? null, remark: p.remark ?? null, status: p.status ?? null, lines, ffhId: p.id });
     res.stats.po.create++;
   }
@@ -126,7 +137,10 @@ export async function runFfhHistory(data: HistoryFile, dryRun: boolean): Promise
   const existingPoByRef = new Map<string, string>(); // filled after PO insert / for already-imported POs
   type PlanGrn = { ref: string; no: string; date: Date; ffhPoId: string; vendorKey: string | null; remark: string | null; lines: { name: string; part: string | null; qty: number; itemId: string | null }[] };
   const planGrns: PlanGrn[] = [];
-  for (const m of data.mis ?? []) {
+  // FFH sometimes leaves the PO id blank on an inward but keeps the PO number
+  const poIdByNo = new Map((data.pos ?? []).map((p) => [norm(p.no), p.id]));
+  for (const m0 of data.mis ?? []) {
+    const m = { ...m0, poId: m0.poId || (m0.poNo ? poIdByNo.get(norm(m0.poNo)) ?? null : null) };
     const ref = `FFH:MI:${m.id}`;
     const label = `Inward ${m.poNo ?? m.id}`;
     if (doneRefs.has(ref)) { res.stats.grn.skip++; continue; }
@@ -167,7 +181,7 @@ export async function runFfhHistory(data: HistoryFile, dryRun: boolean): Promise
     if (!lines.length) { res.stats.dc.error++; issue(label, 'No item lines with a quantity'); continue; }
     const st = (m.status ?? '').toLowerCase();
     const type = /returnable|stand by/.test(st) ? 'RETURNABLE' : /rej out|repair/.test(st) ? 'JOB_WORK' : 'SUPPLY';
-    if (m.soId && !order) issue(label, `Linked SO ${m.soId} is not in the ERP — challan imported without the order link`);
+    if (m.soId && !order && !plannedSo.has(m.soId)) issue(label, `Linked SO ${m.soId} is not in the ERP — challan imported without the order link`);
     planDcs.push({ ref, no: m.no ?? '', date, type, orderId: order?.id ?? null, clientKey, siteId: order?.siteId ?? null, transport: m.transport ?? null, remark: m.remark ?? null, status: m.status ?? '', lines });
     res.stats.dc.create++;
   }
@@ -257,6 +271,92 @@ export async function runFfhHistory(data: HistoryFile, dryRun: boolean): Promise
     }
   });
   return res;
+}
+
+// ════════ sales orders that are not in the ERP yet (closed in FFH) ════════
+
+async function importOrders(orders: HOrder[], dryRun: boolean, res: HistoryResult, issue: (doc: string, message: string) => void): Promise<Set<string>> {
+  const planned = new Set<string>();
+  if (!orders.length) return planned;
+  const company = await getCompany();
+  const [existing, itemRows, clientRows, siteRows] = await Promise.all([
+    db.select({ sourceRef: salesOrders.sourceRef }).from(salesOrders).where(isNotNull(salesOrders.sourceRef)),
+    db.select({ id: items.id, name: items.name, model: items.model, gstRate: items.gstRate, unit: items.unit, hsnSac: items.hsnSac }).from(items),
+    db.select({ id: clients.id, name: clients.name, externalRef: clients.externalRef, stateCode: clients.stateCode }).from(clients),
+    db.select({ id: sites.id, clientId: sites.clientId, name: sites.name }).from(sites),
+  ]);
+  const have = new Set(existing.map((x) => x.sourceRef));
+  const itemByName = new Map(itemRows.map((i) => [norm(i.name), i]));
+  const itemByModel = new Map(itemRows.filter((i) => i.model && norm(i.model).length >= 4).map((i) => [norm(i.model), i]));
+  const clientByRef = new Map(clientRows.filter((c) => c.externalRef).map((c) => [c.externalRef!, c]));
+  const clientByName = new Map(clientRows.map((c) => [norm(c.name), c]));
+  const mainSite = (clientId: string) => { const ss = siteRows.filter((x) => x.clientId === clientId); return ss.find((x) => /—\s*main$/i.test(x.name)) ?? ss[0] ?? null; };
+  const isoDate = (s: string | null | undefined) => {
+    const v = String(s ?? '');
+    if (/^\d{4}-\d{2}-\d{2}/.test(v)) return new Date(`${v.slice(0, 10)}T12:00:00+05:30`);
+    return dateOf(v);
+  };
+  type Plan = { o: HOrder; date: Date; client: { id?: string; key: string; stateCode: string | null }; lines: { itemId: string | null; description: string; hsnSac: string | null; unit: string; qty: number; rate: number; discountPct: number; gstRate: number; delivered: number }[] };
+  const plans: Plan[] = [];
+  const newClients = new Map<string, { name: string; ref: string | null }>();
+  for (const o of orders) {
+    const label = `SO ${o.id}`;
+    if (have.has(`FFH:${o.id}`)) { res.stats.order.skip++; continue; }
+    if (/deleted/i.test(o.deliveryStatus ?? '')) { res.stats.order.skip++; continue; }
+    const date = isoDate(o.date);
+    if (!date) { res.stats.order.error++; issue(label, 'Order date missing'); continue; }
+    const c = (o.clientRef && clientByRef.get(o.clientRef)) || clientByName.get(norm(o.clientName));
+    let client: Plan['client'];
+    if (c) client = { id: c.id, key: c.id, stateCode: c.stateCode };
+    else if (o.clientName) { const key = `new:${o.clientRef ?? norm(o.clientName)}`; newClients.set(key, { name: o.clientName, ref: o.clientRef }); client = { key, stateCode: null }; }
+    else { res.stats.order.error++; issue(label, 'Client missing'); continue; }
+    const lines = (o.lines ?? []).map((l) => {
+      const it = itemByName.get(norm(cleanName(l[0]))) ?? (norm(l[1]).length >= 4 ? itemByModel.get(norm(l[1])) : undefined) ?? null;
+      const qty = num(l[3]);
+      return { itemId: it?.id ?? null, description: cleanName(l[0]) || 'Item', hsnSac: it?.hsnSac ?? null, unit: unitOf(l[2]), qty, rate: num(l[4]), discountPct: num(l[5]), gstRate: it?.gstRate ?? 18, delivered: Math.min(num(l[9]), qty) };
+    }).filter((l) => l.qty > 0);
+    if (!lines.length) { res.stats.order.error++; issue(label, 'No item lines with a quantity in FFH'); continue; }
+    plans.push({ o, date, client, lines });
+    planned.add(o.id);
+    res.stats.order.create++;
+  }
+  if (dryRun || !plans.length) return planned;
+
+  await db.transaction(async (tx) => {
+    const cIds = new Map<string, string>();
+    const nc = [...newClients.entries()];
+    const codes = await reserveCodes(tx, 'CLIENT', 'CL', nc.length);
+    for (const [k, [key, c]] of nc.entries()) {
+      const [row] = await tx.insert(clients).values({ code: codes[k], name: c.name, externalRef: c.ref, notes: 'Created by the FFH history import' }).returning({ id: clients.id });
+      cIds.set(key, row.id);
+    }
+    const sorted = [...plans].sort((a, b) => a.date.getTime() - b.date.getTime());
+    const numbers = await reserveNumbers(tx, 'ORDER', sorted.map((p) => p.date));
+    for (const [k, p] of sorted.entries()) {
+      const clientId = p.client.id ?? cIds.get(p.client.key)!;
+      const site = mainSite(clientId);
+      const inter = !!p.client.stateCode && p.client.stateCode !== company.stateCode;
+      const calc = calcTotals(p.lines, inter);
+      const d = (p.o.deliveryStatus ?? '').toLowerCase(), b = (p.o.billingStatus ?? '').toLowerCase().replace(/\s+/g, ' ');
+      const status = b === 'billed' ? 'CLOSED' : d.startsWith('part') || d === 'delivered' || b.startsWith('part') ? 'IN_PROGRESS' : 'OPEN';
+      const sourceData: SourceData = {
+        system: 'FFH', soNumber: p.o.id, title: p.o.title ?? null, owner: p.o.owner ?? null, allocatedTo: p.o.allocatedTo ?? null, deliveryStatus: p.o.deliveryStatus ?? null,
+        billingStatus: p.o.billingStatus ?? null, installedStatus: p.o.installedStatus ?? null, approvalStatus: p.o.approval ?? null, soValue: p.o.value ?? null,
+        basicValue: p.o.basic ?? null, summaryOnly: false, importedAt: new Date().toISOString(),
+      };
+      const [order] = await tx.insert(salesOrders).values({
+        number: numbers[k], date: p.date, clientId, siteId: site?.id ?? null, placeOfSupply: p.client.stateCode ?? company.stateCode, status,
+        paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], expectedCompletion: dateOf(p.o.deliveryDate ?? null), sourceRef: `FFH:${p.o.id}`, sourceData,
+        notes: [`Imported from FFH (SO ${p.o.id}; not in FFH's open order list).`, p.o.title ? `Title: ${p.o.title}` : null, p.o.contactName ? `Contact: ${p.o.contactName}` : null].filter(Boolean).join('\n'),
+        ...calc.totals,
+      }).returning({ id: salesOrders.id });
+      await tx.insert(salesOrderItems).values(p.lines.map((l, i) => ({
+        orderId: order.id, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate,
+        taxable: calc.lines[i].taxable, taxAmount: calc.lines[i].taxAmount, amount: calc.lines[i].amount, sortOrder: i, deliveredQty: l.delivered,
+      })));
+    }
+  });
+  return planned;
 }
 
 export const historyFileOk = (d: unknown): d is HistoryFile => !!d && typeof d === 'object' && Array.isArray((d as HistoryFile).pos) && Array.isArray((d as HistoryFile).mis) && Array.isArray((d as HistoryFile).mos);

@@ -388,7 +388,7 @@ export function WorkflowPage() {
 
 // ═══════════════════════ FFH purchase / inward / outward history ═══════════════════════
 
-type HistResult = { id: string; fileName: string; stats: { po: { create: number; skip: number; error: number }; grn: { create: number; skip: number; error: number }; dc: { create: number; skip: number; error: number }; vendorsCreated: number; lines: number; linkedLines: number }; issues: { doc: string; message: string }[] };
+type HistResult = { id: string; fileName: string; stats: { order: { create: number; skip: number; error: number }; po: { create: number; skip: number; error: number }; grn: { create: number; skip: number; error: number }; dc: { create: number; skip: number; error: number }; vendorsCreated: number; lines: number; linkedLines: number }; issues: { doc: string; message: string }[] };
 
 function FfhHistoryCard() {
   const [file, setFile] = useState<File | null>(null);
@@ -417,8 +417,8 @@ function FfhHistoryCard() {
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <input type="file" accept=".json,application/json" className="input max-w-md file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-sm" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setR(null); setDone(false); }} />
         <Button disabled={!file} loading={busy && !r} onClick={check}>Check file</Button>
-        {r && !done && <Button variant="primary" loading={busy} disabled={r.stats.po.create + r.stats.grn.create + r.stats.dc.create === 0} onClick={commit}>
-          Import {r.stats.po.create} POs, {r.stats.grn.create} GRNs, {r.stats.dc.create} challans</Button>}
+        {r && !done && <Button variant="primary" loading={busy} disabled={r.stats.order.create + r.stats.po.create + r.stats.grn.create + r.stats.dc.create === 0} onClick={commit}>
+          Import {r.stats.order.create ? `${r.stats.order.create} orders, ` : ''}{r.stats.po.create} POs, {r.stats.grn.create} GRNs, {r.stats.dc.create} challans</Button>}
         {done && <Badge t="green">Imported</Badge>}
       </div>
       {r && (
@@ -426,7 +426,7 @@ function FfhHistoryCard() {
           <table className="tbl">
             <thead><tr><th /><th className="text-right">{done ? 'Imported' : 'Will import'}</th><th className="text-right">Already in</th><th className="text-right">Not imported</th></tr></thead>
             <tbody>
-              {row('Purchase orders (closed)', r.stats.po)}{row('Material inward → GRNs', r.stats.grn)}{row('Material outward → challans', r.stats.dc)}
+              {row('Sales orders not in the ERP yet (closed in FFH)', r.stats.order)}{row('Purchase orders (closed)', r.stats.po)}{row('Material inward → GRNs', r.stats.grn)}{row('Material outward → challans', r.stats.dc)}
             </tbody>
           </table>
           <div className="text-sm text-slate-600">
