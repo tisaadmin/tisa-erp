@@ -189,6 +189,7 @@ r.use('/leads', crudRouter({
 // ───────── AMC contracts ─────────
 const amcSchema = z.object({
   clientId: z.string(), siteId: z.string(), type: z.enum(['COMPREHENSIVE', 'NON_COMPREHENSIVE']).default('NON_COMPREHENSIVE'),
+  kind: z.enum(['AMC', 'WARRANTY']).default('AMC'),
   systems: z.array(z.string()).default([]), startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   value: z.coerce.number().min(0), visitsPerYear: z.coerce.number().int().min(0).default(4),
   billingCycle: z.enum(['MONTHLY', 'QUARTERLY', 'HALF_YEARLY', 'YEARLY']).default('YEARLY'),
@@ -198,7 +199,7 @@ const amcSchema = z.object({
 r.use('/amc', crudRouter({
   queryKey: 'amcContracts', table: amcContracts, perm: 'amc', entity: 'amc',
   createSchema: amcSchema,
-  searchCols: [amcContracts.number], filters: { clientId: amcContracts.clientId, siteId: amcContracts.siteId, status: amcContracts.status },
+  searchCols: [amcContracts.number], filters: { clientId: amcContracts.clientId, siteId: amcContracts.siteId, status: amcContracts.status, kind: amcContracts.kind },
   with: { client: { columns: { id: true, name: true } }, site: { columns: { id: true, name: true } } },
   beforeCreate: async (d, tx) => {
     const site = await tx.query.sites.findFirst({ where: eq(sites.id, d.siteId) });

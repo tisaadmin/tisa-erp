@@ -32,7 +32,7 @@ export function tone(status?: string | null): 'gray' | 'blue' | 'green' | 'amber
     case 'ISSUED': case 'SENT': case 'OPEN': case 'ASSIGNED': case 'IN_PROGRESS': case 'DISPATCHED': case 'SUBMITTED': case 'CONTACTED': case 'QUOTED':
     case 'SITE_SURVEY': case 'NEGOTIATION':
       return 'blue';
-    case 'PENDING_APPROVAL': case 'PENDING': case 'PARTIALLY_PAID': case 'PARTIALLY_RECEIVED': case 'ON_HOLD': case 'LATE': case 'HALF_DAY': case 'SENT_BACK':
+    case 'PENDING_APPROVAL': case 'PENDING': case 'UNPAID': case 'PARTIALLY_PAID': case 'PARTIALLY_RECEIVED': case 'ON_HOLD': case 'LATE': case 'HALF_DAY': case 'SENT_BACK':
     case 'HIGH': case 'PARTIAL': case 'MEDIUM':
       return 'amber';
     case 'CANCELLED': case 'REJECTED': case 'LOST': case 'ABSENT': case 'CRITICAL': case 'EXPIRED': case 'OVERDUE':

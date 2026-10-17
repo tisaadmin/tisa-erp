@@ -11,6 +11,7 @@ import { runImport, type ImportOptions, type ImportResult } from '../import/engi
 import { readSheet } from '../import/parse';
 import { autoMap, detect, TARGETS, type ImportKind } from '../import/targets';
 import { historyFileOk, runFfhHistory, type HistoryFile } from '../import/ffhHistory';
+import { billsFileOk, runFfhBills, type BillsFile } from '../import/ffhBills';
 
 const r = Router();
 const KINDS = ['clients', 'contacts', 'items', 'sites', 'orders'] as const;
@@ -36,23 +37,24 @@ r.get('/imports/targets', perm, (_req, res) => res.json(TARGETS));
 const jsonUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024, files: 1 } });
 
 r.post('/imports/ffh-history', perm, jsonUpload.single('file'), async (req, res) => {
-  if (!req.file) throw badRequest('Choose the FFH history file (.json)');
+  if (!req.file) throw badRequest('Choose the FFH export file (.json)');
   let data: unknown;
-  try { data = JSON.parse(req.file.buffer.toString('utf8')); } catch { throw badRequest('This is not a valid history file (JSON)'); }
-  if (!historyFileOk(data)) throw badRequest('This file does not contain FFH purchase orders, inwards and outwards');
+  try { data = JSON.parse(req.file.buffer.toString('utf8')); } catch { throw badRequest('This is not a valid FFH export file (JSON)'); }
+  const kind = billsFileOk(data) ? 'ffh-bills' : historyFileOk(data) ? 'ffh-history' : null;
+  if (!kind) throw badRequest('This file is not an FFH export this page knows (history of POs / inwards / outwards, or vendor bills & AMCs)');
   const [job] = await db.insert(importJobs).values({
-    kind: 'ffh-history', preset: 'FFH ERP', fileName: req.file.originalname, headers: [], mapping: {}, options: {},
+    kind, preset: 'FFH ERP', fileName: req.file.originalname, headers: [], mapping: {}, options: {},
     rows: [data as unknown as Record<string, unknown>], createdById: req.user.id,
   }).returning();
-  const result = await runFfhHistory(data, true);
-  res.status(201).json({ id: job.id, fileName: job.fileName, ...result });
+  const result = kind === 'ffh-bills' ? await runFfhBills(data as BillsFile, true) : await runFfhHistory(data as HistoryFile, true);
+  res.status(201).json({ id: job.id, kind, fileName: job.fileName, ...result });
 });
 
 // runs in the background (the live database is far away; a big history file takes a while) — the page polls the job
 const runningHistory = new Set<string>();
 r.post('/imports/ffh-history/:id/commit', perm, async (req, res) => {
   const job = await db.query.importJobs.findFirst({ where: eq(importJobs.id, req.params.id) });
-  if (!job || job.kind !== 'ffh-history') throw notFound('History import');
+  if (!job || !['ffh-history', 'ffh-bills'].includes(job.kind)) throw notFound('FFH import');
   if (job.status === 'DONE') throw badRequest('This file has already been imported — upload it again to import anything new');
   if (runningHistory.has(job.id) || runningHistory.size) throw badRequest('A history import is already running — wait for it to finish');
   runningHistory.add(job.id);
@@ -61,9 +63,10 @@ r.post('/imports/ffh-history/:id/commit', perm, async (req, res) => {
   const started = Date.now();
   void (async () => {
     try {
-      const result = await runFfhHistory(job.rows[0] as unknown as HistoryFile, false, (step) => { void setState('RUNNING', { step, seconds: Math.round((Date.now() - started) / 1000) }); });
+      const onStep = (step: string) => { void setState('RUNNING', { step, seconds: Math.round((Date.now() - started) / 1000) }); };
+      const result = job.kind === 'ffh-bills' ? await runFfhBills(job.rows[0] as unknown as BillsFile, false, onStep) : await runFfhHistory(job.rows[0] as unknown as HistoryFile, false, onStep);
       await setState('DONE', { ...result.stats, issues: result.issues, seconds: Math.round((Date.now() - started) / 1000) } as Record<string, unknown>);
-      audit(req, 'import', 'ffh-history', job.id, { stats: result.stats });
+      audit(req, 'import', job.kind, job.id, { stats: result.stats });
     } catch (e) {
       await setState('FAILED', { error: (e as Error).message });
     } finally { runningHistory.delete(job.id); }
@@ -73,7 +76,7 @@ r.post('/imports/ffh-history/:id/commit', perm, async (req, res) => {
 
 r.get('/imports/ffh-history/:id/status', perm, async (req, res) => {
   const job = await db.query.importJobs.findFirst({ where: eq(importJobs.id, req.params.id), columns: { id: true, status: true, summary: true, fileName: true } });
-  if (!job) throw notFound('History import');
+  if (!job) throw notFound('FFH import');
   res.json(job);
 });
 

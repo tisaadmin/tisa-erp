@@ -127,6 +127,7 @@ export function PoDetail() {
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/purchase-orders/${po.id}/pdf`)}>PDF</Button>
           {['DRAFT', 'PENDING_APPROVAL'].includes(po.status) && can('purchase_orders:edit') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit</Button></Link>}
           {(PO_ACTIONS[po.status] ?? []).filter((x) => can(x.perm)).map((x) => <Button key={x.a} variant={x.variant} loading={act.isPending} onClick={() => act.mutate(x.a)}>{x.label}</Button>)}
+          {can('vendor_bills:create') && !['DRAFT', 'PENDING_APPROVAL', 'CANCELLED'].includes(po.status) && <Link to={`/vendor-bills/new?poId=${po.id}`}><Button>Enter vendor bill</Button></Link>}
           {canReceive && <Button variant="primary" icon={<PackageCheck className="size-4" />} onClick={() => setGrn({ vendorInvoiceNo: '', vendorInvoiceDate: '', notes: '', lines: Object.fromEntries(po.items.map((l: any) => [l.id, { received: Math.max(0, l.qty - l.receivedQty), rejected: 0, serialNos: '' }])) })}>Receive goods (GRN)</Button>}
         </>} />
       <Card><KV cols={4} items={[['Date', fmtDate(po.date)], ['Expected', fmtDate(po.expectedDate)], ['Against order', po.salesOrder ? <Link className="text-brand-700" to={`/orders/${po.salesOrder.id}`}>{po.salesOrder.number}</Link> : null], ['Deliver to', po.deliverToSite?.name ?? 'Store'], ['Tax', po.isInterState ? 'IGST' : 'CGST + SGST']]} /></Card>

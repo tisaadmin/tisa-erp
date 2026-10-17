@@ -11,6 +11,7 @@ import { OrderBulkImportPage } from './pages/OrderBulkImport';
 import { CleanupPage } from './pages/Cleanup';
 import { AccessorySheetDetail, AccessorySheetsPage, AccessoryTemplatesPage } from './pages/Accessories';
 import { GrnDetail, GrnsPage, PoDetail, PoEditor, PurchaseOrdersPage } from './pages/Purchase';
+import { VendorBillDetail, VendorBillEditor, VendorBillsPage } from './pages/VendorBills';
 import { InvoiceDetail, InvoiceEditor, InvoicesPage, ReceivablesPage } from './pages/Billing';
 import { NewTicket, ServiceReportDetail, ServiceReportsPage, SitePhotosPage, TicketDetail, TicketsPage } from './pages/Service';
 import { AttendancePage, ExpenseDetail, ExpenseEditor, ExpensesPage, RequisitionDetail, RequisitionsPage } from './pages/Field';
@@ -50,6 +51,10 @@ export default function App() {
         <Route path="purchase-orders/:id" element={<PoDetail />} />
         <Route path="purchase-orders/:id/edit" element={<PoEditor />} />
         <Route path="grns" element={<GrnsPage />} />
+        <Route path="vendor-bills" element={<VendorBillsPage />} />
+        <Route path="vendor-bills/new" element={<VendorBillEditor />} />
+        <Route path="vendor-bills/:id" element={<VendorBillDetail />} />
+        <Route path="vendor-bills/:id/edit" element={<VendorBillEditor />} />
         <Route path="grns/:id" element={<GrnDetail />} />
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="vendors" element={<VendorsPage />} />

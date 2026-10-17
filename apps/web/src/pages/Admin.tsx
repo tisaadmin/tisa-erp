@@ -6,7 +6,7 @@ import { Link } from 'react-router-dom';
 import { Badge, Button, Card, Field, Input, PageHeader, Spinner, Stat, Table, Tabs, cx } from '../components/ui';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { label } from '../lib/format';
+import { inr, label } from '../lib/format';
 import { useAction, useGet } from '../lib/hooks';
 import { stateOpts } from './Masters';
 
@@ -194,6 +194,7 @@ type Job = {
   rows: { row: number; action: string; entity: string; label: string; detail?: string }[]; issues: { row: number; level: string; message: string }[]; issuesTruncated: boolean;
 };
 const KIND_LABEL: Record<string, string> = { clients: 'Clients, vendors & prospects', contacts: 'Contact persons', items: 'Inventory items', sites: 'Sites', orders: 'Sales order list' };
+const JOB_LABEL: Record<string, string> = { 'ffh-history': 'FFH POs, inward & outward', 'ffh-bills': 'FFH vendor bills & AMCs', order: 'Sales order file' };
 const ENTITY_LABEL: Record<string, string> = { client: 'clients', vendor: 'vendors', lead: 'prospects (leads)', site: 'sites', item: 'items', system: 'systems', stock: 'opening stock entries', contact: 'contacts', order: 'orders' };
 const OPTION_LABEL: Record<string, Record<string, string>> = {
   clients: { createSites: 'Create a "Main" site for each new client from its address', updateExisting: 'Update records that already exist (matched by source ID, GSTIN or name)' },
@@ -335,9 +336,9 @@ export function ImportPage() {
         <Card title="Recent imports" pad={false}>
           <Table rows={recent.data} cols={[
             { key: 'createdAt', label: 'When', render: (r: any) => new Date(r.createdAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) },
-            { key: 'fileName', label: 'File' }, { key: 'kind', label: 'Type', render: (r: any) => KIND_LABEL[r.kind] ?? r.kind },
+            { key: 'fileName', label: 'File' }, { key: 'kind', label: 'Type', render: (r: any) => KIND_LABEL[r.kind] ?? JOB_LABEL[r.kind] ?? r.kind },
             { key: 'status', label: 'Status', render: (r: any) => <Badge t={r.status === 'DONE' ? 'green' : 'gray'}>{r.status === 'DONE' ? 'Imported' : 'Previewed only'}</Badge> },
-            { key: 'summary', label: 'Result', render: (r: any) => (r.summary ? `${r.summary.create} created · ${r.summary.update} updated · ${r.summary.error} errors` : '—') },
+            { key: 'summary', label: 'Result', render: (r: any) => importResult(r) },
           ]} />
         </Card>
       )}
@@ -388,7 +389,22 @@ export function WorkflowPage() {
 
 // ═══════════════════════ FFH purchase / inward / outward history ═══════════════════════
 
-type HistResult = { id: string; fileName: string; stats: { order: { create: number; skip: number; error: number }; po: { create: number; skip: number; error: number }; grn: { create: number; skip: number; error: number }; dc: { create: number; skip: number; error: number }; vendorsCreated: number; lines: number; linkedLines: number }; issues: { doc: string; message: string }[] };
+type HistResult = { id: string; kind?: string; fileName: string; stats: { order: { create: number; skip: number; error: number }; po: { create: number; skip: number; error: number }; grn: { create: number; skip: number; error: number }; dc: { create: number; skip: number; error: number }; vendorsCreated: number; lines: number; linkedLines: number }; issues: { doc: string; message: string }[] };
+
+/** One-line result for the recent-imports list (sheet imports, FFH history, FFH bills & AMCs, single orders). */
+function importResult(r: { kind: string; status: string; summary: any }) {
+  const s = r.summary;
+  if (!s) return '—';
+  if (r.status === 'RUNNING') return `Running — ${s.step ?? 'working'}…`;
+  if (r.status === 'FAILED') return `Failed: ${s.error ?? 'unknown error'}`;
+  if (r.kind === 'ffh-bills') return `${s.bill?.create ?? 0} bills · ${s.amc?.create ?? 0} AMCs imported`;
+  if (r.kind === 'ffh-history') return [s.order?.create ? `${s.order.create} orders` : null, `${s.po?.create ?? 0} POs`, `${s.grn?.create ?? 0} GRNs`, `${s.dc?.create ?? 0} challans`].filter(Boolean).join(' · ') + ' imported';
+  if (r.kind === 'order') return s.number ? `${s.number} — ${s.lines} lines` : '—';
+  if (typeof s.create === 'number') return `${s.create} created · ${s.update ?? 0} updated · ${s.error ?? 0} errors`;
+  return '—';
+}
+
+type BillStats = { bill: { create: number; skip: number; error: number }; amc: { create: number; skip: number; error: number }; vendorsCreated: number; clientsCreated: number; sitesCreated: number; lines: number; linkedLines: number; poLinked: number; orderLinked: number; billed: number; amcActive: number };
 
 function FfhHistoryCard() {
   const [file, setFile] = useState<File | null>(null);
@@ -418,18 +434,21 @@ function FfhHistoryCard() {
       }
     } catch (e) { toast.error((e as Error).message); } finally { setBusy(false); setStep(null); }
   };
+  const bills = r?.kind === 'ffh-bills';
+  const bs = (r?.stats ?? {}) as unknown as BillStats;
   const row = (label: string, x: { create: number; skip: number; error: number }) => (
     <tr><td>{label}</td><td className="num">{x.create}</td><td className="num">{x.skip}</td><td className={cx('num', x.error > 0 && 'text-amber-700')}>{x.error}</td></tr>
   );
   return (
-    <Card title="FFH purchase orders, material inward & outward (history)">
-      <p className="text-sm text-slate-600">Upload the history file exported from FFH (.json). Purchase orders come in as closed records, material inward as GRNs under their PO,
-        material outward as delivery challans under their order. <b>Stock and delivered quantities are not changed</b> — they already match FFH. Importing again skips what is already in.</p>
+    <Card title="FFH exports (.json) — purchase history, vendor bills & AMCs">
+      <p className="text-sm text-slate-600">Upload a file exported from FFH (.json). <b>History file:</b> purchase orders come in as closed records, material inward as GRNs under their PO,
+        material outward as delivery challans under their order — stock and delivered quantities are not changed. <b>Vendor bills & AMCs file:</b> supplier bills come in as unpaid vendor bills
+        (FFH did not record payments — mark old ones paid in Vendor Bills), AMCs and warranties as contracts. Importing again skips what is already in.</p>
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <input type="file" accept=".json,application/json" className="input max-w-md file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-sm" onChange={(e) => { setFile(e.target.files?.[0] ?? null); setR(null); setDone(false); }} />
         <Button disabled={!file} loading={busy && !r} onClick={check}>Check file</Button>
-        {r && !done && <Button variant="primary" loading={busy} disabled={r.stats.order.create + r.stats.po.create + r.stats.grn.create + r.stats.dc.create === 0} onClick={commit}>
-          Import {r.stats.order.create ? `${r.stats.order.create} orders, ` : ''}{r.stats.po.create} POs, {r.stats.grn.create} GRNs, {r.stats.dc.create} challans</Button>}
+        {r && !done && <Button variant="primary" loading={busy} disabled={bills ? bs.bill.create + bs.amc.create === 0 : r.stats.order.create + r.stats.po.create + r.stats.grn.create + r.stats.dc.create === 0} onClick={commit}>
+          {bills ? `Import ${bs.bill.create} vendor bills, ${bs.amc.create} AMCs` : `Import ${r.stats.order.create ? `${r.stats.order.create} orders, ` : ''}${r.stats.po.create} POs, ${r.stats.grn.create} GRNs, ${r.stats.dc.create} challans`}</Button>}
         {done && <Badge t="green">Imported</Badge>}
         {step && <span className="text-sm text-brand-800">{step} — you can leave this page; it carries on.</span>}
       </div>
@@ -438,11 +457,16 @@ function FfhHistoryCard() {
           <table className="tbl">
             <thead><tr><th /><th className="text-right">{done ? 'Imported' : 'Will import'}</th><th className="text-right">Already in</th><th className="text-right">Not imported</th></tr></thead>
             <tbody>
-              {row('Sales orders not in the ERP yet (closed in FFH)', r.stats.order)}{row('Purchase orders (closed)', r.stats.po)}{row('Material inward → GRNs', r.stats.grn)}{row('Material outward → challans', r.stats.dc)}
+              {bills ? <>{row('Vendor bills (payables)', bs.bill)}{row('AMC & warranty contracts', bs.amc)}</>
+                : <>{row('Sales orders not in the ERP yet (closed in FFH)', r.stats.order)}{row('Purchase orders (closed)', r.stats.po)}{row('Material inward → GRNs', r.stats.grn)}{row('Material outward → challans', r.stats.dc)}</>}
             </tbody>
           </table>
           <div className="text-sm text-slate-600">
-            <div>{r.stats.linkedLines} of {r.stats.lines} PO lines matched to inventory items</div>
+            {bills ? <>
+              <div>Bills total {inr(bs.billed)} · {bs.orderLinked} linked to their order, {bs.poLinked} to their PO · {bs.linkedLines} of {bs.lines} lines matched to inventory items</div>
+              <div>{bs.amcActive} contracts still running; the rest come in as expired</div>
+              {(bs.clientsCreated > 0 || bs.sitesCreated > 0) && <div>{bs.clientsCreated} client{bs.clientsCreated === 1 ? '' : 's'} and {bs.sitesCreated} site{bs.sitesCreated === 1 ? '' : 's'} not in the ERP will be created for the AMCs</div>}
+            </> : <div>{r.stats.linkedLines} of {r.stats.lines} PO lines matched to inventory items</div>}
             {r.stats.vendorsCreated > 0 && <div>{r.stats.vendorsCreated} supplier{r.stats.vendorsCreated > 1 ? 's' : ''} not in Vendors will be created (from the client record where there is one)</div>}
             {!!r.issues.length && (
               <details className="mt-2"><summary className="cursor-pointer text-amber-800">{r.issues.length} note{r.issues.length > 1 ? 's' : ''} — documents not imported or imported with a remark</summary>

@@ -36,6 +36,13 @@
       "when": 1792178306803,
       "tag": "0004_history_refs",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792220638747,
+      "tag": "0005_vendor_bills",
+      "breakpoints": true
     }
   ]
 }

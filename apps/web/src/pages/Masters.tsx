@@ -329,7 +329,7 @@ export function AmcPage() {
   const fields: FieldDef[] = [
     { name: 'clientId', label: 'Client', type: 'combo', options: clientOpts, required: true, createOnly: true },
     { name: 'siteId', label: 'Site', type: 'combo', options: siteOpts, required: true, createOnly: true },
-    { name: 'type', label: 'Type', type: 'select', options: ['COMPREHENSIVE', 'NON_COMPREHENSIVE'] },
+    { name: 'kind', label: 'Contract', type: 'select', options: ['AMC', 'WARRANTY'] }, { name: 'type', label: 'Type', type: 'select', options: ['COMPREHENSIVE', 'NON_COMPREHENSIVE'] },
     { name: 'startDate', label: 'Start', type: 'date', required: true }, { name: 'endDate', label: 'End', type: 'date', required: true },
     { name: 'value', label: 'Contract value (₹)', type: 'number', required: true }, { name: 'visitsPerYear', label: 'PM visits / year', type: 'number' },
     { name: 'billingCycle', label: 'Billing cycle', type: 'select', options: ['MONTHLY', 'QUARTERLY', 'HALF_YEARLY', 'YEARLY'] },
@@ -340,11 +340,11 @@ export function AmcPage() {
   return (
     <>
       <MasterPage<any> title="AMC Contracts" singular="AMC" path="/amc" perm="amc" fields={fields}
-        defaults={{ type: 'NON_COMPREHENSIVE', visitsPerYear: 4, billingCycle: 'YEARLY', responseHours: 24, status: 'ACTIVE', systems: [] }}
-        filters={(q, set) => <Select className="w-40" value={q.status ?? ''} onChange={(e) => set('status', e.target.value)} options={['ACTIVE', 'EXPIRED', 'CANCELLED', 'RENEWED']} placeholder="All statuses" />}
+        defaults={{ kind: 'AMC', type: 'NON_COMPREHENSIVE', visitsPerYear: 4, billingCycle: 'YEARLY', responseHours: 24, status: 'ACTIVE', systems: [] }}
+        filters={(q, set) => <><Select className="w-40" value={q.status ?? ''} onChange={(e) => set('status', e.target.value)} options={['ACTIVE', 'EXPIRED', 'CANCELLED', 'RENEWED']} placeholder="All statuses" /><Select className="w-40" value={q.kind ?? ''} onChange={(e) => set('kind', e.target.value)} options={[{ value: 'AMC', label: 'AMCs' }, { value: 'WARRANTY', label: 'Warranties' }]} placeholder="AMCs & warranties" /></>}
         cols={[
           { key: 'number', label: 'AMC no.' }, { key: 'client', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="text-xs text-slate-400">{r.site?.name}</div></> },
-          { key: 'type', label: 'Type', render: (r) => label(r.type) }, { key: 'systems', label: 'Systems', render: (r) => r.systems.join(', ') || 'All' },
+          { key: 'type', label: 'Type', render: (r) => <>{r.kind === 'WARRANTY' ? 'Warranty' : 'AMC'}<div className="text-xs text-slate-400">{label(r.type)}</div></> }, { key: 'systems', label: 'Systems', render: (r) => r.systems.join(', ') || 'All' },
           { key: 'period', label: 'Period', render: (r) => <span className={new Date(r.endDate) < new Date(Date.now() + 45 * 864e5) ? 'text-amber-700' : ''}>{fmtDate(r.startDate)} → {fmtDate(r.endDate)}</span> },
           { key: 'value', label: 'Value', num: true, render: (r) => inr(r.value, 0) }, { key: 'visits', label: 'Visits', num: true, render: (r) => r.visitsPerYear },
           { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },

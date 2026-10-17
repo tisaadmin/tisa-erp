@@ -15,6 +15,8 @@ export const MODULES = {
   accessories: ['view', 'create', 'edit', 'approve'],
   purchase_orders: ['view', 'create', 'edit', 'delete', 'approve', 'without_order'],
   grn: ['view', 'create'],
+  /** supplier bills (payables) and payments made to vendors */
+  vendor_bills: ['view', 'create', 'edit', 'cancel', 'pay'],
   challans: ['view', 'create', 'edit', 'without_order'],
   invoices: ['view', 'create', 'edit', 'cancel'],
   payments: ['view', 'create'],
@@ -67,13 +69,13 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: st
   {
     name: 'Purchase & Stores', description: 'Vendors, POs, GRNs, delivery challans, stock',
     permissions: ['dashboard:view', ...all('vendors'), ...all('items'), ...all('stock'), 'purchase_orders:view', 'purchase_orders:create',
-      'purchase_orders:edit', 'purchase_orders:without_order', 'accessories:view', ...all('grn'), ...all('challans').filter((p) => p !== 'challans:without_order'), ...view('clients', 'sites', 'orders'), 'requisitions:view',
+      'purchase_orders:edit', 'purchase_orders:without_order', 'accessories:view', ...all('grn'), 'vendor_bills:view', 'vendor_bills:create', 'vendor_bills:edit', ...all('challans').filter((p) => p !== 'challans:without_order'), ...view('clients', 'sites', 'orders'), 'requisitions:view',
       'requisitions:view_all', 'requisitions:approve', 'attendance:view', 'attendance:mark', 'leaves:view', 'leaves:apply',
       'expenses:view', 'expenses:create'],
   },
   {
     name: 'Accounts', description: 'Invoicing, running bills, receipts, expense payouts',
-    permissions: ['dashboard:view', ...all('invoices'), ...all('payments'), 'accessories:view', ...view('clients', 'sites', 'orders', 'quotations',
+    permissions: ['dashboard:view', ...all('invoices'), ...all('payments'), ...all('vendor_bills'), 'accessories:view', ...view('clients', 'sites', 'orders', 'quotations',
       'challans', 'purchase_orders', 'grn', 'items', 'vendors', 'amc', 'stock'), 'expenses:view', 'expenses:create', 'expenses:finance',
       'attendance:view', 'attendance:mark', 'leaves:view', 'leaves:apply', 'reports:view'],
   },

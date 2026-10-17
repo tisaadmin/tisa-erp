@@ -9,6 +9,7 @@ import { useAuth } from '../lib/auth';
 import { fmtDate, inr, label, qty, STAGE_LABEL, toInputDate } from '../lib/format';
 import { useAction, useClients, useGet, useSites, type Page } from '../lib/hooks';
 import { OrderAccessoriesCard } from './Accessories';
+import { OrderVendorBillsCard } from './VendorBills';
 import { DeleteOrderButton } from './Cleanup';
 
 export function useCompanyState() {
@@ -305,6 +306,7 @@ export function OrderDetail() {
       </div>
 
       <OrderAccessoriesCard orderId={o.id} />
+      <OrderVendorBillsCard orderId={o.id} />
 
       <Card title="Execution & milestone billing" pad={false}>
         <div className="overflow-x-auto">

@@ -170,6 +170,7 @@ test('purchase: PO approval → GRN → stock in', async () => {
   assert.equal(afterStock, before + 10);
   assert.equal((await ok('stores', 'GET', `/purchase-orders/${po.id}`)).status, 'PARTIALLY_RECEIVED');
   assert.equal((await call('stores', 'GET', `/purchase-orders/${po.id}/pdf`)).ct, 'application/pdf');
+  ctx.po = po; ctx.vendor = vendor;
 });
 
 test('service: AMC → ticket → assign → geo check-in → service report with signature', async () => {
@@ -713,4 +714,78 @@ test('clean-up: find duplicates, merge clients / sites / items (documents move o
   await ok('admin', 'DELETE', `/records/orders/${o.id}`);
   assert.equal((await call('admin', 'GET', `/orders/${o.id}`)).status, 404);
   assert.equal((await call('admin', 'POST', `/records/orders/${o.id}/merge`, { intoId: ctx.order.id })).status, 400);
+});
+
+test('vendor bills: from a PO (unbilled lines), duplicate bill no. blocked, rounding to the bill total, part payment, bulk mark paid, cancel', async () => {
+  assert.equal((await call('sales', 'GET', '/vendor-bills')).status, 403, 'sales has no access to payables');
+  const u = await ok('stores', 'GET', `/purchase-orders/${ctx.po.id}/unbilled`);
+  assert.equal(u.lines[0].qty, 10, 'accepted qty (received − rejected) is what gets billed');
+  const today = new Date().toISOString().slice(0, 10);
+  const lines = u.lines.map((l: any) => ({ poItemId: l.poItemId, itemId: l.itemId, description: l.description, qty: l.qty, rate: l.rate, gstRate: l.gstRate }));
+  const calc = 10 * ctx.cam.purchasePrice * 1.18;
+  const bill = await ok('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'INV-5001', billDate: today, dueDate: today, poId: ctx.po.id, lines, totalAsPerBill: Math.round(calc) + 1 });
+  assert.equal(bill.total, Math.round(calc) + 1, 'rounding difference adjusted to the bill');
+  assert.equal(bill.orderId, ctx.order.id, 'order taken from the PO');
+  assert.equal(bill.status, 'UNPAID');
+  assert.equal((await call('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'inv-5001', billDate: today, lines })).status, 400, 'same bill no. twice');
+  assert.equal((await call('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'INV-5002', billDate: today, lines, totalAsPerBill: calc + 500 })).status, 400, 'big difference rejected');
+  const u2 = await ok('stores', 'GET', `/purchase-orders/${ctx.po.id}/unbilled`);
+  assert.equal(u2.lines[0].qty, 0, 'nothing left to bill');
+  assert.equal((await call('stores', 'POST', `/vendor-bills/${bill.id}/payments`, { amount: 100, mode: 'NEFT' })).status, 403, 'stores cannot pay');
+  await ok('accounts', 'POST', `/vendor-bills/${bill.id}/payments`, { amount: 1000, tdsAmount: 10, mode: 'NEFT', reference: 'UTR1' });
+  let b = await ok('accounts', 'GET', `/vendor-bills/${bill.id}`);
+  assert.equal(b.status, 'PARTIALLY_PAID'); assert.equal(b.amountPaid, 1010); assert.equal(b.payments.length, 1);
+  assert.equal((await call('accounts', 'POST', `/vendor-bills/${bill.id}/payments`, { amount: b.total, mode: 'NEFT' })).status, 400, 'over-payment blocked');
+  assert.equal((await call('accounts', 'POST', `/vendor-bills/${bill.id}/cancel`, { reason: 'wrong' })).status, 400, 'paid bill cannot be cancelled');
+  // a second bill, then mark both paid in one go
+  const b2 = await ok('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'INV-5003', billDate: today, dueDate: '2020-01-01', lines: [{ description: 'Cable ties', qty: 10, rate: 50, gstRate: 18 }] });
+  assert.equal(b2.dueDate, '2020-01-01');
+  const over = await ok('accounts', 'GET', '/vendor-bills?due=overdue');
+  assert.ok(over.data.some((x: any) => x.id === b2.id));
+  const sum = await ok('accounts', 'GET', '/vendor-bills/summary');
+  assert.ok(sum.vendors.some((v: any) => v.vendorId === ctx.vendor.id && v.bills >= 2));
+  const mp = await ok('accounts', 'POST', '/vendor-bills/mark-paid', { ids: [bill.id, b2.id], mode: 'NEFT', notes: 'Paid before ERP' });
+  assert.equal(mp.bills, 2);
+  b = await ok('accounts', 'GET', `/vendor-bills/${bill.id}`);
+  assert.equal(b.status, 'PAID'); assert.equal(b.amountPaid, b.total);
+  const onOrder = await ok('accounts', 'GET', `/orders/${ctx.order.id}/vendor-bills`);
+  assert.ok(onOrder.some((x: any) => x.id === bill.id));
+  const b3 = await ok('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'INV-5004', billDate: today, lines: [{ description: 'Misc', qty: 1, rate: 100, gstRate: 18 }] });
+  assert.equal((await ok('accounts', 'POST', `/vendor-bills/${b3.id}/cancel`, { reason: 'duplicate entry' })).status, 'CANCELLED');
+  const pays = await ok('accounts', 'GET', '/vendor-payments');
+  assert.ok(pays.data.length >= 3);
+});
+
+test('FFH bills & AMCs import: preview, background commit, re-import skips', async () => {
+  const file = {
+    kind: 'ffh-bills-amc',
+    bills: [
+      { id: '991001', billNo: 'GE/26-27/9', billDate: '05/10/2026', dueDate: '2026-10-20T00:00:00', vendorRef: 'FFHV1', vendorName: 'Brand New Supplier LLP', soId: null, poNo: null, amount: 1180, remark: 'for Snow Flama', lines: [['Cable Tie', '', 'Number', '3926', 10, 100, 1000, 10, 'CGST ( 9% ) ', 'SGST ( 9% ) ', '', '']] },
+      { id: '991002', billNo: 'GE/26-27/9.', billDate: '05/10/2026', dueDate: null, vendorRef: 'FFHV1', vendorName: 'Brand New Supplier LLP', soId: null, poNo: null, amount: 2360, remark: null, lines: [['Patch Cord', '', 'Number', '', 20, 100, 2000, 20, 'IGST ( 18% ) ', '', '', '']] },
+    ],
+    amcs: [
+      { AMCId: '991101', ClientID: ctx.client.externalRef ?? 'x', ClientName: ctx.client.name, SERVICENAME: 'A(E)', ServiceTypeName: 'Comprehensive', BillFromdate: '2025-01-01T00:00:00', BillTodate: '2025-12-31T00:00:00', AMOUNT: 12000, SiteName: '' },
+      { AMCId: '991102', ClientID: 'FFHV1', ClientName: 'Totally New Society CHS', SERVICENAME: 'Warranty', ServiceTypeName: 'Non Comprehensive', BillFromdate: '2026-06-01T00:00:00', BillTodate: '2027-05-31T00:00:00', AMOUNT: 0, INAddress: 'Plot 4,,Worli,,Mumbai' },
+    ],
+  };
+  const fd = new FormData(); fd.append('file', new Blob([JSON.stringify(file)], { type: 'application/json' }), 'bills.json');
+  const pv = await ok('admin', 'POST', '/imports/ffh-history', undefined, fd);
+  assert.equal(pv.kind, 'ffh-bills');
+  assert.equal(pv.stats.bill.create, 2); assert.equal(pv.stats.amc.create, 2); assert.equal(pv.stats.vendorsCreated, 1); assert.equal(pv.stats.clientsCreated, 1);
+  assert.equal((await call('admin', 'POST', `/imports/ffh-history/${pv.id}/commit`)).status, 202);
+  let st: any;
+  for (let i = 0; i < 50; i++) { st = await ok('admin', 'GET', `/imports/ffh-history/${pv.id}/status`); if (st.status !== 'RUNNING') break; await new Promise((r) => setTimeout(r, 100)); }
+  assert.equal(st.status, 'DONE', JSON.stringify(st.summary));
+  const bills = await ok('admin', 'GET', '/vendor-bills?search=GE/26-27/9');
+  assert.equal(bills.data.length, 2, 'the dotted split bill is kept separately');
+  const igst = bills.data.find((b: any) => b.billNo.endsWith('.'));
+  assert.equal(igst.isInterState, true); assert.equal(igst.total, 2360); assert.equal(igst.status, 'UNPAID');
+  const amcs = await ok('admin', 'GET', '/amc?pageSize=200');
+  const a1 = amcs.data.find((a: any) => a.scope?.includes('991101'));
+  assert.equal(a1.status, 'EXPIRED'); assert.equal(a1.kind, 'AMC'); assert.equal(a1.type, 'COMPREHENSIVE'); assert.equal(a1.clientId, ctx.client.id);
+  const a2 = amcs.data.find((a: any) => a.scope?.includes('991102'));
+  assert.equal(a2.kind, 'WARRANTY'); assert.equal(a2.status, 'ACTIVE'); assert.equal(a2.visitsPerYear, 0);
+  const fd2 = new FormData(); fd2.append('file', new Blob([JSON.stringify(file)], { type: 'application/json' }), 'bills.json');
+  const again = await ok('admin', 'POST', '/imports/ffh-history', undefined, fd2);
+  assert.equal(again.stats.bill.skip, 2); assert.equal(again.stats.amc.skip, 2); assert.equal(again.stats.bill.create, 0);
 });

@@ -5,7 +5,7 @@ import { financialYear } from './dates';
 
 export const SERIES = {
   QUOTATION: 'QT', ORDER: 'SO', PURCHASE_ORDER: 'PO', GRN: 'GRN', CHALLAN: 'DC', INVOICE: 'INV', PROFORMA: 'PI',
-  RECEIPT: 'RCT', TICKET: 'TKT', SERVICE_REPORT: 'SR', REQUISITION: 'REQ', EXPENSE: 'EXP', AMC: 'AMC', ACCESSORY: 'ACS',
+  RECEIPT: 'RCT', TICKET: 'TKT', SERVICE_REPORT: 'SR', REQUISITION: 'REQ', EXPENSE: 'EXP', AMC: 'AMC', ACCESSORY: 'ACS', VENDOR_BILL: 'VB', VENDOR_PAYMENT: 'VP',
 } as const;
 export type SeriesKey = keyof typeof SERIES;
 const COMPANY_PREFIX = process.env.DOC_PREFIX ?? 'TTS';

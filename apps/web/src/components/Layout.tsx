@@ -1,6 +1,6 @@
 import {
   Bell, Boxes, ListChecks, Upload, Building2, Camera, ClipboardCheck, ClipboardList, FileSignature, FileText, Gauge, HandCoins, LifeBuoy, LogOut, MapPin, Menu,
-  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge } from 'lucide-react';
+  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -33,6 +33,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
   { group: 'Purchase & Stores', items: [
     { to: '/purchase-orders', label: 'Purchase Orders', icon: <ShoppingCart />, perm: 'purchase_orders:view' },
     { to: '/grns', label: 'Goods Receipts', icon: <PackageCheck />, perm: 'grn:view' },
+    { to: '/vendor-bills', label: 'Vendor Bills', icon: <ReceiptText />, perm: 'vendor_bills:view' },
     { to: '/inventory', label: 'Inventory', icon: <Boxes />, perm: 'items:view' },
     { to: '/vendors', label: 'Vendors', icon: <Users />, perm: 'vendors:view' },
   ] },

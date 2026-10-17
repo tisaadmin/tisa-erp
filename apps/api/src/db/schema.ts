@@ -493,6 +493,48 @@ export const goodsReceiptItems = pgTable('goods_receipt_items', {
   remarks: text(),
 });
 
+/** Vendor (purchase) bills — what we owe suppliers; payments made against them. */
+export const vendorBills = pgTable('vendor_bills', {
+  id: id(),
+  number: text().notNull().unique(), // our reference, e.g. TTS/VB/26-27/0001
+  billNo: text().notNull(), // the supplier's invoice number
+  billDate: date({ mode: 'string' }).notNull(),
+  dueDate: date({ mode: 'string' }),
+  vendorId: text().notNull().references(() => vendors.id),
+  poId: text().references(() => purchaseOrders.id),
+  orderId: text().references(() => salesOrders.id), // the client order the material was bought for
+  isInterState: boolean().notNull().default(false),
+  status: text().notNull().default('UNPAID'), // UNPAID, PARTIALLY_PAID, PAID, CANCELLED
+  notes: text(),
+  ...totals(),
+  amountPaid: money().notNull().default(0),
+  sourceRef: text(),
+  createdById: text(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [index().on(t.vendorId), index().on(t.poId), index().on(t.orderId), index().on(t.status)]);
+
+export const vendorBillItems = pgTable('vendor_bill_items', {
+  id: id(),
+  billId: text().notNull().references(() => vendorBills.id, { onDelete: 'cascade' }),
+  poItemId: text().references(() => purchaseOrderItems.id),
+  ...lineCols(),
+}, (t) => [index().on(t.billId)]);
+
+export const vendorPayments = pgTable('vendor_payments', {
+  id: id(),
+  number: text().notNull().unique(),
+  billId: text().notNull().references(() => vendorBills.id),
+  date: ts().notNull().defaultNow(),
+  amount: money().notNull(),
+  tdsAmount: money().notNull().default(0),
+  mode: text().notNull(), // NEFT, RTGS, IMPS, CHEQUE, UPI, CASH
+  reference: text(),
+  notes: text(),
+  createdById: text(),
+  createdAt: createdAt(),
+}, (t) => [index().on(t.billId)]);
+
 export const deliveryChallans = pgTable('delivery_challans', {
   id: id(),
   number: text().notNull().unique(),
@@ -532,6 +574,7 @@ export const amcContracts = pgTable('amc_contracts', {
   clientId: text().notNull().references(() => clients.id),
   siteId: text().notNull().references(() => sites.id),
   type: text().notNull().default('NON_COMPREHENSIVE'), // COMPREHENSIVE, NON_COMPREHENSIVE
+  kind: text().notNull().default('AMC'), // AMC, WARRANTY
   systems: text().array().notNull().default([]),
   startDate: date({ mode: 'string' }).notNull(),
   endDate: date({ mode: 'string' }).notNull(),
@@ -541,6 +584,7 @@ export const amcContracts = pgTable('amc_contracts', {
   responseHours: integer().notNull().default(24),
   status: text().notNull().default('ACTIVE'), // ACTIVE, EXPIRED, CANCELLED, RENEWED
   scope: text(),
+  sourceRef: text(), // imported from the old ERP
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -859,6 +903,15 @@ export const purchaseOrdersRel = relations(purchaseOrders, ({ one, many }) => ({
 }));
 export const purchaseOrderItemsRel = relations(purchaseOrderItems, ({ one }) => ({ po: one(purchaseOrders, { fields: [purchaseOrderItems.poId], references: [purchaseOrders.id] }) }));
 
+export const vendorBillsRel = relations(vendorBills, ({ one, many }) => ({
+  vendor: one(vendors, { fields: [vendorBills.vendorId], references: [vendors.id] }),
+  po: one(purchaseOrders, { fields: [vendorBills.poId], references: [purchaseOrders.id] }),
+  order: one(salesOrders, { fields: [vendorBills.orderId], references: [salesOrders.id] }),
+  items: many(vendorBillItems),
+  payments: many(vendorPayments),
+}));
+export const vendorBillItemsRel = relations(vendorBillItems, ({ one }) => ({ bill: one(vendorBills, { fields: [vendorBillItems.billId], references: [vendorBills.id] }) }));
+export const vendorPaymentsRel = relations(vendorPayments, ({ one }) => ({ bill: one(vendorBills, { fields: [vendorPayments.billId], references: [vendorBills.id] }) }));
 export const goodsReceiptsRel = relations(goodsReceipts, ({ one, many }) => ({
   po: one(purchaseOrders, { fields: [goodsReceipts.poId], references: [purchaseOrders.id] }),
   vendor: one(vendors, { fields: [goodsReceipts.vendorId], references: [vendors.id] }),

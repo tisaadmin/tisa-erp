@@ -20,6 +20,7 @@ import importRoutes from './routes/imports';
 import orderImportRoutes from './routes/orderImports';
 import accessoryRoutes from './routes/accessories';
 import recordRoutes from './routes/records';
+import vendorBillRoutes from './routes/vendorBills';
 import masterRoutes from './routes/masters';
 import notificationRoutes from './routes/notifications';
 import purchaseRoutes from './routes/purchase';
@@ -42,7 +43,7 @@ export function createApp() {
 
   const api = express.Router();
   api.use(authenticate);
-  for (const r of [adminRoutes, masterRoutes, salesRoutes, purchaseRoutes, billingRoutes, serviceRoutes, fieldRoutes, expenseRoutes, notificationRoutes, dashboardRoutes, importRoutes, orderImportRoutes, accessoryRoutes, recordRoutes]) api.use(r);
+  for (const r of [adminRoutes, masterRoutes, salesRoutes, purchaseRoutes, billingRoutes, serviceRoutes, fieldRoutes, expenseRoutes, notificationRoutes, dashboardRoutes, importRoutes, orderImportRoutes, accessoryRoutes, recordRoutes, vendorBillRoutes]) api.use(r);
   app.use('/api', api);
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Not found')));
 
