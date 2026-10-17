@@ -227,6 +227,28 @@ r.post('/invoices/:id/payments', requirePerm('payments:create'), async (req, res
   res.status(201).json(rcpt);
 });
 
+/** Mark several invoices fully received in one go (e.g. bills paid before the ERP — FFH never recorded receipts). */
+r.post('/invoices/mark-paid', requirePerm('payments:create'), async (req, res) => {
+  const d = z.object({
+    ids: z.array(z.string()).min(1).max(1000), date: z.coerce.date().optional(), mode: z.enum(['NEFT', 'RTGS', 'IMPS', 'CHEQUE', 'UPI', 'CASH']), reference: opt, notes: opt,
+  }).parse(req.body);
+  const out = await db.transaction(async (tx) => {
+    const list = await tx.select().from(invoices).where(and(inArray(invoices.id, d.ids), inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID']))).for('update');
+    let amount = 0;
+    for (const inv of list) {
+      const bal = r2(inv.total - inv.amountPaid);
+      if (bal <= 0) continue;
+      const date = d.date ?? new Date();
+      await tx.insert(paymentReceipts).values({ number: await nextNumber(tx, 'RECEIPT', date), invoiceId: inv.id, date, amount: bal, mode: d.mode, reference: d.reference, notes: d.notes, createdById: req.user.id });
+      await tx.update(invoices).set({ amountPaid: inv.total, status: 'PAID' }).where(eq(invoices.id, inv.id));
+      amount = r2(amount + bal);
+    }
+    return { invoices: list.length, amount };
+  });
+  audit(req, 'pay', 'invoice', d.ids.join(',').slice(0, 200), out);
+  res.json(out);
+});
+
 /** Receivables ageing for the MIS / accounts view. */
 r.get('/receivables', requirePerm('invoices:view'), async (_req, res) => {
   const open = await db.query.invoices.findMany({

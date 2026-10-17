@@ -609,6 +609,7 @@ export const invoices = pgTable('invoices', {
   terms: text(),
   ...totals(),
   amountPaid: money().notNull().default(0),
+  sourceRef: text(), // imported from the old ERP
   createdById: text(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
@@ -664,6 +665,7 @@ export const tickets = pgTable('tickets', {
   resolvedAt: ts(),
   closedAt: ts(),
   customFields: jsonb().$type<Record<string, unknown>>().notNull().default({}),
+  sourceRef: text(), // imported from the old ERP
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (t) => [index().on(t.status), index().on(t.assignedToId)]);

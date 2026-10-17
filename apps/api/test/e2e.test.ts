@@ -789,3 +789,54 @@ test('FFH bills & AMCs import: preview, background commit, re-import skips', asy
   const again = await ok('admin', 'POST', '/imports/ffh-history', undefined, fd2);
   assert.equal(again.stats.bill.skip, 2); assert.equal(again.stats.amc.skip, 2); assert.equal(again.stats.bill.create, 0);
 });
+
+test('FFH sales bills, tickets & projects import: invoices with FFH numbers, tickets mapped, projects as installation tickets; bulk mark received', async () => {
+  const file = {
+    kind: 'ffh-service-receivables',
+    receivables: [
+      { id: '881001', invoiceNo: 'TISA/26-27/901', date: '2026-10-01', dueDate: '2026-10-15', clientRef: null, clientName: ctx.client.name, soId: null, total: 1180, basic: 1000, remark: 'test bill', lines: [['Cable', '', 'Meter', '8544', 10, 100, 1000, '0.00', '0.00', '0.00', '']] },
+      { id: '881002', invoiceNo: '', date: '2026-09-01', dueDate: '2026-09-01', clientRef: null, clientName: ctx.client.name, soId: null, total: 2950, basic: 2500, remark: null, lines: [['Service', '', '', '', 1, 1000, 1000, '0.00', '0.00', '0.00', '']] },
+      { id: '881003', invoiceNo: 'TISA/25-26/E/099', date: '2026-03-01', dueDate: null, clientRef: 'XPORT', clientName: 'Overseas Data Centre SAS', soId: null, total: 5000, basic: 5000, remark: null, lines: [['Network Card', '', 'Number', '', 2, 2500, 5000, '0.00', '0.00', '0.00', '']] },
+    ],
+    tickets: [
+      { InstalledNo: '771001', Opendate: '01/10/2026', StatusName: 'New', NActor: 'Fault', ServiceTypeName: 'Chargeble', ProductName: 'Complaint from WhatsApp', Priority: 'Urgent', Title: 'Camera offline', ClientName: ctx.client.name, SVACTOR: 'NiteshR', EXPClosuredateDashboard: '2026-10-02T00:00:00' },
+      { InstalledNo: '771002', Opendate: '02/09/2026', ClosureDate: '2026-09-03', StatusName: 'Complete', NActor: 'Visit', ServiceTypeName: 'Chargeble', ProductName: 'Complaint from Portal', Priority: 'Normal', Title: 'Site visit', ClientName: ctx.client.name, lastActionDiscussions: 'Replaced adaptor', lastActor: 'Sahadev', ActionDate: '2026-09-03T00:00:00' },
+      { InstalledNo: '771003', Opendate: '05/09/2026', StatusName: 'Cancel', NActor: 'Other', ServiceTypeName: 'F', ProductName: 'Complaint from Portal', Priority: 'Normal', Title: 'Internal task', ClientName: 'Brand New Ticket Client', SiteName: 'Tower B' },
+    ],
+    projects: [{ InstalledNo: '661001', Title: 'coordinator@tisa.in', ClientID: '-1', ClientName: ctx.client.name, Opendate: '2026-10-14', DeliveryDate: '2026-10-23', StatusName: 'In Progress', OwnerName: 'Vasudev', Anualisedamount: 3830000, Priority: ' Urgent' }],
+  };
+  const fd = new FormData(); fd.append('file', new Blob([JSON.stringify(file)], { type: 'application/json' }), 'svc.json');
+  const pv = await ok('admin', 'POST', '/imports/ffh-history', undefined, fd);
+  assert.equal(pv.kind, 'ffh-service');
+  assert.equal(pv.stats.invoice.create, 3); assert.equal(pv.stats.ticket.create, 3); assert.equal(pv.stats.project.create, 1);
+  assert.ok(pv.issues.some((i: any) => /balancing line/.test(i.message)), 'incomplete lines get a balancing line');
+  assert.equal((await call('admin', 'POST', `/imports/ffh-history/${pv.id}/commit`)).status, 202);
+  let st: any;
+  for (let i = 0; i < 50; i++) { st = await ok('admin', 'GET', `/imports/ffh-history/${pv.id}/status`); if (st.status !== 'RUNNING') break; await new Promise((r) => setTimeout(r, 100)); }
+  assert.equal(st.status, 'DONE', JSON.stringify(st.summary));
+  const inv = (await ok('accounts', 'GET', '/invoices?search=TISA/26-27/901')).data[0];
+  assert.equal(inv.status, 'ISSUED'); assert.equal(inv.total, 1180); assert.equal(inv.clientId, ctx.client.id);
+  const nonum = (await ok('accounts', 'GET', '/invoices?search=FFH-BILL/881002')).data[0];
+  assert.equal(nonum.total, 2950, 'balancing line keeps FFH total');
+  const exp = (await ok('accounts', 'GET', '/invoices?search=E/099')).data[0];
+  assert.equal(exp.isInterState, true); assert.equal(exp.total, 5000);
+  const tks = await ok('admin', 'GET', '/tickets?pageSize=500');
+  const t1 = tks.data.find((t: any) => t.customFields?.ffhTicketId === '771001');
+  assert.equal(t1.type, 'COMPLAINT'); assert.equal(t1.status, 'OPEN'); assert.equal(t1.priority, 'HIGH'); assert.equal(t1.isBillable, true); assert.equal(t1.source, 'WHATSAPP');
+  const t2 = tks.data.find((t: any) => t.customFields?.ffhTicketId === '771002');
+  assert.equal(t2.type, 'PAID_VISIT'); assert.equal(t2.status, 'CLOSED');
+  const t2full = await ok('admin', 'GET', `/tickets/${t2.id}`);
+  assert.ok((t2full.updates ?? t2full.ticketUpdates ?? []).some((u: any) => /Replaced adaptor/.test(u.note)));
+  const t3 = tks.data.find((t: any) => t.customFields?.ffhTicketId === '771003');
+  assert.equal(t3.type, 'OTHER'); assert.equal(t3.status, 'CANCELLED');
+  const prj = tks.data.find((t: any) => t.customFields?.ffhProjectId === '661001');
+  assert.equal(prj.type, 'INSTALLATION'); assert.equal(prj.status, 'IN_PROGRESS'); assert.ok(!prj.title.includes('@'));
+  // bulk mark received
+  const mp = await ok('accounts', 'POST', '/invoices/mark-paid', { ids: [inv.id, nonum.id], mode: 'NEFT', notes: 'Received before ERP' });
+  assert.equal(mp.invoices, 2);
+  assert.equal((await ok('accounts', 'GET', `/invoices/${inv.id}`)).status, 'PAID');
+  assert.equal((await call('sales', 'POST', '/invoices/mark-paid', { ids: [exp.id], mode: 'NEFT' })).status, 403);
+  const fd2 = new FormData(); fd2.append('file', new Blob([JSON.stringify(file)], { type: 'application/json' }), 'svc.json');
+  const again = await ok('admin', 'POST', '/imports/ffh-history', undefined, fd2);
+  assert.equal(again.stats.invoice.skip, 3); assert.equal(again.stats.ticket.skip, 3); assert.equal(again.stats.project.skip, 1);
+});

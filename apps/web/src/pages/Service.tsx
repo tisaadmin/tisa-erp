@@ -8,7 +8,7 @@ import { useAuth } from '../lib/auth';
 import { fmtDate, fmtDateTime, label, qty } from '../lib/format';
 import { useAction, useCategories, useGet, useSites, useUsers, type Page } from '../lib/hooks';
 
-const TYPES = ['COMPLAINT', 'PREVENTIVE_MAINTENANCE', 'PAID_VISIT', 'INSTALLATION', 'SITE_SURVEY'];
+const TYPES = ['COMPLAINT', 'PREVENTIVE_MAINTENANCE', 'PAID_VISIT', 'INSTALLATION', 'SITE_SURVEY', 'VISIT', 'DEMO', 'OTHER'];
 const PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
 export function TicketsPage() {
@@ -63,7 +63,7 @@ export function NewTicket() {
           <Field label="Type"><Select value={d.type} onChange={(e) => setD({ ...d, type: e.target.value })} options={TYPES} /></Field>
           <Field label="Priority"><Select value={d.priority} onChange={(e) => setD({ ...d, priority: e.target.value })} options={PRIORITIES} /></Field>
           <Field label="System"><Combo options={(cats.data?.data ?? []).map((c) => ({ value: c.id, label: c.name }))} value={d.categoryId} onChange={(v) => setD({ ...d, categoryId: v })} /></Field>
-          <Field label="Received via"><Select value={d.source} onChange={(e) => setD({ ...d, source: e.target.value })} options={['PHONE', 'EMAIL', 'WEB']} /></Field>
+          <Field label="Received via"><Select value={d.source} onChange={(e) => setD({ ...d, source: e.target.value })} options={['PHONE', 'WHATSAPP', 'EMAIL', 'WEB']} /></Field>
           <Field label="Issue (short)" required className="sm:col-span-2"><Input value={d.title ?? ''} onChange={(e) => setD({ ...d, title: e.target.value })} placeholder="e.g. Camera 4 at main gate not recording" /></Field>
           <Field label="Details" className="sm:col-span-2"><Textarea value={d.description ?? ''} onChange={(e) => setD({ ...d, description: e.target.value })} /></Field>
           <Field label="Reported by"><Input value={d.reportedBy ?? ''} onChange={(e) => setD({ ...d, reportedBy: e.target.value })} /></Field>

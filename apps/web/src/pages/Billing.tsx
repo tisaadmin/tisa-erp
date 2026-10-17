@@ -13,6 +13,14 @@ export function InvoicesPage() {
   const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50 });
   const { can } = useAuth();
   const list = useGet<Page<any>>('/invoices', q);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const [bulk, setBulk] = useState<{ mode: string; date: string; reference: string; notes: string } | null>(null);
+  const open = (list.data?.data ?? []).filter((r) => ['ISSUED', 'PARTIALLY_PAID'].includes(r.status));
+  const selBal = open.filter((r) => sel.has(r.id)).reduce((a, r) => a + (r.total - r.amountPaid), 0);
+  const markPaid = useAction(() => api('/invoices/mark-paid', { body: { ids: [...sel], ...bulk, date: bulk!.date || undefined } }),
+    { success: 'Marked received', invalidate: [['/invoices'], ['/payments'], ['/receivables']], onSuccess: () => { setBulk(null); setSel(new Set()); } });
+  const canPay = can('payments:create');
+  const toggle = (id: string, on: boolean) => { const x = new Set(sel); if (on) x.add(id); else x.delete(id); setSel(x); };
   return (
     <div>
       <PageHeader title="Invoices & running bills" subtitle="Running (RA) bills are raised from an order form's milestone schedule — open the order and click “Running bill”."
@@ -23,8 +31,17 @@ export function InvoicesPage() {
           <Select className="w-40" value={q.type ?? ''} onChange={(e) => setQ({ ...q, type: e.target.value, page: 1 })} placeholder="All types" options={['TAX_INVOICE', 'RUNNING_BILL', 'SERVICE', 'AMC', 'PROFORMA']} />
           <Select className="w-40" value={q.status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} placeholder="All statuses" options={['DRAFT', 'ISSUED', 'PARTIALLY_PAID', 'PAID', 'CANCELLED']} />
           <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={q.overdue === '1'} onChange={(e) => setQ({ ...q, overdue: e.target.checked ? '1' : '', page: 1 })} /> Overdue only</label>
+          {canPay && !!open.length && <button className="ml-auto text-sm text-brand-700 underline" onClick={() => setSel(new Set(open.map((r) => r.id)))}>Select all unpaid on this page</button>}
         </div>
+        {sel.size > 0 && (
+          <div className="flex flex-wrap items-center gap-3 border-b border-brand-100 bg-brand-50 px-3 py-2 text-sm">
+            <span><b>{sel.size}</b> selected · balance {inr(selBal)}</span>
+            <Button size="sm" variant="primary" onClick={() => setBulk({ mode: 'NEFT', date: '', reference: '', notes: '' })}>Mark as received</Button>
+            <button className="text-brand-700 underline" onClick={() => setSel(new Set())}>Clear</button>
+          </div>
+        )}
         <Table rows={list.data?.data} to={(r) => `/invoices/${r.id}`} cols={[
+          ...(canPay ? [{ key: 'sel', label: '', render: (r: any) => ['ISSUED', 'PARTIALLY_PAID'].includes(r.status) ? <span onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={sel.has(r.id)} onChange={(e) => toggle(r.id, e.target.checked)} /></span> : null }] : []),
           { key: 'number', label: 'Number' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
           { key: 'type', label: 'Type', render: (r) => r.raBillNo ? <Badge t="blue">RA-{r.raBillNo}</Badge> : label(r.type) },
           { key: 'client', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="text-xs text-slate-400">{r.site?.name}{r.order && ` · ${r.order.number}`}</div></> },
@@ -33,8 +50,18 @@ export function InvoicesPage() {
           { key: 'due', label: 'Due', render: (r) => <span className={['ISSUED', 'PARTIALLY_PAID'].includes(r.status) && r.dueDate && new Date(r.dueDate) < new Date() ? 'font-medium text-red-600' : ''}>{fmtDate(r.dueDate)}</span> },
           { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
         ]} />
-        {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
+        {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => { setQ({ ...q, page: p }); setSel(new Set()); }} />}
       </Card>
+      <Modal open={!!bulk} onClose={() => setBulk(null)} title={`Mark ${sel.size} invoice${sel.size === 1 ? '' : 's'} as received`}
+        footer={<><Button onClick={() => setBulk(null)}>Cancel</Button><Button variant="primary" loading={markPaid.isPending} onClick={() => markPaid.mutate(undefined)}>Mark received ({inr(selBal)})</Button></>}>
+        {bulk && <div className="grid gap-3 sm:grid-cols-2">
+          <p className="text-sm text-slate-600 sm:col-span-2">Records a receipt for each invoice's full balance. Use this for bills already paid (e.g. before the ERP); for a receipt with TDS, open the invoice.</p>
+          <Field label="Mode"><Select value={bulk.mode} onChange={(e) => setBulk({ ...bulk, mode: e.target.value })} options={['NEFT', 'RTGS', 'IMPS', 'CHEQUE', 'UPI', 'CASH']} /></Field>
+          <Field label="Date received" hint="Blank = today"><Input type="date" value={bulk.date} onChange={(e) => setBulk({ ...bulk, date: e.target.value })} /></Field>
+          <Field label="UTR / cheque no. (optional)"><Input value={bulk.reference} onChange={(e) => setBulk({ ...bulk, reference: e.target.value })} /></Field>
+          <Field label="Note (optional)"><Input value={bulk.notes} onChange={(e) => setBulk({ ...bulk, notes: e.target.value })} placeholder="e.g. Received before ERP go-live" /></Field>
+        </div>}
+      </Modal>
     </div>
   );
 }

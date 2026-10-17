@@ -95,7 +95,7 @@ r.get('/tickets/:id', requirePerm('tickets:view'), async (req, res) => {
 });
 
 const ticketSchema = z.object({
-  siteId: z.string(), type: z.enum(['COMPLAINT', 'PREVENTIVE_MAINTENANCE', 'PAID_VISIT', 'INSTALLATION', 'SITE_SURVEY']).default('COMPLAINT'),
+  siteId: z.string(), type: z.enum(['COMPLAINT', 'PREVENTIVE_MAINTENANCE', 'PAID_VISIT', 'INSTALLATION', 'SITE_SURVEY', 'VISIT', 'DEMO', 'OTHER']).default('COMPLAINT'),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).default('MEDIUM'), categoryId: opt, title: z.string().trim().min(3), description: opt,
   reportedBy: opt, reportedPhone: opt, source: z.enum(['WEB', 'MOBILE', 'PHONE', 'EMAIL']).optional(), assignedToId: opt,
   scheduledAt: z.coerce.date().nullish(), isBillable: z.boolean().optional(), visitCharge: z.coerce.number().nullish(),

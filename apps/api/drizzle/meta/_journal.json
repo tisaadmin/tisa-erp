@@ -43,6 +43,13 @@
       "when": 1792220638747,
       "tag": "0005_vendor_bills",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1792221895858,
+      "tag": "0006_service_receivables",
+      "breakpoints": true
     }
   ]
 }
