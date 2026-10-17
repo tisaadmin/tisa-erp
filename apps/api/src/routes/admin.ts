@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { asc, eq, ilike, or } from 'drizzle-orm';
+import { and, asc, eq, ilike, or } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
 import { companySettings, refreshTokens, roles, users } from '../db/schema';
@@ -36,7 +36,11 @@ r.get('/users', requirePerm('users:view'), async (req, res) => {
   const { search } = pageParams(req.query);
   const rows = await db.query.users.findMany({
     columns: publicUser, with: { role: { columns: { id: true, name: true } }, manager: { columns: { id: true, name: true } } },
-    where: search ? or(ilike(users.name, `%${search}%`), ilike(users.email, `%${search}%`)) : undefined,
+    // switched-off users are hidden unless asked for (?status=inactive or all)
+    where: and(
+      search ? or(ilike(users.name, `%${search}%`), ilike(users.email, `%${search}%`)) : undefined,
+      req.query.status === 'all' ? undefined : eq(users.active, req.query.status !== 'inactive'),
+    ),
     orderBy: [asc(users.name)],
   });
   res.json({ data: rows, total: rows.length });

@@ -889,3 +889,13 @@ test('login policy: official domain only (others only if the Super Admin adds th
   await ok('admin', 'PUT', '/settings/login', { domains: ['tisa.in', '@tisatech.in'] });
   assert.equal((await call('sales', 'GET', '/auth/me')).status, 200);
 });
+
+test('users list hides switched-off users unless asked', async () => {
+  const roles = await ok('admin', 'GET', '/roles');
+  const u = await ok('admin', 'POST', '/users', { name: 'Gone Person', email: 'gone.person@tisa.in', roleId: roles.find((r: any) => r.name === 'Sales').id, password: 'Temp@12345' });
+  await ok('admin', 'PATCH', `/users/${u.id}`, { active: false });
+  assert.ok(!(await ok('admin', 'GET', '/users')).data.some((x: any) => x.id === u.id));
+  assert.ok((await ok('admin', 'GET', '/users?status=inactive')).data.every((x: any) => !x.active));
+  assert.ok((await ok('admin', 'GET', '/users?status=inactive')).data.some((x: any) => x.id === u.id));
+  assert.ok((await ok('admin', 'GET', '/users?status=all')).data.some((x: any) => x.id === u.id));
+});

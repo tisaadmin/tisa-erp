@@ -379,6 +379,7 @@ export function UsersPage() {
     <>
     <LoginPolicyCard domains={domains} editable={superAdmin && can('settings:edit')} onSaved={() => policy.refetch()} />
     <MasterPage<any> title="Users" singular="User" path="/users" perm="users" fields={fields} defaults={{ active: true, isFieldStaff: false }}
+      filters={(q, set) => <Select className="w-44" value={q.status ?? ''} onChange={(e) => set('status', e.target.value)} placeholder="Active users" options={[{ value: 'inactive', label: 'Switched-off users' }, { value: 'all', label: 'All users' }]} />}
       cols={[
         { key: 'name', label: 'Name', render: (r) => <>{r.name}<div className="text-xs text-slate-400">{r.employeeCode} · {r.designation}</div></> },
         { key: 'email', label: 'Email', render: (r) => <>{r.email}{r.externalEmail && <div><Badge t="amber">Non-official email · allowed by Super Admin</Badge></div>}{r.mustChangePassword && r.active && <div><Badge t="gray">Temporary password</Badge></div>}</> }, { key: 'phone', label: 'Mobile', render: (r) => r.phone ?? '—' },
