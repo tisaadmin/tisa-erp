@@ -9,6 +9,7 @@ import { db } from '../db';
 import { refreshTokens, users } from '../db/schema';
 import { HttpError } from '../lib/http';
 import { authenticate, invalidateUserCache, loadAuthUser, signAccessToken } from '../middleware/auth';
+import { loginDomains, mayUseEmail } from '../lib/loginPolicy';
 
 const r = Router();
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -24,6 +25,9 @@ const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHe
 r.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = z.object({ email: z.string().email(), password: z.string().min(1) }).parse(req.body);
   const u = await db.query.users.findFirst({ where: eq(users.email, email.toLowerCase().trim()) });
+  if (!(u?.externalEmail) && !(await mayUseEmail(email, false))) {
+    throw new HttpError(403, `Sign in with your official email (@${(await loginDomains()).join(' / @')}). Other addresses work only if the Super Admin has added them.`);
+  }
   if (!u || !u.active || !(await bcrypt.compare(password, u.passwordHash))) throw new HttpError(401, 'Invalid email or password');
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, u.id));
   const tokens = await issueTokens(u.id);
@@ -52,13 +56,15 @@ r.get('/me', authenticate, async (req, res) => {
 });
 
 r.post('/change-password', authenticate, async (req, res) => {
-  const { currentPassword, newPassword } = z.object({ currentPassword: z.string(), newPassword: z.string().min(8) }).parse(req.body);
+  const { currentPassword, newPassword } = z.object({ currentPassword: z.string(), newPassword: z.string().min(8, 'Use at least 8 characters') }).parse(req.body);
   const u = await db.query.users.findFirst({ where: eq(users.id, req.user.id) });
   if (!u || !(await bcrypt.compare(currentPassword, u.passwordHash))) throw new HttpError(400, 'Current password is incorrect');
-  await db.update(users).set({ passwordHash: await bcrypt.hash(newPassword, 10) }).where(eq(users.id, u.id));
+  if (currentPassword === newPassword) throw new HttpError(400, 'Choose a password different from the current one');
+  await db.update(users).set({ passwordHash: await bcrypt.hash(newPassword, 10), mustChangePassword: false }).where(eq(users.id, u.id));
   await db.delete(refreshTokens).where(eq(refreshTokens.userId, u.id));
   invalidateUserCache(u.id);
-  res.json({ ok: true });
+  // fresh session (other devices are signed out)
+  res.json({ ok: true, ...(await issueTokens(u.id)), user: await loadAuthUser(u.id) });
 });
 
 /** Mobile app registers its Expo push token after login. */

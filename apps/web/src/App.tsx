@@ -2,7 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
 import { Spinner } from './components/ui';
 import { useAuth } from './lib/auth';
-import Login from './pages/Login';
+import Login, { SetPassword } from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import { AmcPage, ClientDetail, ClientsPage, InventoryPage, LeadsPage, SitesPage, UsersPage, VendorsPage } from './pages/Masters';
 import { ChallanDetail, ChallansPage, NewChallan, OrderDetail, OrderEditor, OrdersPage, QuotationDetail, QuotationEditor, QuotationsPage } from './pages/Sales';
@@ -21,6 +21,7 @@ export default function App() {
   const { user, loading } = useAuth();
   if (loading) return <Spinner className="h-full items-center" />;
   if (!user) return <Login />;
+  if (user.mustChangePassword) return <SetPassword />;
   return (
     <Routes>
       <Route element={<Layout />}>

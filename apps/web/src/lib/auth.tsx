@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, session } from './api';
 
-export type Me = { id: string; name: string; email: string; roleName: string; permissions: string[]; managerId: string | null; isFieldStaff: boolean };
-type Ctx = { user: Me | null; loading: boolean; login: (email: string, password: string) => Promise<void>; logout: () => void; can: (perm: string) => boolean };
+export type Me = { id: string; name: string; email: string; roleName: string; permissions: string[]; managerId: string | null; isFieldStaff: boolean; mustChangePassword?: boolean };
+type Ctx = { user: Me | null; loading: boolean; login: (email: string, password: string) => Promise<void>; logout: () => void; can: (perm: string) => boolean; changePassword: (current: string, next: string) => Promise<void> };
 
 const AuthCtx = createContext<Ctx>(null as unknown as Ctx);
 
@@ -39,8 +39,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(d.user);
   };
 
+  const changePassword = async (currentPassword: string, newPassword: string) => {
+    const d = await api<{ accessToken: string; refreshToken: string; user: Me }>('/auth/change-password', { body: { currentPassword, newPassword } });
+    session.set({ accessToken: d.accessToken, refreshToken: d.refreshToken });
+    setUser(d.user);
+  };
   const can = useCallback((p: string) => hasPerm(user?.permissions, p), [user]);
-  return <AuthCtx.Provider value={{ user, loading, login, logout, can }}>{children}</AuthCtx.Provider>;
+  return <AuthCtx.Provider value={{ user, loading, login, logout, can, changePassword }}>{children}</AuthCtx.Provider>;
 }
 
 export const useAuth = () => useContext(AuthCtx);

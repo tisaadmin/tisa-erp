@@ -2,8 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { api, initApi, setLogoutHandler, setSession, getSession } from './api';
 import { registerPush } from './push';
 
-export type Me = { id: string; name: string; email: string; roleName: string; permissions: string[]; managerId: string | null; isFieldStaff: boolean };
-type Ctx = { user: Me | null; ready: boolean; login: (e: string, p: string) => Promise<void>; logout: () => Promise<void>; can: (p: string) => boolean };
+export type Me = { id: string; name: string; email: string; roleName: string; permissions: string[]; managerId: string | null; isFieldStaff: boolean; mustChangePassword?: boolean };
+type Ctx = { user: Me | null; ready: boolean; login: (e: string, p: string) => Promise<void>; logout: () => Promise<void>; can: (p: string) => boolean; changePassword: (current: string, next: string) => Promise<void> };
 const C = createContext<Ctx>(null as unknown as Ctx);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -29,7 +29,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await setSession(null);
     setUser(null);
   };
+  const changePassword = async (currentPassword: string, newPassword: string) => {
+    const d = await api<{ accessToken: string; refreshToken: string; user: Me }>('/auth/change-password', { body: { currentPassword, newPassword } });
+    await setSession({ accessToken: d.accessToken, refreshToken: d.refreshToken });
+    setUser(d.user);
+  };
   const can = useCallback((p: string) => !!user && (user.permissions.includes('*') || user.permissions.includes(p) || user.permissions.includes(`${p.split(':')[0]}:*`)), [user]);
-  return <C.Provider value={{ user, ready, login, logout, can }}>{children}</C.Provider>;
+  return <C.Provider value={{ user, ready, login, logout, can, changePassword }}>{children}</C.Provider>;
 }
 export const useAuth = () => useContext(C);

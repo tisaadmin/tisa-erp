@@ -76,6 +76,8 @@ export const companySettings = pgTable('company_settings', {
   workdayStart: text().notNull().default('09:30'),
   /** Which steps must follow an earlier one (see services/workflow.ts) */
   workflowRules: jsonb().$type<Record<string, boolean>>().notNull().default({}),
+  /** official email domains that may sign in (sub-domains included); other addresses only if the Super Admin allows them per user */
+  loginDomains: text().array().notNull().default(['tisa.in']),
   updatedAt: updatedAt(),
 });
 
@@ -101,6 +103,10 @@ export const users = pgTable('users', {
   managerId: text(),
   isFieldStaff: boolean().notNull().default(false),
   active: boolean().notNull().default(true),
+  /** set when an admin gives a (temporary) password — the user must choose their own at next sign-in */
+  mustChangePassword: boolean().notNull().default(false),
+  /** a non-official email (e.g. Gmail) that the Super Admin has allowed to sign in */
+  externalEmail: boolean().notNull().default(false),
   pushToken: text(),
   lastLoginAt: ts(),
   createdAt: createdAt(),

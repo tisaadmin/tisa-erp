@@ -6,6 +6,7 @@ import { ActivityIndicator, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { C } from '../src/components/ui';
 import { AuthProvider, useAuth } from '../src/lib/auth';
+import { SetPassword } from '../src/components/SetPassword';
 
 /** Maps a desktop link (/tickets/123) from a push notification to an app route. */
 function routeFor(link?: string): string | null {
@@ -33,6 +34,7 @@ function Gate() {
     return () => sub.remove();
   }, [router]);
   if (!ready) return <View style={{ flex: 1, justifyContent: 'center', backgroundColor: C.brand }}><ActivityIndicator color="#fff" /></View>;
+  if (user?.mustChangePassword) return <SetPassword />;
   return (
     <Stack screenOptions={{ headerStyle: { backgroundColor: C.brand }, headerTintColor: '#fff', headerTitleStyle: { fontWeight: '600' } }}>
       <Stack.Screen name="login" options={{ headerShown: false }} />

@@ -362,24 +362,53 @@ export function AmcPage() {
 export function UsersPage() {
   const roles = useGet<any[]>('/roles');
   const users = useUsers();
+  const { user: me, can } = useAuth();
+  const superAdmin = !!me?.permissions.includes('*');
+  const policy = useGet<{ domains: string[] }>('/settings/login');
+  const domains = policy.data?.domains ?? ['tisa.in'];
   const roleOpts = (roles.data ?? []).map((r) => ({ value: r.id, label: r.name }));
   const userOpts = (users.data ?? []).map((u) => ({ value: u.id, label: u.name }));
   const fields: FieldDef[] = [
-    { name: 'name', label: 'Full name', required: true }, { name: 'email', label: 'Email (login)', type: 'email', required: true }, { name: 'phone', label: 'Mobile' },
+    { name: 'name', label: 'Full name', required: true }, { name: 'email', label: 'Email (login)', type: 'email', required: true, hint: superAdmin ? `Official @${domains.join(' / @')} address — or any other email (allowed because you are Super Admin)` : `Must be an official @${domains.join(' / @')} address` }, { name: 'phone', label: 'Mobile' },
     { name: 'employeeCode', label: 'Employee code' }, { name: 'designation', label: 'Designation' }, { name: 'department', label: 'Department' },
     { name: 'roleId', label: 'Role (access level)', type: 'combo', options: roleOpts, required: true }, { name: 'managerId', label: 'Reports to (approves expenses & leave)', type: 'combo', options: userOpts },
-    { name: 'password', label: 'Password', hint: 'Min 8 chars. Leave blank to keep unchanged.' },
+    { name: 'password', label: 'Temporary password', hint: 'Min 8 chars. They must choose their own at first sign-in. Leave blank to keep the current one.' },
     { name: 'isFieldStaff', label: 'Field staff', type: 'checkbox', hint: 'Uses the mobile app' }, { name: 'active', label: 'Active', type: 'checkbox', hint: 'Can sign in' },
   ];
   return (
+    <>
+    <LoginPolicyCard domains={domains} editable={superAdmin && can('settings:edit')} onSaved={() => policy.refetch()} />
     <MasterPage<any> title="Users" singular="User" path="/users" perm="users" fields={fields} defaults={{ active: true, isFieldStaff: false }}
       cols={[
         { key: 'name', label: 'Name', render: (r) => <>{r.name}<div className="text-xs text-slate-400">{r.employeeCode} · {r.designation}</div></> },
-        { key: 'email', label: 'Email' }, { key: 'phone', label: 'Mobile', render: (r) => r.phone ?? '—' },
+        { key: 'email', label: 'Email', render: (r) => <>{r.email}{r.externalEmail && <div><Badge t="amber">Non-official email · allowed by Super Admin</Badge></div>}{r.mustChangePassword && r.active && <div><Badge t="gray">Temporary password</Badge></div>}</> }, { key: 'phone', label: 'Mobile', render: (r) => r.phone ?? '—' },
         { key: 'role', label: 'Role', render: (r) => <Badge t="blue">{r.role?.name}</Badge> }, { key: 'manager', label: 'Reports to', render: (r) => r.manager?.name ?? '—' },
         { key: 'field', label: 'Field', render: (r) => (r.isFieldStaff ? <Badge t="violet">Mobile</Badge> : '') },
         { key: 'lastLoginAt', label: 'Last login', render: (r) => fmtDateTime(r.lastLoginAt) }, { key: 'active', label: 'Status', render: (r) => <Status s={r.active ? 'ACTIVE' : 'INACTIVE'} /> },
       ]} />
+    </>
+  );
+}
+
+/** Which email domains may sign in. Only the Super Admin can change it. */
+function LoginPolicyCard({ domains, editable, onSaved }: { domains: string[]; editable: boolean; onSaved: () => void }) {
+  const [edit, setEdit] = useState<string | null>(null);
+  const save = useAction(() => api('/settings/login', { method: 'PUT', body: { domains: (edit ?? '').split(/[\s,;]+/).filter(Boolean) } }), { success: 'Login domains saved', onSuccess: () => { setEdit(null); onSaved(); } });
+  return (
+    <div className="mb-4 rounded-lg border border-slate-200 bg-white p-4 text-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-slate-800">Who can sign in:</span>
+        {edit === null ? <>
+          <span>official emails ending in {domains.map((d) => <Badge key={d} t="blue">@{d}</Badge>)} (sub-domains included), plus any other address the Super Admin adds here as a user.</span>
+          {editable && <Button size="sm" variant="ghost" onClick={() => setEdit(domains.join(', '))}>Change</Button>}
+        </> : <>
+          <Input className="w-72" value={edit} onChange={(e) => setEdit(e.target.value)} placeholder="tisa.in" />
+          <Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Save</Button>
+          <Button size="sm" onClick={() => setEdit(null)}>Cancel</Button>
+        </>}
+      </div>
+      <p className="mt-1 text-slate-500">New users get a temporary password and must set their own at first sign-in (web and mobile app).</p>
+    </div>
   );
 }
 

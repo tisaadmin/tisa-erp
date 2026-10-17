@@ -75,13 +75,13 @@ const companyFields: FieldDef[] = [
 ];
 
 export function SettingsPage() {
-  const { can } = useAuth();
+  const { can, changePassword } = useAuth();
   const s = useGet<{ company: Record<string, any> | null }>('/settings');
   const [v, setV] = useState<Record<string, any> | null>(null);
   const [pw, setPw] = useState({ currentPassword: '', newPassword: '' });
   useEffect(() => { if (s.data) setV(s.data.company ?? { stateCode: '27' }); }, [s.data]);
   const save = useAction(() => { const { id: _i, updatedAt: _u, stateName: _s, ...rest } = v!; return api('/settings', { method: 'PUT', body: rest }); }, { success: 'Company settings saved', invalidate: [['/settings']] });
-  const chg = useAction(() => api('/auth/change-password', { body: pw }), { success: 'Password changed', onSuccess: () => setPw({ currentPassword: '', newPassword: '' }) });
+  const chg = useAction(() => changePassword(pw.currentPassword, pw.newPassword), { success: 'Password changed', onSuccess: () => setPw({ currentPassword: '', newPassword: '' }) });
   if (!v) return <Spinner />;
   return (
     <div className="space-y-4">

@@ -50,6 +50,13 @@
       "when": 1792221895858,
       "tag": "0006_service_receivables",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792223216328,
+      "tag": "0007_login_policy",
+      "breakpoints": true
     }
   ]
 }

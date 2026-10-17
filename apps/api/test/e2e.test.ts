@@ -840,3 +840,52 @@ test('FFH sales bills, tickets & projects import: invoices with FFH numbers, tic
   const again = await ok('admin', 'POST', '/imports/ffh-history', undefined, fd2);
   assert.equal(again.stats.invoice.skip, 3); assert.equal(again.stats.ticket.skip, 3); assert.equal(again.stats.project.skip, 1);
 });
+
+test('login policy: official domain only (others only if the Super Admin adds them), temporary password must be changed, Super Admin protected', async () => {
+  // unknown non-official address → refused with a clear message
+  const g = await call('', 'POST', '/auth/login', { email: 'someone@gmail.com', password: 'whatever1' });
+  assert.equal(g.status, 403); assert.match(g.data.error, /official email/);
+  const roles = await ok('admin', 'GET', '/roles');
+  const roleId = (n: string) => roles.find((r: any) => r.name === n).id;
+  // Super Admin creates an HR user with an official address → temporary password
+  await ok('admin', 'POST', '/users', { name: 'Hema HR', email: 'hema.hr@tisa.in', roleId: roleId('HR'), password: 'Temp@12345' });
+  let r = await call('', 'POST', '/auth/login', { email: 'hema.hr@tisa.in', password: 'Temp@12345' });
+  assert.equal(r.status, 200); assert.equal(r.data.user.mustChangePassword, true);
+  tokens.hr = r.data.accessToken;
+  const blocked = await call('hr', 'GET', '/users');
+  assert.equal(blocked.status, 403); assert.equal(blocked.data.details?.code, 'PASSWORD_CHANGE_REQUIRED');
+  assert.equal((await call('hr', 'GET', '/auth/me')).status, 200);
+  assert.equal((await call('hr', 'POST', '/auth/change-password', { currentPassword: 'Temp@12345', newPassword: 'Temp@12345' })).status, 400, 'must differ');
+  const ch = await ok('hr', 'POST', '/auth/change-password', { currentPassword: 'Temp@12345', newPassword: 'Hema@2026!' });
+  tokens.hr = ch.accessToken; assert.equal(ch.user.mustChangePassword, false);
+  await ok('hr', 'GET', '/users');
+  // HR (users:create, not Super Admin): official emails only, cannot touch / create Super Admins
+  assert.equal((await call('hr', 'POST', '/users', { name: 'Tech G', email: 'tech.g@gmail.com', roleId: roleId('Field Technician'), password: 'Temp@12345' })).status, 400);
+  const t = await ok('hr', 'POST', '/users', { name: 'Tech T', email: 'tech.t@mum.tisa.in', roleId: roleId('Field Technician'), password: 'Temp@12345', isFieldStaff: true });
+  assert.equal((await call('hr', 'POST', '/users', { name: 'Boss', email: 'boss@tisa.in', roleId: roleId('Super Admin'), password: 'Temp@12345' })).status, 400);
+  const adminId = (await ok('admin', 'GET', '/auth/me')).id;
+  assert.equal((await call('hr', 'PATCH', `/users/${adminId}`, { password: 'Hacked@123' })).status, 400, 'HR cannot reset the Super Admin');
+  assert.equal((await call('hr', 'PATCH', `/users/${t.id}`, { roleId: roleId('Super Admin') })).status, 400);
+  assert.equal((await call('hr', 'POST', '/users', { name: 'Dup', email: 'TECH.T@mum.tisa.in', roleId: roleId('Field Technician'), password: 'Temp@12345' })).status, 400, 'email already has a login');
+  // Super Admin can add a Gmail user → allowed to sign in
+  const ext = await ok('admin', 'POST', '/users', { name: 'Ajay G', email: 'ajay.ghate.test@gmail.com', roleId: roleId('Field Technician'), password: 'Temp@12345', isFieldStaff: true });
+  const users = await ok('admin', 'GET', '/users');
+  assert.equal(users.data.find((u: any) => u.id === ext.id).externalEmail, true);
+  r = await call('', 'POST', '/auth/login', { email: 'ajay.ghate.test@gmail.com', password: 'Temp@12345' });
+  assert.equal(r.status, 200);
+  // admin resets someone's password → temporary again
+  await ok('admin', 'PATCH', `/users/${t.id}`, { password: 'Reset@1234' });
+  assert.equal((await ok('admin', 'GET', '/users')).data.find((u: any) => u.id === t.id).mustChangePassword, true);
+  // the only Super Admin cannot be demoted or deactivated
+  assert.equal((await call('admin', 'PATCH', `/users/${adminId}`, { roleId: roleId('Management') })).status, 400);
+  assert.equal((await call('admin', 'PATCH', `/users/${adminId}`, { active: false })).status, 400);
+  // login domains: only the Super Admin changes them; dropping a domain cuts off those users
+  assert.equal((await call('hr', 'PUT', '/settings/login', { domains: ['tisa.in'] })).status, 403);
+  assert.deepEqual((await ok('admin', 'GET', '/settings/login')).domains.sort(), ['tisa.in', 'tisatech.in']);
+  await ok('admin', 'PUT', '/settings/login', { domains: ['tisa.in'] });
+  assert.equal((await call('sales', 'GET', '/auth/me')).status, 401, 'a @tisatech.in session stops working');
+  assert.equal((await call('', 'POST', '/auth/login', { email: 'sales@tisatech.in', password: 'Tisa@12345' })).status, 403);
+  assert.equal((await call('hr', 'GET', '/auth/me')).status, 200, '@tisa.in still fine');
+  await ok('admin', 'PUT', '/settings/login', { domains: ['tisa.in', '@tisatech.in'] });
+  assert.equal((await call('sales', 'GET', '/auth/me')).status, 200);
+});

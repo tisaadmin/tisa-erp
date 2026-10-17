@@ -95,13 +95,17 @@ async function main() {
   // Admin
   const adminEmail = (process.env.SEED_ADMIN_EMAIL ?? 'admin@tisatech.in').toLowerCase();
   const adminPass = process.env.SEED_ADMIN_PASSWORD ?? 'Admin@12345';
-  const existingAdmin = await db.query.users.findFirst({ where: eq(users.email, adminEmail) });
+  // only on a brand-new install: once any Super Admin exists (even renamed), never re-create the default admin
+  const anySuper = await db.query.users.findFirst({ where: eq(users.roleId, roleIds.get('Super Admin')!), columns: { id: true } });
+  const existingAdmin = anySuper ?? (await db.query.users.findFirst({ where: eq(users.email, adminEmail) }));
   if (!existingAdmin) {
-    await db.insert(users).values({ name: 'Administrator', email: adminEmail, passwordHash: await bcrypt.hash(adminPass, 10), roleId: roleIds.get('Super Admin')!, employeeCode: 'TT000' });
+    await db.insert(users).values({ name: 'Administrator', email: adminEmail, externalEmail: true, mustChangePassword: process.env.NODE_ENV === 'production', passwordHash: await bcrypt.hash(adminPass, 10), roleId: roleIds.get('Super Admin')!, employeeCode: 'TT000' });
     console.log(`✓ admin user ${adminEmail} created (password from SEED_ADMIN_PASSWORD — change it after first login)`);
   }
 
   if (!demo) return;
+  // demo staff use @tisatech.in — allow that domain on local / test databases only
+  if (process.env.NODE_ENV !== 'production') await db.update(companySettings).set({ loginDomains: ['tisa.in', 'tisatech.in'] }).where(eq(companySettings.id, 1));
 
   // Staff
   const pw = await bcrypt.hash('Tisa@12345', 10);

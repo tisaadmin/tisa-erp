@@ -13,6 +13,7 @@ import { GSTIN_REGEX, INDIAN_STATES } from '../lib/gst';
 import { FIELD_ENTITIES, REGISTRY, resolvedFields, saveFieldConfig, type FieldEntity } from '../lib/fields';
 
 import { WORKFLOW_RULES, workflowRules, type WorkflowRule } from '../services/workflow';
+import { isOfficialEmail, isSuperAdminPerms, loginDomains } from '../lib/loginPolicy';
 const r = Router();
 const publicUser = { passwordHash: false, pushToken: false } as const;
 
@@ -50,25 +51,80 @@ r.get('/users/lookup', async (req, res) => {
   res.json(rows);
 });
 
+/**
+ * Who may be given a login:
+ *  - official-domain emails (Settings → login domains, default tisa.in) — anyone with users:create;
+ *  - any other address (e.g. Gmail) — only the Super Admin, which marks the user as an allowed external email.
+ * Only the Super Admin can create or change Super Admin accounts. A password set by someone else is temporary.
+ */
+async function emailRule(req: { user: { permissions: string[] } }, email: string) {
+  if (isOfficialEmail(email, await loginDomains())) return { externalEmail: false };
+  if (!isSuperAdminPerms(req.user.permissions)) throw badRequest(`Only the Super Admin can give a login to an email outside @${(await loginDomains()).join(' / @')}`);
+  return { externalEmail: true };
+}
+async function isSuperRole(roleId: string | null | undefined) {
+  if (!roleId) return false;
+  const role = await db.query.roles.findFirst({ where: eq(roles.id, roleId), columns: { permissions: true } });
+  return !!role && isSuperAdminPerms(role.permissions);
+}
+async function activeSuperAdmins() {
+  const rows = await db.query.users.findMany({ where: eq(users.active, true), columns: { id: true }, with: { role: { columns: { permissions: true } } } });
+  return rows.filter((u) => isSuperAdminPerms(u.role.permissions)).map((u) => u.id);
+}
+
 r.post('/users', requirePerm('users:create'), async (req, res) => {
   const { password, ...data } = userSchema.parse(req.body);
   if (!password) throw badRequest('Password is required (min 8 characters)');
-  const [row] = await db.insert(users).values({ ...data, passwordHash: await bcrypt.hash(password, 10) }).returning({ id: users.id });
-  audit(req, 'create', 'user', row.id, { ...data });
+  if ((await isSuperRole(data.roleId)) && !isSuperAdminPerms(req.user.permissions)) throw badRequest('Only the Super Admin can create another Super Admin');
+  const rule = await emailRule(req, data.email);
+  if (await db.query.users.findFirst({ where: eq(users.email, data.email), columns: { id: true } })) throw badRequest(`${data.email} already has a login`);
+  const [row] = await db.insert(users).values({ ...data, ...rule, mustChangePassword: true, passwordHash: await bcrypt.hash(password, 10) }).returning({ id: users.id });
+  audit(req, 'create', 'user', row.id, { ...data, ...rule });
   res.status(201).json(row);
 });
 
 r.patch('/users/:id', requirePerm('users:edit'), async (req, res) => {
   const { password, ...data } = userSchema.partial().parse(req.body);
   if (data.managerId === req.params.id) throw badRequest('A user cannot report to themselves');
+  const cur = await db.query.users.findFirst({ where: eq(users.id, req.params.id), with: { role: { columns: { permissions: true } } } });
+  if (!cur) throw notFound('User');
+  const superCaller = isSuperAdminPerms(req.user.permissions);
+  if ((isSuperAdminPerms(cur.role.permissions) || (await isSuperRole(data.roleId))) && !superCaller) throw badRequest('Only the Super Admin can change a Super Admin account or make someone Super Admin');
   const set: Partial<typeof users.$inferInsert> = { ...data };
-  if (password) set.passwordHash = await bcrypt.hash(password, 10);
+  if (data.email && data.email !== cur.email) {
+    Object.assign(set, await emailRule(req, data.email));
+    const clash = await db.query.users.findFirst({ where: eq(users.email, data.email), columns: { id: true } });
+    if (clash && clash.id !== cur.id) throw badRequest(`${data.email} already has a login`);
+  }
+  // never leave the ERP without an active Super Admin
+  const losingSuper = isSuperAdminPerms(cur.role.permissions) && (data.active === false || (data.roleId && data.roleId !== cur.roleId && !(await isSuperRole(data.roleId))));
+  if (losingSuper && (await activeSuperAdmins()).filter((id) => id !== cur.id).length === 0) throw badRequest('This is the only active Super Admin — make someone else Super Admin first');
+  if (data.active === false && cur.id === req.user.id) throw badRequest('You cannot deactivate your own account');
+  if (password) { set.passwordHash = await bcrypt.hash(password, 10); set.mustChangePassword = cur.id !== req.user.id; }
   const [row] = await db.update(users).set(set).where(eq(users.id, req.params.id)).returning({ id: users.id });
-  if (!row) throw notFound('User');
-  if (password || data.active === false) await db.delete(refreshTokens).where(eq(refreshTokens.userId, row.id));
+  if (password || data.active === false || set.email) await db.delete(refreshTokens).where(eq(refreshTokens.userId, row.id));
   invalidateUserCache(row.id);
-  audit(req, 'update', 'user', row.id, data);
+  audit(req, 'update', 'user', row.id, { ...data, passwordReset: !!password });
   res.json(row);
+});
+
+// ── Login policy (official email domains) ──
+r.get('/settings/login', requirePerm('users:view'), async (_req, res) => {
+  res.json({ domains: await loginDomains() });
+});
+r.put('/settings/login', requirePerm('settings:edit'), async (req, res) => {
+  if (!isSuperAdminPerms(req.user.permissions)) throw badRequest('Only the Super Admin can change the login domains');
+  const { domains } = z.object({ domains: z.array(z.string().trim().toLowerCase().transform((d) => d.replace(/^@/, '')).pipe(z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)+$/, 'Enter domains like tisa.in'))).min(1) }).parse(req.body);
+  // the caller must still be able to sign in afterwards
+  const me = await db.query.users.findFirst({ where: eq(users.id, req.user.id), columns: { email: true, externalEmail: true } });
+  if (me && !me.externalEmail && !isOfficialEmail(me.email, domains)) throw badRequest(`Your own login (${me.email}) would stop working — keep its domain in the list`);
+  const row = await db.query.companySettings.findFirst({ columns: { id: true } });
+  if (!row) throw notFound('Company settings');
+  await db.update(companySettings).set({ loginDomains: [...new Set(domains)] }).where(eq(companySettings.id, row.id));
+  clearCompanyCache();
+  invalidateUserCache();
+  audit(req, 'update', 'settings', 'login', { domains });
+  res.json({ domains: await loginDomains() });
 });
 
 // ── Roles ──
