@@ -53,6 +53,8 @@ function payload(v: Record<string, any>, fields: FieldDef[]) {
   const out: Record<string, any> = {};
   for (const f of fields) if (!f.name.startsWith('cf:') && f.name in v) out[f.name] = v[f.name] === '' ? null : v[f.name];
   if (fields.some((f) => f.name.startsWith('cf:')) || v.customFields) out.customFields = v.customFields ?? {};
+  // duplicate-check confirmation (item form) travels with the record
+  for (const k of ['confirmDistinct', 'distinctReason']) if (v[k] !== undefined) out[k] = v[k];
   return out;
 }
 

@@ -1,31 +1,35 @@
 {
   "expo": {
-    "name": "Tisa Field",
-    "slug": "tisa-field",
-    "scheme": "tisafield",
+    "name": "Tisa ERP",
+    "slug": "tisa-erp",
+    "scheme": "tisaerp",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "icon": "./assets/icon.png",
     "splash": {
-      "image": "./assets/icon.png",
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0f3d5e"
+      "backgroundColor": "#ffffff"
     },
     "ios": {
-      "bundleIdentifier": "in.tisatech.field",
+      "bundleIdentifier": "in.tisa.erp",
       "supportsTablet": false,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Your location is stamped on attendance and site photos so the office can verify site visits.",
         "NSCameraUsageDescription": "Take geo-tagged site photos, selfies for attendance and expense receipts.",
         "NSPhotoLibraryUsageDescription": "Attach receipts and photos."
+      },
+      "buildNumber": "1",
+      "config": {
+        "usesNonExemptEncryption": false
       }
     },
     "android": {
-      "package": "in.tisatech.field",
+      "package": "in.tisa.erp",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
-        "backgroundColor": "#0f3d5e"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
       },
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION",
@@ -35,7 +39,8 @@
       ],
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
-      ]
+      ],
+      "versionCode": 1
     },
     "plugins": [
       "expo-router",
@@ -55,23 +60,18 @@
       [
         "expo-notifications",
         {
-          "color": "#0f3d5e"
+          "color": "#E67817",
+          "icon": "./assets/notification-icon.png"
         }
       ]
     ],
     "extra": {
       "apiUrl": "https://tisa-erp-production.up.railway.app",
-      "eas": {
-        "projectId": "7b19c15d-de5d-4668-92e0-9e9381a4c15f"
-      },
       "router": {}
     },
     "runtimeVersion": {
       "policy": "sdkVersion"
     },
-    "owner": "atharvasamant",
-    "updates": {
-      "url": "https://u.expo.dev/7b19c15d-de5d-4668-92e0-9e9381a4c15f"
-    }
+    "owner": "tisaatharvasamant"
   }
 }

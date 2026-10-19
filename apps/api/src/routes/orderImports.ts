@@ -13,7 +13,8 @@ import { audit } from '../lib/audit';
 import { badRequest, notFound } from '../lib/http';
 import { GSTIN_REGEX, INDIAN_STATES, stateFromGstin } from '../lib/gst';
 import { nextCode, reserveCodes } from '../lib/numbering';
-import { requirePerm, type AuthUser } from '../middleware/auth';
+import { can, requirePerm, type AuthUser } from '../middleware/auth';
+import { itemKey, unitKey } from '../lib/itemMatch';
 import { enforceRule } from '../services/workflow';
 import { UNIT_MAP } from '../import/engine';
 import { parseOrderDocument, type ParsedOrderDoc } from '../import/orderDoc';
@@ -198,10 +199,20 @@ async function commitOrderImport(job: Job, doc: ParsedOrderDoc, d: CommitInput, 
 
     // new items — one per distinct product (the same product twice in a file is created once)
     const toCreate = lines.filter((l) => l.action === 'new');
-    const keyOfItem = (l: (typeof lines)[number]) => `${l.description.toLowerCase().replace(/[^a-z0-9]/g, '')}|${l.unit.toLowerCase()}`;
-    const distinct = [...new Map(toCreate.map((l) => [keyOfItem(l), l])).values()];
-    const skus = distinct.length ? await reserveCodes(tx, 'ITEM', 'IT', distinct.length) : [];
+    const keyOfItem = (l: (typeof lines)[number]) => `${itemKey(l.description)}|${unitKey(l.unit)}`;
     const idByKey = new Map<string, string>();
+    // an item that already exists under the same (normalized) name and unit is reused, never created twice
+    if (toCreate.length) {
+      for (const x of await tx.select({ id: items.id, name: items.name, unit: items.unit, active: items.active }).from(items)) {
+        const k = `${itemKey(x.name)}|${unitKey(x.unit)}`;
+        if (x.active || !idByKey.has(k)) idByKey.set(k, x.id);
+      }
+    }
+    const distinct = [...new Map(toCreate.filter((l) => !idByKey.has(keyOfItem(l))).map((l) => [keyOfItem(l), l])).values()];
+    if (distinct.length && !can(user, 'items:create')) {
+      throw badRequest(`New inventory items can only be added by Stores: ${distinct.map((l) => l.description).slice(0, 5).join(', ')}${distinct.length > 5 ? '…' : ''} — pick the existing item for these lines, or ask Stores to add them first`);
+    }
+    const skus = distinct.length ? await reserveCodes(tx, 'ITEM', 'IT', distinct.length) : [];
     for (const [i, l] of distinct.entries()) {
       const [it] = await tx.insert(items).values({
         sku: skus[i], name: l.description, type: l.newItem!.type, categoryId: l.newItem!.categoryId!, brand: l.newItem!.brand || null,

@@ -57,7 +57,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: st
   { name: 'Super Admin', description: 'Full access to everything', permissions: ['*'] },
   {
     name: 'Management', description: 'Directors — view everything, approve anything',
-    permissions: ALL_PERMISSIONS.filter((p) => !p.startsWith('roles:edit') && !p.startsWith('users:') && p !== 'records:delete' && p !== 'purchase_orders:without_accessories').concat(['users:view']),
+    permissions: ALL_PERMISSIONS.filter((p) => !p.startsWith('roles:edit') && !p.startsWith('users:') && p !== 'records:delete' && p !== 'purchase_orders:without_accessories' && p !== 'items:create').concat(['users:view']),
   },
   {
     name: 'Sales', description: 'Leads, clients, quotations, order forms',

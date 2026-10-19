@@ -530,7 +530,11 @@ test('order import: FFH product-details export (ProductDetails_Id-<SO>) fills th
   assert.equal(p.lines[0].action, 'match'); assert.equal(p.lines[0].deliveredQty, 2); assert.equal(p.lines[0].rate, 1000);
   assert.equal(p.lines[1].model, 'DS925'); assert.equal(p.lines[1].description, 'Sonology NAS DS925 storage — with 4 bays');
   const lines = p.lines.map((l: any) => ({ ...l, newItem: { ...l.newItem, categoryId: l.newItem.categoryId ?? ctx.cam.categoryId } }));
-  const done = await ok('sales', 'POST', `/order-imports/${p.id}/commit`, { clientId: p.clientId, site: p.siteId ? { mode: 'existing', siteId: p.siteId } : { mode: 'none' }, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines });
+  const body = { clientId: p.clientId, site: p.siteId ? { mode: 'existing', siteId: p.siteId } : { mode: 'none' }, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines };
+  // only Stores / Super Admin add new inventory items
+  const refused = await call('sales', 'POST', `/order-imports/${p.id}/commit`, body);
+  assert.equal(refused.status, 400); assert.match(refused.data.error, /only be added by Stores/);
+  const done = await ok('admin', 'POST', `/order-imports/${p.id}/commit`, body);
   assert.equal(done.filledIn, true);
   const o = await ok('sales', 'GET', `/orders/${done.orderId}`);
   assert.equal(o.taxable, 5000); assert.equal(o.total, 5900);
@@ -573,7 +577,7 @@ test('bulk order import: many product-details files matched by SO number; ready 
   const re = await ok('sales', 'POST', '/order-imports/bulk/recheck', { jobIds: ids, defaultCategoryId: ctx.cam.categoryId });
   const readyIds = re.filter((r: any) => r.status === 'ready').map((r: any) => r.jobId);
   assert.equal(readyIds.length, 2);
-  const done = await ok('sales', 'POST', '/order-imports/bulk/commit', { jobIds: [...readyIds, by('261099701').jobId], defaultCategoryId: ctx.cam.categoryId });
+  const done = await ok('admin', 'POST', '/order-imports/bulk/commit', { jobIds: [...readyIds, by('261099701').jobId], defaultCategoryId: ctx.cam.categoryId });
   assert.equal(done.filter((r: any) => r.status === 'imported').length, 2);
   assert.equal(done.find((r: any) => r.jobId === by('261099701').jobId).status, 'review', 'not-ready files are never imported');
   const widgets = (await ok('admin', 'GET', '/items?search=Widget Q-77')).data;
@@ -698,7 +702,10 @@ test('clean-up: find duplicates, merge clients / sites / items (documents move o
   // items: accessory templates on both don't clash
   const catId = ctx.cam.categoryId ?? (await ok('admin', 'GET', `/items/${ctx.cam.id}`)).categoryId;
   const a = await ok('admin', 'POST', '/items', { name: 'Dupe Cable Clip', type: 'ACCESSORY', categoryId: catId });
-  const b = await ok('admin', 'POST', '/items', { name: 'Dupe cable clip.', type: 'ACCESSORY', categoryId: catId, model: 'DC-1' });
+  // an exact duplicate is refused; a different unit is "similar" and needs a reason
+  const dupeItem = await call('admin', 'POST', '/items', { name: 'Dupe cable clip.', type: 'ACCESSORY', categoryId: catId });
+  assert.equal(dupeItem.status, 409); assert.equal(dupeItem.data.details.code, 'DUPLICATE_ITEM');
+  const b = await ok('admin', 'POST', '/items', { name: 'Dupe cable clip.', type: 'ACCESSORY', categoryId: catId, model: 'DC-1', unit: 'Pkt', confirmDistinct: true, distinctReason: 'legacy duplicate for the merge test' });
   const host1 = await ok('admin', 'POST', '/items', { name: 'Dupe Host Camera', type: 'PRODUCT', categoryId: catId });
   await ok('admin', 'PUT', `/items/${host1.id}/accessories`, { lines: [{ accessoryItemId: a.id, qtyPer: 1 }, { accessoryItemId: b.id, qtyPer: 2 }] });
   await ok('admin', 'POST', `/records/items/${b.id}/merge`, { intoId: a.id });
@@ -718,6 +725,35 @@ test('clean-up: find duplicates, merge clients / sites / items (documents move o
   await ok('admin', 'DELETE', `/records/orders/${o.id}`);
   assert.equal((await call('admin', 'GET', `/orders/${o.id}`)).status, 404);
   assert.equal((await call('admin', 'POST', `/records/orders/${o.id}/merge`, { intoId: ctx.order.id })).status, 400);
+});
+
+test('inventory duplicates: exact copies refused, similar ones need a reason, sizes kept apart; only Stores / Super Admin create items', async () => {
+  const catId = (await ok('admin', 'GET', `/items/${ctx.cam.id}`)).categoryId;
+  const base = await ok('stores', 'POST', '/items', { name: 'VGA Cable 15 Mtr', type: 'ACCESSORY', categoryId: catId, unit: 'Nos', brand: 'D-Link', model: 'VG-15M' });
+  // 1.5 m is a different item — not flagged at all
+  const short = await ok('stores', 'GET', '/items/similar?name=VGA%20Cable%201.5%20mtr&unit=Nos');
+  assert.equal(short.filter((m: any) => m.id === base.id).length, 0, '1.5 m is not 15 m');
+  await ok('stores', 'POST', '/items', { name: 'VGA Cable 1.5 mtr', type: 'ACCESSORY', categoryId: catId, unit: 'Nos' });
+  // same name, other spelling → exact
+  const same = await call('stores', 'POST', '/items', { name: 'vga cable 15m', type: 'ACCESSORY', categoryId: catId, unit: 'nos' });
+  assert.equal(same.status, 409); assert.equal(same.data.details.code, 'DUPLICATE_ITEM');
+  // same brand + part code under another name → exact
+  const code = await call('stores', 'POST', '/items', { name: 'Monitor lead long', type: 'ACCESSORY', categoryId: catId, brand: 'DLINK', model: 'vg 15m' });
+  assert.equal(code.status, 409);
+  // a typo → similar: needs the tick and a reason
+  const typo = await call('stores', 'POST', '/items', { name: 'VGA Cabel 15 meter', type: 'ACCESSORY', categoryId: catId, unit: 'Box' });
+  assert.equal(typo.status, 409); assert.equal(typo.data.details.code, 'SIMILAR_ITEMS');
+  const noReason = await call('stores', 'POST', '/items', { name: 'VGA Cabel 15 meter', type: 'ACCESSORY', categoryId: catId, unit: 'Box', confirmDistinct: true });
+  assert.equal(noReason.status, 400);
+  const boxed = await ok('stores', 'POST', '/items', { name: 'VGA Cabel 15 meter', type: 'ACCESSORY', categoryId: catId, unit: 'Box', confirmDistinct: true, distinctReason: 'Box of 10' });
+  // renaming an item into a duplicate is refused too
+  const ren = await call('stores', 'PATCH', `/items/${boxed.id}`, { unit: 'Nos', name: 'VGA cable 15 mtr' });
+  assert.equal(ren.status, 409);
+  // other departments can't create items
+  assert.equal((await call('sales', 'POST', '/items', { name: 'Sales Made Item', type: 'PRODUCT', categoryId: catId })).status, 403);
+  // clean-up groups same brand + part code even with different names
+  const groups = await ok('admin', 'GET', '/records/duplicates?entity=items');
+  assert.ok(!groups.some((g: any[]) => g.some((x) => x.name === 'VGA Cable 15 Mtr') && g.some((x) => x.name === 'VGA Cable 1.5 mtr')), '15 m and 1.5 m never grouped');
 });
 
 test('vendor bills: from a PO (unbilled lines), duplicate bill no. blocked, rounding to the bill total, part payment, bulk mark paid, cancel', async () => {

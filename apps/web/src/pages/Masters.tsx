@@ -1,8 +1,8 @@
 import { Calendar, MapPin, Phone, Plus, UserPlus } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
-import { EditorModal, MasterPage, useConfiguredFields, useEditor, type FieldDef } from '../components/MasterPage';
+import { EditorModal, FormFields, MasterPage, useConfiguredFields, useEditor, type FieldDef } from '../components/MasterPage';
 import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Select, Spinner, Status, Table, Tabs, Textarea } from '../components/ui';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -207,7 +207,7 @@ export function InventoryPage() {
             ? <button className={`font-semibold hover:underline ${r.onHand <= r.reorderLevel ? 'text-red-600' : ''}`} onClick={(e) => { e.stopPropagation(); setLedgerFor(r); }}>{qty(r.onHand)} {r.unit}</button> : <span className="text-slate-400">—</span> },
         ]} />
       </Card>
-      <EditorModal title="item" fields={iCfg.fields} ed={{ ...ed, save: { ...ed.save, mutate: (v: any) => ed.save.mutate({ ...v, gstRate: Number(v.gstRate) }) } as any }} />
+      <ItemEditorModal fields={iCfg.fields} ed={ed} openItem={(id) => api<any>(`/items/${id}`).then((full) => ed.open({ ...full, gstRate: String(full.gstRate) }))} />
       <Modal open={!!ledgerFor} onClose={() => setLedgerFor(null)} title={`Stock ledger — ${ledgerFor?.name ?? ''}`} wide>
         <Table rows={ledger.data} empty="No movements" cols={[
           { key: 'createdAt', label: 'Date', render: (m: any) => fmtDateTime(m.createdAt) }, { key: 'refType', label: 'Type', render: (m: any) => label(m.refType) },
@@ -225,6 +225,57 @@ export function InventoryPage() {
         </div>}
       </Modal>
     </div>
+  );
+}
+
+type ItemMatch = { id: string; sku: string; name: string; brand: string | null; model: string | null; unit: string; active: boolean; kind: 'exact' | 'similar'; why: string };
+
+/** Item form with a live "already exists?" check: exact duplicates can't be saved, near ones need a reason. */
+function ItemEditorModal({ fields, ed, openItem }: { fields: FieldDef[]; ed: ReturnType<typeof useEditor>; openItem: (id: string) => void }) {
+  const v = ed.editing;
+  const [probe, setProbe] = useState<Record<string, string> | null>(null);
+  useEffect(() => {
+    if (!v) { setProbe(null); return; }
+    const t = setTimeout(() => setProbe({ name: v.name ?? '', brand: v.brand ?? '', model: v.model ?? '', unit: v.unit ?? '', excludeId: v.id ?? '' }), 350);
+    return () => clearTimeout(t);
+  }, [v?.name, v?.brand, v?.model, v?.unit, v?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const enough = !!probe && (probe.name.trim().length >= 3 || probe.model.trim().length >= 3);
+  const sim = useGet<ItemMatch[]>(v && enough ? '/items/similar' : null, probe ?? undefined);
+  if (!v) return null;
+  const matches = enough ? sim.data ?? [] : [];
+  const blocking = matches.find((m) => m.kind === 'exact' && m.active);
+  const needsReason = !blocking && matches.some((m) => m.active || m.kind === 'exact');
+  const canSave = !blocking && (!needsReason || (v.confirmDistinct && (v.distinctReason ?? '').trim()));
+  const save = () => ed.save.mutate({ ...v, gstRate: Number(v.gstRate), ...(needsReason ? {} : { confirmDistinct: undefined, distinctReason: undefined }) });
+  return (
+    <Modal open onClose={ed.close} title={`${v.id ? 'Edit' : 'New'} item`} wide
+      footer={<><Button onClick={ed.close}>Cancel</Button><Button variant="primary" disabled={!canSave} loading={ed.save.isPending} onClick={save}>Save</Button></>}>
+      {matches.length > 0 && (
+        <div className={`mb-4 rounded-lg border p-3 text-sm ${blocking ? 'border-red-200 bg-red-50' : 'border-amber-200 bg-amber-50'}`}>
+          <div className={`mb-2 font-medium ${blocking ? 'text-red-800' : 'text-amber-800'}`}>
+            {blocking ? 'This item already exists — use the existing one' : 'Similar items already exist — is it one of these?'}
+          </div>
+          <div className="grid gap-1.5">
+            {matches.map((m) => (
+              <div key={m.id} className="flex items-center justify-between gap-3 rounded-md bg-white/70 px-2 py-1.5">
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{m.name} {!m.active && <Badge t="gray">switched off</Badge>}</div>
+                  <div className="text-xs text-slate-500">{[m.sku, m.brand, m.model, m.unit].filter(Boolean).join(' · ')} — {m.why}</div>
+                </div>
+                <Button onClick={() => openItem(m.id)}>{m.active ? 'Use this one' : 'Open & switch on'}</Button>
+              </div>
+            ))}
+          </div>
+          {needsReason && (
+            <div className="mt-3 grid gap-2 border-t border-amber-200 pt-3">
+              <label className="flex items-center gap-2"><input type="checkbox" checked={!!v.confirmDistinct} onChange={(e) => ed.open({ ...v, confirmDistinct: e.target.checked })} /> This is a different item</label>
+              {v.confirmDistinct && <Input placeholder="Why is it different? (e.g. different size / spec)" value={v.distinctReason ?? ''} onChange={(e) => ed.open({ ...v, distinctReason: e.target.value })} />}
+            </div>
+          )}
+        </div>
+      )}
+      <FormFields fields={v.id ? fields.filter((f) => !f.createOnly) : fields} value={v} onChange={(nv) => ed.open(nv)} />
+    </Modal>
   );
 }
 

@@ -9,6 +9,7 @@ import { audit } from '../lib/audit';
 import { crudRouter } from '../lib/crud';
 import { GSTIN_REGEX, INDIAN_STATES, stateFromGstin } from '../lib/gst';
 import { badRequest, notFound } from '../lib/http';
+import { findItemMatches, guardItemDuplicate } from '../lib/itemMatch';
 import { nextCode, nextNumber } from '../lib/numbering';
 import { can, requirePerm } from '../middleware/auth';
 
@@ -92,6 +93,14 @@ const itemSchema = z.object({
   purchasePrice: z.coerce.number().min(0).default(0), salePrice: z.coerce.number().min(0).default(0),
   reorderLevel: z.coerce.number().min(0).default(0), trackStock: z.boolean().optional(), warrantyMonths: z.coerce.number().int().nullish(),
   subCategory: opt, location: opt, active: z.boolean().default(true), customFields: z.record(z.string(), z.unknown()).optional(),
+  /** "This is a different item" — needed to save when similar items exist (with a reason, kept in the audit log). */
+  confirmDistinct: z.boolean().optional(), distinctReason: opt,
+});
+
+/** Similar / duplicate items for what is being typed in the item form. */
+r.get('/items/similar', requirePerm('items:view'), async (req, res) => {
+  const q = z.object({ name: opt, brand: opt, model: opt, unit: opt, excludeId: opt }).parse(req.query);
+  res.json(await findItemMatches(db, q));
 });
 
 /** Item list with live stock on hand. */
@@ -117,10 +126,24 @@ r.use('/items', crudRouter({
   searchCols: [items.name, items.sku, items.brand, items.model, items.hsnSac, items.subCategory],
   filters: { categoryId: items.categoryId, type: items.type, active: items.active }, orderBy: { col: items.name, dir: 'asc' },
   with: { category: true }, softDelete: true,
-  beforeCreate: async (d, tx) => ({
-    ...d, sku: d.sku ?? (await nextCode(tx, 'ITEM', 'IT')), trackStock: d.trackStock ?? d.type !== 'SERVICE',
-    unit: d.type === 'SERVICE' && d.unit === 'Nos' ? 'Job' : d.unit,
-  }),
+  beforeCreate: async ({ confirmDistinct, distinctReason, ...d }, tx) => {
+    const unit = d.type === 'SERVICE' && d.unit === 'Nos' ? 'Job' : d.unit;
+    await guardItemDuplicate(tx, { name: d.name, brand: d.brand, model: d.model, unit, confirmDistinct, distinctReason });
+    return { ...d, sku: d.sku ?? (await nextCode(tx, 'ITEM', 'IT')), trackStock: d.trackStock ?? d.type !== 'SERVICE', unit };
+  },
+  beforeUpdate: async ({ confirmDistinct, distinctReason, ...d }, tx, _req, id) => {
+    // re-check only when what identifies the item changes (or it is switched back on)
+    if (['name', 'brand', 'model', 'unit'].some((k) => k in d) || d.active === true) {
+      const cur = await tx.query.items.findFirst({ where: eq(items.id, id) });
+      if (cur) {
+        const next = { ...cur, ...d };
+        const a = next as Record<string, unknown>, b = cur as Record<string, unknown>;
+        const changed = ['name', 'brand', 'model', 'unit'].some((k) => a[k] !== b[k]) || (d.active === true && !cur.active);
+        if (changed && next.active) await guardItemDuplicate(tx, { name: next.name, brand: next.brand, model: next.model, unit: next.unit, excludeId: id, confirmDistinct, distinctReason });
+      }
+    }
+    return d;
+  },
 }));
 
 // ───────── Vendors ─────────

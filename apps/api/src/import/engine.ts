@@ -4,6 +4,7 @@ import { db, type DbOrTx } from '../db';
 import { clients, items, leads, salesOrderItems, salesOrders, sites, stockMovements, systemCategories, vendors, type SourceData } from '../db/schema';
 import { calcTotals, GSTIN_REGEX, INDIAN_STATES, stateFromGstin } from '../lib/gst';
 import { reserveCodes, reserveNumbers } from '../lib/numbering';
+import { codeKey, itemKey, unitKey } from '../lib/itemMatch';
 import { getCompany } from '../services/company';
 import type { ImportKind } from './targets';
 
@@ -273,7 +274,14 @@ const ALLOWED_GST = [0, 0.25, 3, 5, 12, 18, 28, 40];
 async function importItems(tx: DbOrTx, rowsIn: Record<string, unknown>[], mapping: Record<string, string | null>, opts: ImportOptions, dryRun: boolean): Promise<ImportResult> {
   const res = emptyResult(rowsIn.length);
   const cats = await tx.select().from(systemCategories);
-  const existing = await tx.select({ id: items.id, sku: items.sku, externalRef: items.externalRef }).from(items);
+  const existing = await tx.select({ id: items.id, sku: items.sku, externalRef: items.externalRef, name: items.name, brand: items.brand, model: items.model, unit: items.unit }).from(items);
+  // a row with no known source ID still matches an existing item by brand + part code, or by normalized name + unit
+  const byCode = new Map<string, string>(), byNameKey = new Map<string, string>();
+  for (const x of existing) {
+    if (codeKey(x.model).length >= 3) byCode.set(`${codeKey(x.brand)}|${codeKey(x.model)}`, x.id);
+    byNameKey.set(`${itemKey(x.name)}|${unitKey(x.unit)}`, x.id);
+  }
+  const newKeys = new Set<string>();
   const catByName = new Map(cats.map((c) => [lower(c.name), c]));
   const usedCodes = new Set(cats.map((c) => c.code));
   const byRef = new Map(existing.filter((x) => x.externalRef).map((x) => [x.externalRef!, x.id]));
@@ -352,10 +360,17 @@ async function importItems(tx: DbOrTx, rowsIn: Record<string, unknown>[], mappin
     const active = !/inactive|disabled|^no$|^false$|^0$/i.test(str(r.status) ?? '');
     const stock = Math.max(0, num(r.stock) ?? 0);
 
-    const id = (ref && (byRef.get(ref) ?? bySku.get(ref))) || null;
+    const bName = canonicalBrand(str(r.brand)), mCode = codeKey(str(r.model));
+    const nameK = `${itemKey(name)}|${unitKey(unit)}`, codeK = mCode.length >= 3 ? `${codeKey(bName)}|${mCode}` : null;
+    const byRefId = (ref && (byRef.get(ref) ?? bySku.get(ref))) || null;
+    const id = byRefId ?? (codeK && byCode.get(codeK)) ?? byNameKey.get(nameK) ?? null;
     if (id && opts.updateExisting === false) return record(res, { row, action: 'skip', entity: 'item', label: name, detail: 'Already exists' });
+    if (!id) {
+      if (newKeys.has(nameK) || (codeK && newKeys.has(codeK))) return record(res, { row, action: 'skip', entity: 'item', label: name, detail: 'Same item appears earlier in the file' });
+      newKeys.add(nameK); if (codeK) newKeys.add(codeK);
+    }
     const values: Record<string, unknown> = {
-      externalRef: ref, name, type, brand: canonicalBrand(str(r.brand)), model: str(r.model), description: str(r.description), hsnSac: hsn, unit,
+      externalRef: ref, name, type, brand: bName, model: str(r.model), description: str(r.description), hsnSac: hsn, unit,
       gstRate: gst, salePrice: num(r.salePrice) ?? 0, purchasePrice: num(r.purchasePrice) ?? 0, reorderLevel: reorder, subCategory: sub ? titleCase(sub) : null,
       location: str(r.location), trackStock: type !== 'SERVICE', active,
     };

@@ -14,7 +14,7 @@ export default function Login() {
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: C.brand, justifyContent: 'center', padding: 24 }}>
       <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 22, gap: 14 }}>
         <View>
-          <Text style={[s.h1, { color: C.brand }]}>Tisa Field</Text>
+          <Text style={[s.h1, { color: C.brand }]}>Tisa ERP</Text>
           <Text style={s.muted}>Tisa Tech Secure · field service app</Text>
         </View>
         <Field label="Email"><Input autoCapitalize="none" keyboardType="email-address" autoComplete="email" value={email} onChangeText={setEmail} /></Field>

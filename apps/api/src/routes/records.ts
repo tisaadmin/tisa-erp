@@ -5,6 +5,7 @@
  *    filled from the duplicate, then the duplicate is removed,
  *  - delete a record that nothing uses (orders: only when no POs, challans, bills or accessory sheets refer to them).
  */
+import { codeKey, itemKey, unitKey } from '../lib/itemMatch';
 import { Router } from 'express';
 import { and, eq, getTableColumns, inArray, sql } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
@@ -185,8 +186,19 @@ r.get('/records/duplicates', perm, async (req, res) => {
     rows = (await db.select({ id: vendors.id, name: vendors.name, code: vendors.code, gstin: vendors.gstin, city: vendors.city, active: vendors.active }).from(vendors))
       .map((v) => ({ id: v.id, name: v.name, code: v.code, group: key(v.name), sub: [v.gstin, v.city].filter(Boolean).join(' · '), active: v.active }));
   } else {
-    rows = (await db.select({ id: items.id, name: items.name, sku: items.sku, model: items.model, unit: items.unit, active: items.active }).from(items))
-      .map((i) => ({ id: i.id, name: i.name, code: i.sku, group: key(i.name), sub: [i.model, i.unit].filter(Boolean).join(' · '), active: i.active }));
+    const raw = await db.select({ id: items.id, name: items.name, sku: items.sku, brand: items.brand, model: items.model, unit: items.unit, active: items.active }).from(items);
+    // same normalized name + unit (decimals kept: 15 m ≠ 1.5 m), or same brand + part code
+    rows = raw.map((i) => ({ id: i.id, name: i.name, code: i.sku, group: `${itemKey(i.name)}|${unitKey(i.unit)}`, sub: [i.brand, i.model, i.unit].filter(Boolean).join(' · '), active: i.active }));
+    const byCode = new Map<string, number>();
+    raw.forEach((i, k) => {
+      const c = codeKey(i.model);
+      if (c.length < 3) return;
+      const ck = `${codeKey(i.brand)}|${c}`;
+      const first = byCode.get(ck);
+      if (first === undefined) { byCode.set(ck, k); return; }
+      const from = rows[k].group, to = rows[first].group;
+      if (from !== to) for (const x of rows) if (x.group === from) x.group = to;
+    });
   }
   const groups = new Map<string, typeof rows>();
   for (const x of rows) if (x.group) groups.set(x.group, [...(groups.get(x.group) ?? []), x]);

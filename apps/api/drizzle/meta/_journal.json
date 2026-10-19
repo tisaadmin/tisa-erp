@@ -64,6 +64,13 @@
       "when": 1792386854137,
       "tag": "0008_requisition_links",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1792388239560,
+      "tag": "0009_item_create_rights",
+      "breakpoints": true
     }
   ]
 }
