@@ -56,6 +56,16 @@ const descKey = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]
 const lineKey = (l: { itemId?: string | null; description?: string | null }) => (l.itemId ? `i:${l.itemId}` : descKey(l.description) ? `d:${descKey(l.description)}` : '');
 const r2q = (n: number) => Math.round(n * 1000) / 1000;
 
+/** A PO raised against an order delivers to the order's site or to the store — never somewhere else. */
+async function checkPoParties(d: { salesOrderId?: string | null; deliverToSiteId?: string | null; requisitionId?: string | null }, existingOrderId?: string | null) {
+  if (existingOrderId && d.salesOrderId !== existingOrderId) throw badRequest('The sales order of a PO cannot be changed — cancel this PO and raise a new one against the right order');
+  if (d.salesOrderId) {
+    const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, d.salesOrderId), columns: { number: true, siteId: true } });
+    if (!o) throw badRequest('Order not found');
+    if (d.deliverToSiteId && d.deliverToSiteId !== o.siteId) throw badRequest(`Deliver to the site of order ${o.number}, or to the store — the site cannot be changed on the PO`);
+  }
+}
+
 /** A PO against an order may only carry that order's items and its accessories, and no more than their quantity (rule poOnlyOrderItems). */
 async function requireOrderItemsOnly(orderId: string, lines: { itemId?: string | null; description?: string; qty: number }[], user: AuthUser, excludePoId?: string) {
   const allowed = await orderPurchasable(orderId, excludePoId);
@@ -131,6 +141,7 @@ r.get('/purchase-orders/:id', requirePerm('purchase_orders:view'), async (req, r
 
 r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, res) => {
   const d = poSchema.parse(req.body);
+  await checkPoParties(d);
   // an approved requisition is authority enough for a PO, like an order form
   if (!d.salesOrderId && !d.requisitionId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be raised against an order form or an approved requisition — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
   else if (d.salesOrderId) await requireAccessoryList(d.salesOrderId, req.user);
@@ -138,7 +149,7 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
   const { interState } = await poContext(d.vendorId);
   const company = await getCompany();
   const po = await db.transaction(async (tx) => {
-    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId) : null;
+    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, undefined, d.deliverToSiteId || undefined) : null;
     const { rows, totals } = await priceLines(tx, d.lines, interState, 'purchasePrice');
     const [po] = await tx.insert(purchaseOrders).values({
       number: await nextNumber(tx, 'PURCHASE_ORDER', d.date), date: d.date ?? new Date(), vendorId: d.vendorId, salesOrderId: d.salesOrderId,
@@ -158,6 +169,9 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
 
 r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, res) => {
   const d = poSchema.parse(req.body);
+  const ex0 = await db.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id), columns: { salesOrderId: true } });
+  if (!ex0) throw notFound('Purchase order');
+  await checkPoParties(d, ex0.salesOrderId);
   if (!d.salesOrderId && !d.requisitionId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be linked to an order form or an approved requisition — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
   else if (d.salesOrderId) await requireAccessoryList(d.salesOrderId, req.user);
   if (d.salesOrderId) await requireOrderItemsOnly(d.salesOrderId, d.lines, req.user, req.params.id);

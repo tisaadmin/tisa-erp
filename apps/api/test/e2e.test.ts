@@ -1108,3 +1108,26 @@ test('departments: Super Admin sets up a Projects department with a head; the he
   assert.equal((await call('admin', 'DELETE', `/departments/${projects.id}`)).status, 400, 'has a member');
   await ok('admin', 'PATCH', `/departments/${projects.id}`, { name: 'Projects' });
 });
+
+test('documents keep the site and order they were raised from: PO, challan, order', async () => {
+  const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
+  const other = await ok('admin', 'POST', '/sites', { clientId: ctx.client.id, name: 'Another plant', address: 'Elsewhere', stateCode: '27' });
+  const order = await ok('sales', 'GET', `/orders/${ctx.order.id}`);
+  // PO: deliver to the order's site or the store only
+  const bad = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: order.id, deliverToSiteId: other.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
+  assert.equal(bad.status, 400); assert.match(bad.data.error, /cannot be changed on the PO/);
+  const po = await ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: order.id, deliverToSiteId: order.siteId, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
+  await ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: order.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] }); // to the store
+  // PO: its order cannot be switched (or removed) later
+  const o2 = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
+  const sw = await call('stores', 'PUT', `/purchase-orders/${po.id}`, { vendorId: vendor.id, salesOrderId: o2.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
+  assert.equal(sw.status, 400); assert.match(sw.data.error, /sales order of a PO cannot be changed/);
+  assert.equal((await call('stores', 'PUT', `/purchase-orders/${po.id}`, { vendorId: vendor.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] })).status, 400);
+  // challan against an order: the order's site only
+  const line = order.items.find((l: any) => l.itemId === ctx.cam.id);
+  const dc = await call('stores', 'POST', '/challans', { orderId: order.id, clientId: order.clientId, siteId: other.id, lines: [{ orderItemId: line.id, qty: 1 }] });
+  assert.equal(dc.status, 400); assert.match(dc.data.error, /site comes from order/);
+  // order: the site is fixed once set (Super Admin may correct it)
+  assert.equal((await call('sales', 'PATCH', `/orders/${o2.id}`, { siteId: other.id })).status, 400);
+  await ok('admin', 'PATCH', `/orders/${o2.id}`, { siteId: other.id });
+});

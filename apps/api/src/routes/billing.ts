@@ -67,7 +67,7 @@ r.post('/invoices', requirePerm('invoices:create'), async (req, res) => {
   const d = manualSchema.parse(req.body);
   const inv = await db.transaction(async (tx) => {
     const ctx = await resolvePlaceOfSupply(tx, d.clientId, d.siteId);
-    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId) : null;
+    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId, d.siteId ?? null) : null;
     if (d.amcId) {
       const amc = await tx.query.amcContracts.findFirst({ where: eq(amcContracts.id, d.amcId) });
       if (!amc || amc.clientId !== d.clientId) throw badRequest('AMC does not belong to this client');

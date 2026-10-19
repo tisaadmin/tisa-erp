@@ -90,7 +90,7 @@ export function InvoiceEditor() {
       <Card>
         <div className="grid gap-3 md:grid-cols-5">
           <Field label="Type"><Select value={d.type} onChange={(e) => setD({ ...d, type: e.target.value })} options={['SERVICE', 'AMC', 'TAX_INVOICE', 'PROFORMA']} /></Field>
-          <PartyPicker clientId={d.clientId} siteId={d.siteId} onChange={(v) => setD((x) => ({ ...x, ...v, stateCode: v.stateCode ?? x.stateCode }))} />
+          <PartyPicker clientId={d.clientId} siteId={d.siteId} lockClient={!!rq.req?.clientId} lockSite={!!rq.req?.siteId} lockedFrom={rq.req ? `requisition ${rq.req.number}` : undefined} onChange={(v) => setD((x) => ({ ...x, ...v, stateCode: v.stateCode ?? x.stateCode }))} />
           <Field label="Invoice date"><Input type="date" value={d.date} onChange={(e) => setD({ ...d, date: e.target.value })} /></Field>
           <Field label="Due date (blank = credit days)"><Input type="date" value={d.dueDate} onChange={(e) => setD({ ...d, dueDate: e.target.value })} /></Field>
         </div>

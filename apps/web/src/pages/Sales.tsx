@@ -19,7 +19,10 @@ export function useCompanyState() {
 }
 
 /** Client + site picker that reports the place-of-supply state. */
-export function PartyPicker({ clientId, siteId, onChange, siteRequired }: { clientId?: string | null; siteId?: string | null; onChange: (v: { clientId: string | null; siteId: string | null; stateCode?: string | null }) => void; siteRequired?: boolean }) {
+export function PartyPicker({ clientId, siteId, onChange, siteRequired, lockClient, lockSite, lockedFrom }: {
+  clientId?: string | null; siteId?: string | null; onChange: (v: { clientId: string | null; siteId: string | null; stateCode?: string | null }) => void; siteRequired?: boolean;
+  /** client / site come from the source document (requisition, order …) and cannot be changed here */ lockClient?: boolean; lockSite?: boolean; lockedFrom?: string;
+}) {
   const clients = useClients();
   const sites = useSites(clientId ?? undefined);
   const client = clients.data?.data.find((c) => c.id === clientId) as any;
@@ -28,8 +31,8 @@ export function PartyPicker({ clientId, siteId, onChange, siteRequired }: { clie
   useEffect(() => { if (clientId) onChange({ clientId, siteId: siteId ?? null, stateCode: pos }); /* eslint-disable-next-line */ }, [pos]);
   return (
     <>
-      <Field label="Client" required><Combo options={(clients.data?.data ?? []).map((c) => ({ value: c.id, label: c.name, sub: c.code }))} value={clientId} onChange={(v) => onChange({ clientId: v, siteId: null })} /></Field>
-      <Field label="Site" required={siteRequired}><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.code }))} value={siteId} disabled={!clientId} onChange={(v) => onChange({ clientId: clientId ?? null, siteId: v })} /></Field>
+      <Field label="Client" required hint={lockClient ? `From ${lockedFrom ?? 'the source document'} — cannot be changed` : undefined}><Combo options={(clients.data?.data ?? []).map((c) => ({ value: c.id, label: c.name, sub: c.code }))} value={clientId} disabled={lockClient} onChange={(v) => onChange({ clientId: v, siteId: null })} /></Field>
+      <Field label="Site" required={siteRequired} hint={lockSite ? `From ${lockedFrom ?? 'the source document'} — cannot be changed` : undefined}><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.code }))} value={siteId} disabled={!clientId || lockSite} onChange={(v) => onChange({ clientId: clientId ?? null, siteId: v })} /></Field>
     </>
   );
 }
@@ -97,7 +100,7 @@ export function QuotationEditor() {
         actions={<><Button loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" loading={save.isPending} onClick={() => save.mutate(true)}>Save & submit for approval</Button></>} />
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
-          <PartyPicker clientId={d.clientId} siteId={d.siteId} onChange={(v) => setD((x) => ({ ...x, ...v, stateCode: v.stateCode ?? x.stateCode }))} />
+          <PartyPicker clientId={d.clientId} siteId={d.siteId} lockClient={!!rq.req?.clientId} lockSite={!!rq.req?.siteId} lockedFrom={rq.req ? `requisition ${rq.req.number}` : undefined} onChange={(v) => setD((x) => ({ ...x, ...v, stateCode: v.stateCode ?? x.stateCode }))} />
           <Field label="Or lead (prospect)"><Combo options={(leads.data?.data ?? []).map((l) => ({ value: l.id, label: l.companyName, sub: l.code }))} value={d.leadId} onChange={(v) => setD({ ...d, leadId: v })} /></Field>
           <Field label="Date"><Input type="date" value={d.date} onChange={(e) => setD({ ...d, date: e.target.value })} /></Field>
           <Field label="Valid until"><Input type="date" value={d.validUntil ?? ''} onChange={(e) => setD({ ...d, validUntil: e.target.value })} /></Field>
@@ -454,7 +457,7 @@ export function NewChallan() {
         actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Dispatch</Button>} />
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
-          {!orderId && <PartyPicker clientId={h.clientId} siteId={h.siteId} onChange={(v) => setH({ ...h, clientId: v.clientId, siteId: v.siteId })} />}
+          {!orderId && <PartyPicker clientId={h.clientId} siteId={h.siteId} lockClient={!!rq.req?.clientId} lockSite={!!rq.req?.siteId} lockedFrom={rq.req ? `requisition ${rq.req.number}` : undefined} onChange={(v) => setH({ ...h, clientId: v.clientId, siteId: v.siteId })} />}
           <Field label="Type"><Select value={h.type} onChange={(e) => setH({ ...h, type: e.target.value })} options={['SUPPLY', 'RETURNABLE', 'JOB_WORK', 'SITE_TRANSFER']} /></Field>
           <Field label="Vehicle no."><Input value={h.vehicleNo} onChange={(e) => setH({ ...h, vehicleNo: e.target.value })} /></Field>
           <Field label="Transporter"><Input value={h.transporter} onChange={(e) => setH({ ...h, transporter: e.target.value })} /></Field>

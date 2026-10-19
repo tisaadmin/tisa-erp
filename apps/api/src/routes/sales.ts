@@ -2,6 +2,7 @@ import { Router, type Response } from 'express';
 import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
 import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
+import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { db } from '../db';
 import {
   clients, deliveryChallanItems, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
@@ -89,7 +90,7 @@ r.post('/quotations', requirePerm('quotations:create'), async (req, res) => {
   validateTerms(d.paymentTerms);
   const company = await getCompany();
   const q = await db.transaction(async (tx) => {
-    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId) : null;
+    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId, d.siteId ?? null) : null;
     const { placeOfSupply, interState } = await quoteTaxContext(tx, d);
     const { rows, totals } = await priceLines(tx, d.lines, interState);
     const [q] = await tx.insert(quotations).values({
@@ -178,6 +179,12 @@ r.post('/quotations/:id/convert', requirePerm('orders:create'), async (req, res)
     if (['CONVERTED', 'REVISED', 'REJECTED'].includes(q.status)) throw badRequest(`Quotation is ${q.status.toLowerCase()}`);
     const terms = body.paymentTerms ?? q.paymentTerms ?? [{ stage: 'ADVANCE' as const, percent: 100 }];
     validateTerms(terms);
+    // the site is the quotation's; it can only be chosen here when the quotation has none
+    if (q.siteId && body.siteId && body.siteId !== q.siteId) throw badRequest('The site comes from the quotation and cannot be changed on the order');
+    if (!q.siteId && body.siteId) {
+      const site = await tx.query.sites.findFirst({ where: eq(sites.id, body.siteId), columns: { clientId: true } });
+      if (!site || site.clientId !== q.clientId) throw badRequest('Site does not belong to this client');
+    }
     const [o] = await tx.insert(salesOrders).values({
       number: await nextNumber(tx, 'ORDER'), quotationId: q.id, clientId: q.clientId, siteId: body.siteId ?? q.siteId,
       clientPoNo: body.clientPoNo, clientPoDate: body.clientPoDate, placeOfSupply: q.placeOfSupply, paymentTerms: terms, terms: q.terms,
@@ -246,6 +253,16 @@ r.patch('/orders/:id', requirePerm('orders:edit'), async (req, res) => {
     const billing = await orderBillingStatus(db, req.params.id);
     if (billing.summary.billedTaxable > 0) throw badRequest('Payment terms cannot change after billing has started');
   }
+  if (d.siteId !== undefined) {
+    // an order's site is fixed once set (documents are raised against it); only the Super Admin may correct it
+    const cur = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), columns: { siteId: true, clientId: true } });
+    if (!cur) throw notFound('Order');
+    if (cur.siteId && d.siteId !== cur.siteId && !isSuperAdminPerms(req.user.permissions)) throw badRequest('The order\'s site cannot be changed once set — ask the Super Admin if it is wrong');
+    if (d.siteId && d.siteId !== cur.siteId) {
+      const site = await db.query.sites.findFirst({ where: eq(sites.id, d.siteId), columns: { clientId: true } });
+      if (!site || site.clientId !== cur.clientId) throw badRequest('Site does not belong to this client');
+    }
+  }
   const [row] = await db.update(salesOrders).set(d).where(eq(salesOrders.id, req.params.id)).returning();
   if (!row) throw notFound('Order');
   audit(req, 'update', 'order', row.id, d);
@@ -313,7 +330,7 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
   const dc = await db.transaction(async (tx) => {
     const client = await tx.query.clients.findFirst({ where: eq(clients.id, d.clientId) });
     if (!client) throw badRequest('Client not found');
-    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId) : null;
+    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId, d.siteId ?? null) : null;
     if (d.siteId) {
       const site = await tx.query.sites.findFirst({ where: eq(sites.id, d.siteId) });
       if (!site || site.clientId !== d.clientId) throw badRequest('Site does not belong to this client');
@@ -324,6 +341,7 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
     if (d.orderId) {
       const order = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, d.orderId) });
       if (!order || order.clientId !== d.clientId) throw badRequest('Order does not belong to this client');
+      if (order.siteId && (d.siteId ?? null) !== order.siteId) throw badRequest(`The site comes from order ${order.number} and cannot be changed on the challan`);
       if (['CANCELLED', 'CLOSED'].includes(order.status)) throw badRequest(`Order is ${order.status.toLowerCase()}`);
     }
     const byId = new Map(orderLines.map((l) => [l.id, l]));

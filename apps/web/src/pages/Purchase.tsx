@@ -57,6 +57,9 @@ export function PoEditor() {
   const accBlocked = !!accStatus.data && !accStatus.data.ready && !can('purchase_orders:without_accessories');
   const [d, setD] = useState({ vendorId: null as string | null, salesOrderId: sp.get('salesOrderId'), deliverToSiteId: null as string | null, date: toInputDate(new Date()), expectedDate: '', terms: '', notes: '', lines: [emptyLine()] as Line[] });
   type Allowed = { itemIds: string[]; restricted: boolean; lines: { key: string; itemId: string | null; qty: number; ordered: number; remaining: number }[] };
+  // a PO raised from an order (or an existing order-linked PO) keeps that order; it delivers to the order's site or the store
+  const orderLocked = !!(sp.get('salesOrderId') || sheetId || (id && existing.data?.salesOrderId));
+  const selOrder = useGet<any>(d.salesOrderId ? `/orders/${d.salesOrderId}` : null);
   const allowed = useGet<Allowed>(d.salesOrderId ? '/purchase-orders/allowed-items' : null, { salesOrderId: d.salesOrderId, poId: id });
   const limits = useMemo(() => (allowed.data?.restricted ? Object.fromEntries(allowed.data.lines.filter((l) => l.itemId).map((l) => [l.itemId!, l])) as Record<string, Allowed['lines'][number]> : undefined), [allowed.data]);
   useEffect(() => {
@@ -126,8 +129,16 @@ export function PoEditor() {
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
           <Field label="Vendor" required><Combo options={(vendors.data?.data ?? []).map((v) => ({ value: v.id, label: v.name }))} value={d.vendorId} onChange={(v) => setD({ ...d, vendorId: v })} /></Field>
-          <Field label="Against sales order" required={orderRequired} hint={orderRequired ? 'Required — POs are raised against an order form' : undefined}><Combo options={(orders.data?.data ?? []).map((o) => ({ value: o.id, label: o.number, sub: o.client?.name }))} value={d.salesOrderId} onChange={(v) => { setD({ ...d, salesOrderId: v }); setSoId(v); }} /></Field>
-          <Field label="Deliver to site (blank = store)"><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={d.deliverToSiteId} onChange={(v) => setD({ ...d, deliverToSiteId: v })} /></Field>
+          <Field label="Against sales order" required={orderRequired && !orderLocked} hint={orderLocked ? 'Raised from this order — cannot be changed' : orderRequired ? 'Required — POs are raised against an order form' : undefined}>
+            {orderLocked ? <div className="input truncate bg-slate-50 text-slate-700">{selOrder.data ? `${selOrder.data.number} · ${selOrder.data.client?.name ?? ''}` : '…'}</div>
+              : <Combo options={(orders.data?.data ?? []).map((o) => ({ value: o.id, label: o.number, sub: o.client?.name }))} value={d.salesOrderId} onChange={(v) => { setD({ ...d, salesOrderId: v, deliverToSiteId: null }); setSoId(v); }} />}
+          </Field>
+          {d.salesOrderId
+            ? <Field label="Deliver to" hint="The order's site, or our store">
+                <Select value={d.deliverToSiteId ?? ''} onChange={(e) => setD({ ...d, deliverToSiteId: e.target.value || null })}
+                  options={[{ value: '', label: 'Our store' }, ...(selOrder.data?.site ? [{ value: selOrder.data.site.id, label: `Site: ${selOrder.data.site.name}` }] : [])]} />
+              </Field>
+            : <Field label="Deliver to site (blank = store)"><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={d.deliverToSiteId} onChange={(v) => setD({ ...d, deliverToSiteId: v })} /></Field>}
           <Field label="PO date"><Input type="date" value={d.date} onChange={(e) => setD({ ...d, date: e.target.value })} /></Field>
           <Field label="Expected delivery"><Input type="date" value={d.expectedDate} onChange={(e) => setD({ ...d, expectedDate: e.target.value })} /></Field>
         </div>

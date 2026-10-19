@@ -12,11 +12,13 @@ import { badRequest } from '../lib/http';
 export const USABLE_REQ_STATUS = ['APPROVED', 'IN_PROGRESS', 'FULFILLED'];
 
 /** The requisition a new document is raised from — must be approved (not pending / rejected) and for the same client. */
-export async function requisitionForDoc(tx: DbOrTx, requisitionId: string, clientId?: string | null) {
+export async function requisitionForDoc(tx: DbOrTx, requisitionId: string, clientId?: string | null, siteId?: string | null) {
   const r = await tx.query.requisitions.findFirst({ where: eq(requisitions.id, requisitionId), with: { items: true } });
   if (!r) throw badRequest('Requisition not found');
   if (!USABLE_REQ_STATUS.includes(r.status)) throw badRequest(`Requisition ${r.number} is ${r.status.toLowerCase()} — it must be approved first`);
   if (clientId && r.clientId && r.clientId !== clientId) throw badRequest(`Requisition ${r.number} is for a different client`);
+  // the site comes from the requisition and cannot be changed on the document (undefined = the document has no site field)
+  if (siteId !== undefined && r.siteId && siteId !== r.siteId) throw badRequest(`Requisition ${r.number} is for a different site — the site comes from the requisition and cannot be changed here`);
   return r;
 }
 
