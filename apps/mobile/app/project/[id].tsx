@@ -32,6 +32,10 @@ export default function ProjectScreen() {
       <View style={{ flexDirection: 'row', gap: 6 }}><Badge text={p.order.status} /></View>
       <Text style={s.h1}>{p.order.site?.name ?? 'Site not set'}</Text>
       <Text style={s.muted}>{p.order.number} · {p.order.client.name}{p.order.site?.address ? `\n${p.order.site.address}` : ''}</Text>
+      <Card title="Project team">
+        <Text style={{ color: C.text }}>In charge: <Text style={{ fontWeight: '700' }}>{p.team?.incharge?.name ?? 'not assigned'}</Text>{p.team?.incharge?.phone ? `  · ${p.team.incharge.phone}` : ''}</Text>
+        {!!p.team?.members?.length && <Text style={s.muted}>Team: {p.team.members.map((m: any) => m.name).join(', ')}</Text>}
+      </Card>
       <Card>
         <Bar label="Delivered" pct={p.summary.deliveredPct} />
         <Bar label="Accessories" pct={p.summary.accessoriesPct} />

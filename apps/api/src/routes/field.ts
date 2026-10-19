@@ -1,11 +1,11 @@
 import { Router, type Request } from 'express';
 import fs from 'node:fs';
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
 import { approverFor, manages, teamIds } from '../lib/team';
-import { myProjectOrderIds, projectMaterialStatus } from '../services/projectStatus';
-import { attachments, attendance, auditLogs, salesOrders, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
+import { myProjectOrderIds, projectMaterialStatus, projectSummaries } from '../services/projectStatus';
+import { attachments, attendance, auditLogs, departments, projectMembers, salesOrders, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { istDate, istTime } from '../lib/dates';
 import { absPath, geoStampImage, normaliseUpload, saveBuffer, upload } from '../lib/files';
@@ -437,16 +437,51 @@ r.get('/projects', async (req, res) => {
   const search = qs(req.query.search);
   let ids = await myProjectOrderIds(db, [req.user.id, ...(await teamIds(req.user.id))]);
   if (can(req.user, 'orders:view') && (search || req.query.all === '1')) {
-    const rows = await db.select({ id: salesOrders.id }).from(salesOrders).where(inArray(salesOrders.status, ['OPEN', 'IN_PROGRESS'])).orderBy(desc(salesOrders.date)).limit(150);
+    const rows = await db.select({ id: salesOrders.id }).from(salesOrders).where(inArray(salesOrders.status, ['OPEN', 'IN_PROGRESS'])).orderBy(desc(salesOrders.date)).limit(300);
     ids = [...new Set([...ids, ...rows.map((x) => x.id)])];
   }
-  const out = [];
-  for (const id of ids.slice(0, 150)) {
-    const p = await projectMaterialStatus(db, id);
-    if (search && !`${p.order.number} ${p.order.client.name} ${p.order.site?.name ?? ''}`.toLowerCase().includes(search.toLowerCase())) continue;
-    out.push({ ...p.order, summary: p.summary, pendingRequisitions: p.requisitions.filter((x) => ['PENDING', 'APPROVED', 'IN_PROGRESS'].includes(x.status)).length });
-  }
+  const want = qs(req.query.incharge);
+  const out = (await projectSummaries(db, ids.slice(0, 300))).filter((p) => {
+    if (search && !`${p.number} ${p.client.name} ${p.site?.name ?? ''} ${p.team.incharge?.name ?? ''}`.toLowerCase().includes(search.toLowerCase())) return false;
+    if (want === 'none') return !p.team.incharge;
+    if (want) return p.team.incharge?.id === (want === 'me' ? req.user.id : want);
+    return true;
+  });
   res.json(out.sort((a, b) => +new Date(b.date) - +new Date(a.date)));
+});
+
+/** Projects head (or orders:assign_project): who is in charge of a project and who works on it. */
+async function mayAssignProjects(user: Request['user']) {
+  if (can(user, 'orders:assign_project')) return true;
+  const head = await db.query.departments.findFirst({ where: and(ilike(departments.name, 'projects%'), eq(departments.headId, user.id), eq(departments.active, true)), columns: { id: true } });
+  return !!head;
+}
+
+r.get('/projects-meta', async (req, res) => { res.json({ canAssign: await mayAssignProjects(req.user), canSeeAll: can(req.user, 'orders:view') }); });
+
+r.put('/projects/:orderId/team', async (req, res) => {
+  if (!(await mayAssignProjects(req.user))) throw forbidden('Only the Projects head (or someone with "assign projects") can assign people to a project');
+  const d = z.object({ inchargeId: opt, memberIds: z.array(z.string()).default([]) }).parse(req.body ?? {});
+  const order = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.orderId), with: { projectMembers: true, site: { columns: { name: true } } } });
+  if (!order) throw notFound('Order');
+  const ids = [...new Set([...(d.inchargeId ? [d.inchargeId] : []), ...d.memberIds])];
+  if (ids.length) {
+    const ok = await db.select({ id: users.id }).from(users).where(and(inArray(users.id, ids), eq(users.active, true)));
+    if (ok.length !== ids.length) throw badRequest('Choose active users only');
+  }
+  const members = d.memberIds.filter((m) => m !== d.inchargeId);
+  const before = new Set([order.projectInchargeId, ...order.projectMembers.map((m) => m.userId)].filter(Boolean));
+  await db.transaction(async (tx) => {
+    await tx.update(salesOrders).set({ projectInchargeId: d.inchargeId ?? null }).where(eq(salesOrders.id, order.id));
+    await tx.delete(projectMembers).where(eq(projectMembers.orderId, order.id));
+    if (members.length) await tx.insert(projectMembers).values(members.map((userId) => ({ orderId: order.id, userId })));
+  });
+  const where = order.site?.name ?? order.number;
+  if (d.inchargeId && d.inchargeId !== order.projectInchargeId) await notifyUsers([d.inchargeId], { title: `You are in charge of ${where}`, body: `Project ${order.number} — report to the Projects head`, type: 'TICKET', link: `/orders/${order.id}`, entityType: 'ORDER', entityId: order.id }, req.user.id);
+  const added = members.filter((m) => !before.has(m));
+  if (added.length) await notifyUsers(added, { title: `Added to project ${where}`, body: `Order ${order.number}`, type: 'TICKET', link: `/orders/${order.id}`, entityType: 'ORDER', entityId: order.id }, req.user.id);
+  audit(req, 'team', 'order', order.id, { inchargeId: d.inchargeId ?? null, memberIds: members });
+  res.json((await projectMaterialStatus(db, order.id)).team);
 });
 
 r.get('/projects/:orderId', async (req, res) => {
@@ -454,7 +489,7 @@ r.get('/projects/:orderId', async (req, res) => {
     const mine = await myProjectOrderIds(db, [req.user.id, ...(await teamIds(req.user.id))]);
     if (!mine.includes(req.params.orderId)) throw forbidden('This project is not one of yours');
   }
-  res.json(await projectMaterialStatus(db, req.params.orderId));
+  res.json({ ...(await projectMaterialStatus(db, req.params.orderId)), canAssign: await mayAssignProjects(req.user) });
 });
 
 export default r;

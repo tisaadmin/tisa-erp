@@ -1,6 +1,6 @@
 import {
   Bell, Boxes, ListChecks, Upload, Building2, Camera, ClipboardCheck, ClipboardList, FileSignature, FileText, Gauge, HandCoins, LifeBuoy, LogOut, MapPin, Menu,
-  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText } from 'lucide-react';
+  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText, HardHat } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -38,6 +38,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
     { to: '/vendors', label: 'Vendors', icon: <Users />, perm: 'vendors:view' },
   ] },
   { group: 'Service', items: [
+    { to: '/projects', label: 'Projects', icon: <HardHat />, perm: 'tickets:view' },
     { to: '/tickets', label: 'Tickets', icon: <LifeBuoy />, perm: 'tickets:view' },
     { to: '/service-reports', label: 'Service Reports', icon: <ClipboardCheck />, perm: 'service_reports:view' },
     { to: '/amc', label: 'AMC Contracts', icon: <ScrollText />, perm: 'amc:view' },

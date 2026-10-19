@@ -115,7 +115,8 @@ r.get('/orders/:id/installation', requirePerm('tickets:view'), async (req, res) 
     with: { assignedTo: { columns: { id: true, name: true } }, challan: { columns: { id: true, number: true } } },
   });
   const challans = await db.query.deliveryChallans.findMany({ where: and(eq(deliveryChallans.orderId, req.params.id), eq(deliveryChallans.type, 'SUPPLY')), columns: { id: true, number: true, date: true, status: true }, orderBy: [desc(deliveryChallans.date)] });
-  res.json({ ...inst, challans: challans.filter((c) => c.status !== 'CANCELLED'), tickets: list.map((t) => ({ id: t.id, number: t.number, title: t.title, status: t.status, scheduledAt: t.scheduledAt, assignedTo: t.assignedTo, challan: t.challan, createdAt: t.createdAt })) });
+  const ord = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), columns: { projectInchargeId: true } });
+  res.json({ ...inst, projectInchargeId: ord?.projectInchargeId ?? null, challans: challans.filter((c) => c.status !== 'CANCELLED'), tickets: list.map((t) => ({ id: t.id, number: t.number, title: t.title, status: t.status, scheduledAt: t.scheduledAt, assignedTo: t.assignedTo, challan: t.challan, createdAt: t.createdAt })) });
 });
 
 /** After material is delivered: an installation ticket for the order's site, assigned to someone from the projects team. */

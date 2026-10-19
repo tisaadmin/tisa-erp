@@ -5,7 +5,7 @@ import { Badge, Empty, Input, Screen, s, useFetch } from '../src/components/ui';
 import { Pressable } from 'react-native';
 import { Bar } from '../src/components/Bar';
 
-type P = { id: string; number: string; status: string; client: { name: string }; site: { name: string } | null; summary: { deliveredPct: number | null; installedPct: number | null; accessoriesPct: number | null }; pendingRequisitions: number };
+type P = { id: string; number: string; status: string; team?: { incharge: { id: string; name: string } | null; members: { id: string; name: string }[] }; client: { name: string }; site: { name: string } | null; summary: { deliveredPct: number | null; installedPct: number | null; accessoriesPct: number | null }; pendingRequisitions: number };
 
 /** Projects I work on (installation tickets, requisition sites) with how much material has reached site. */
 export default function Projects() {
@@ -23,6 +23,7 @@ export default function Projects() {
               <Badge text={p.status} />
             </View>
             <Text style={s.muted}>{p.number} · {p.client.name}</Text>
+            <Text style={{ fontSize: 13, color: p.team?.incharge ? '#0f172a' : '#b45309' }}>In charge: {p.team?.incharge?.name ?? 'not assigned'}</Text>
             <Bar label="Delivered" pct={p.summary.deliveredPct} />
             <Bar label="Accessories" pct={p.summary.accessoriesPct} />
             <Bar label="Installed" pct={p.summary.installedPct} />

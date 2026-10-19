@@ -11,6 +11,7 @@ import { fmtDate, inr, label, qty, STAGE_LABEL, toInputDate } from '../lib/forma
 import { useAction, useClients, useGet, useSites, type Page } from '../lib/hooks';
 import { OrderAccessoriesCard } from './Accessories';
 import { OrderInstallationCard } from '../components/Installation';
+import { OrderProjectTeamCard } from './Projects';
 import { OrderVendorBillsCard } from './VendorBills';
 import { DeleteOrderButton } from './Cleanup';
 
@@ -320,6 +321,7 @@ export function OrderDetail() {
       </div>
 
       <OrderAccessoriesCard orderId={o.id} />
+      <OrderProjectTeamCard orderId={o.id} />
       <OrderInstallationCard orderId={o.id} />
       <OrderVendorBillsCard orderId={o.id} />
 

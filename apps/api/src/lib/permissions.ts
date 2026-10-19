@@ -11,7 +11,7 @@ export const MODULES = {
   vendors: ['view', 'create', 'edit', 'delete'],
   stock: ['view', 'adjust'],
   quotations: ['view', 'create', 'edit', 'delete', 'approve'],
-  orders: ['view', 'create', 'edit', 'delete', 'without_quote'],
+  orders: ['view', 'create', 'edit', 'delete', 'without_quote', 'assign_project'],
   accessories: ['view', 'create', 'edit', 'approve'],
   purchase_orders: ['view', 'create', 'edit', 'delete', 'approve', 'without_order', 'without_accessories', 'extra_items'],
   grn: ['view', 'create'],
@@ -95,7 +95,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: st
   },
   {
     name: 'Projects Head', description: 'Projects department — installation work, material for projects; approves leave, expenses and requisitions of the people in the departments they head',
-    permissions: ['dashboard:view', 'reports:view', ...view('clients', 'sites', 'quotations', 'invoices', 'amc', 'items', 'stock', 'vendors', 'grn', 'orders'), 'sites:edit',
+    permissions: ['dashboard:view', 'reports:view', ...view('clients', 'sites', 'quotations', 'invoices', 'amc', 'items', 'stock', 'vendors', 'grn', 'orders'), 'orders:assign_project', 'sites:edit',
       'tickets:view', 'tickets:view_all', 'tickets:create', 'tickets:edit', 'tickets:assign', ...all('service_reports'),
       'accessories:view', 'accessories:create', 'accessories:edit', 'accessories:approve',
       'purchase_orders:view', 'purchase_orders:create', 'purchase_orders:edit', 'challans:view', 'challans:create', 'challans:edit',

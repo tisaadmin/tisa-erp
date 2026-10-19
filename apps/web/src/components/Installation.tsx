@@ -9,7 +9,7 @@ import { Combo } from './Combo';
 import { Button, Card, Field, Input, Modal, Select, Status, Table, Textarea } from './ui';
 
 type InstLine = { orderItemId: string; description: string; unit: string; qty: number; deliveredQty: number; installedQty: number; pending: number };
-type Installation = { order: { id: string; number: string }; lines: InstLine[]; challans: { id: string; number: string }[]; tickets: { id: string; number: string; title: string; status: string; scheduledAt: string | null; assignedTo: { id: string; name: string } | null; challan: { id: string; number: string } | null }[] };
+type Installation = { order: { id: string; number: string }; projectInchargeId: string | null; lines: InstLine[]; challans: { id: string; number: string }[]; tickets: { id: string; number: string; title: string; status: string; scheduledAt: string | null; assignedTo: { id: string; name: string } | null; challan: { id: string; number: string } | null }[] };
 
 /** People of the Projects department first (the usual installers); everyone else on request. */
 function useInstallers(all: boolean) {
@@ -33,7 +33,7 @@ export function OrderInstallationCard({ orderId }: { orderId: string }) {
   const create = useAction(() => api(`/orders/${orderId}/installation-ticket`, { body: { assignedToId: form!.assignedToId, scheduledAt: form!.scheduledAt || null, priority: form!.priority, challanId: form!.challanId || null, description: form!.description || null } }),
     { success: 'Installation ticket created — assignee notified', invalidate: [['/orders'], ['/tickets']], onSuccess: () => setForm(null) });
   const supply = inst.data?.challans ?? [];
-  const open = (challanId?: string | null) => setForm({ assignedToId: null, scheduledAt: '', priority: 'MEDIUM', challanId: challanId ?? supply[0]?.id ?? '', description: '', all: false });
+  const open = (challanId?: string | null) => setForm({ assignedToId: inst.data?.projectInchargeId ?? null, scheduledAt: '', priority: 'MEDIUM', challanId: challanId ?? supply[0]?.id ?? '', description: '', all: false });
   // arriving from a challan ("Assign installation") opens the form for that challan
   useEffect(() => {
     const c = sp.get('install');

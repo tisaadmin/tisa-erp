@@ -1206,3 +1206,26 @@ test('project material status: order items and accessories sent to site, deliver
   const tk = await call('accounts', 'GET', `/projects/${other.id}`);
   assert.equal(tk.status, 200);
 });
+
+test('projects: the Projects head puts someone in charge of a project and adds a team; they see it as theirs', async () => {
+  const o = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.svcItem.id, qty: 2 }] });
+  const eng = (await ok('admin', 'GET', '/users?search=Ravi')).data[0];
+  const tech = (await ok('admin', 'GET', '/users?search=Imran')).data[0];
+  assert.equal((await call('sales', 'PUT', `/projects/${o.id}/team`, { inchargeId: eng.id })).status, 403, 'sales cannot assign projects');
+  assert.equal((await ok('phead', 'GET', `/projects/${o.id}`)).canAssign, true);
+  const team = await ok('phead', 'PUT', `/projects/${o.id}/team`, { inchargeId: eng.id, memberIds: [tech.id, eng.id] });
+  assert.equal(team.incharge.id, eng.id); assert.deepEqual(team.members.map((m: any) => m.id), [tech.id], 'in-charge is not repeated as a member');
+  // the in-charge and the team see it among their projects; "in charge: me" filters
+  assert.ok((await ok('peng', 'GET', '/projects')).some((p: any) => p.id === o.id));
+  assert.ok((await ok('peng', 'GET', '/projects?incharge=me')).some((p: any) => p.id === o.id));
+  assert.ok((await ok('tech', 'GET', '/projects')).some((p: any) => p.id === o.id && p.team.incharge.id === eng.id));
+  assert.ok((await ok('peng', 'GET', '/notifications')).data?.some?.((n: any) => /in charge/.test(n.title)) ?? true);
+  // office: all open projects, unassigned filter
+  const unassigned = await ok('admin', 'GET', '/projects?all=1&incharge=none');
+  assert.ok(!unassigned.some((p: any) => p.id === o.id));
+  // installation form defaults to the in-charge
+  assert.equal((await ok('svc', 'GET', `/orders/${o.id}/installation`)).projectInchargeId, eng.id);
+  // clearing the in-charge
+  const cleared = await ok('phead', 'PUT', `/projects/${o.id}/team`, { inchargeId: null, memberIds: [] });
+  assert.equal(cleared.incharge, null); assert.equal(cleared.members.length, 0);
+});

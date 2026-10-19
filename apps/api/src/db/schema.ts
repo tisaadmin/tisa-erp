@@ -399,6 +399,8 @@ export const salesOrders = pgTable('sales_orders', {
   sourceData: jsonb().$type<SourceData>(),
   ...totals(),
   createdById: text(),
+  /** project in charge (usually from the Projects department) — reports to the Projects head */
+  projectInchargeId: text().references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (t) => [index().on(t.sourceRef)]);
@@ -912,8 +914,22 @@ export const quotationsRel = relations(quotations, ({ one, many }) => ({
 }));
 export const quotationItemsRel = relations(quotationItems, ({ one }) => ({ quotation: one(quotations, { fields: [quotationItems.quotationId], references: [quotations.id] }) }));
 
+/** People working on a project (an order) besides its in-charge. */
+export const projectMembers = pgTable('project_members', {
+  id: id(),
+  orderId: text().notNull().references(() => salesOrders.id, { onDelete: 'cascade' }),
+  userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: createdAt(),
+}, (t) => [uniqueIndex().on(t.orderId, t.userId), index().on(t.userId)]);
+export const projectMembersRel = relations(projectMembers, ({ one }) => ({
+  order: one(salesOrders, { fields: [projectMembers.orderId], references: [salesOrders.id] }),
+  user: one(users, { fields: [projectMembers.userId], references: [users.id] }),
+}));
+
 export const salesOrdersRel = relations(salesOrders, ({ one, many }) => ({
   client: one(clients, { fields: [salesOrders.clientId], references: [clients.id] }),
+  projectIncharge: one(users, { fields: [salesOrders.projectInchargeId], references: [users.id] }),
+  projectMembers: many(projectMembers),
   site: one(sites, { fields: [salesOrders.siteId], references: [sites.id] }),
   quotation: one(quotations, { fields: [salesOrders.quotationId], references: [quotations.id] }),
   items: many(salesOrderItems),
