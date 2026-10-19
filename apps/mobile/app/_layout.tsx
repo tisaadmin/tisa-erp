@@ -13,7 +13,7 @@ function routeFor(link?: string): string | null {
   if (!link) return null;
   const m = link.match(/^\/(tickets|requisitions|expenses)\/([\w-]+)/);
   if (!m) return null;
-  return { tickets: `/ticket/${m[2]}`, requisitions: '/(tabs)/requests', expenses: '/(tabs)/expenses' }[m[1]] ?? null;
+  return { tickets: `/ticket/${m[2]}`, requisitions: `/requisition/${m[2]}`, expenses: '/(tabs)/expenses' }[m[1]] ?? null;
 }
 
 function Gate() {
@@ -44,6 +44,7 @@ function Gate() {
       <Stack.Screen name="ticket/new" options={{ title: 'Raise ticket' }} />
       <Stack.Screen name="report/new" options={{ title: 'Service report' }} />
       <Stack.Screen name="requisition/new" options={{ title: 'New requisition' }} />
+      <Stack.Screen name="requisition/[id]" options={{ title: 'Requisition' }} />
       <Stack.Screen name="expense/new" options={{ title: 'New expense claim' }} />
       <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
       <Stack.Screen name="approvals" options={{ title: 'Approvals' }} />

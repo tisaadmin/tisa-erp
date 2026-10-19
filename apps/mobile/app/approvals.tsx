@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { Text, View } from 'react-native';
 import { Badge, Btn, Card, Empty, Screen, s, useFetch, useRun } from '../src/components/ui';
 import { api } from '../src/lib/api';
@@ -34,7 +35,7 @@ export default function Approvals() {
         <Card title="Requisitions">
           {(req.data?.data ?? []).filter((r) => r.raisedBy?.id !== user?.id).map((r) => (
             <View key={r.id} style={{ gap: 6, paddingBottom: 10 }}>
-              <Text style={s.cardTitle}>{label(r.type)} · {r.site?.name ?? 'site not set'}</Text>
+              <Text style={s.cardTitle} onPress={() => router.push(`/requisition/${r.id}`)}>{label(r.type)} · {r.site?.name ?? 'site not set'} ›</Text>
               <Text style={s.muted}>{r.raisedBy.name}: {r.description}</Text>
               <View style={{ flexDirection: 'row', gap: 6 }}>
                 <Btn style={{ flex: 1 }} variant="success" title="Approve" busy={busy} onPress={() => act(`/requisitions/${r.id}/approve`, {}, req.reload)} />

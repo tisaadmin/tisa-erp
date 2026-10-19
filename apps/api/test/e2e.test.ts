@@ -1164,3 +1164,16 @@ test('installation tickets: after delivery, an installation ticket for the order
   // someone else (not assigned, no edit rights) cannot update it
   assert.equal((await call('sales', 'POST', `/tickets/${t.id}/installed`, { lines: [{ orderItemId: cam.orderItemId, installedQty: 5 }] })).status, 403);
 });
+
+test('requisition detail for the requester: items with sent quantities, office note and a dated history', async () => {
+  const rq = await ok('tech', 'POST', '/requisitions', { type: 'MATERIAL', priority: 'HIGH', siteId: ctx.site.id, description: 'Cable for floor 3', items: [{ itemId: ctx.cam.id, description: 'Camera', qty: 2, unit: 'Nos' }] });
+  await ok('svc', 'POST', `/requisitions/${rq.id}/approve`, { note: 'Will send tomorrow' });
+  const d = await ok('tech', 'GET', `/requisitions/${rq.id}`);
+  assert.equal(d.status, 'APPROVED'); assert.equal(d.actionNote, 'Will send tomorrow'); assert.equal(d.actionBy.name, 'Sameer Kulkarni');
+  assert.equal(d.items[0].qty, 2); assert.equal(d.items[0].issuedQty, 0);
+  const labels = d.history.map((h: any) => h.label);
+  assert.deepEqual(labels.slice(0, 2), ['Raised', 'Approved']);
+  assert.equal(d.history[1].by, 'Sameer Kulkarni'); assert.equal(d.history[1].note, 'Will send tomorrow');
+  // someone else's requisition is not visible to a technician
+  assert.equal((await call('tech', 'GET', `/requisitions/${(await ok('svc', 'POST', '/requisitions', { type: 'MATERIAL', priority: 'LOW', description: 'Office stock', items: [{ description: 'Tape', qty: 1, unit: 'Nos' }] })).id}`)).status, 403);
+});

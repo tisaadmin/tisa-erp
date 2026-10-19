@@ -12,8 +12,9 @@ export default function Requests() {
       {can('requisitions:create') && <View style={{ padding: 12, backgroundColor: C.bg }}><Btn title="New requisition" icon="add" onPress={() => router.push('/requisition/new')} /></View>}
       <FlatList data={list.data?.data ?? []} keyExtractor={(r) => r.id} onRefresh={list.reload} refreshing={list.loading}
         renderItem={({ item: r }) => (
-          <Row title={`${label(r.type)} — ${r.site?.name}`} sub={`${r.number} · ${r.description}${r.actionNote ? `\nOffice: ${r.actionNote}` : ''}\n${fmtDateTime(r.createdAt)}`}
-            right={<Badge text={r.status} />} />
+          <Row title={`${label(r.type)} — ${r.site?.name ?? r.client?.name ?? 'site not set'}`}
+            sub={`${r.number} · ${fmtDateTime(r.createdAt)}${r.items?.length ? ` · ${r.items.length} item${r.items.length > 1 ? 's' : ''}` : ''}\n${r.actionNote ? `Office: ${r.actionNote}` : r.description}`}
+            right={<Badge text={r.status} />} onPress={() => router.push(`/requisition/${r.id}`)} />
         )}
         ListEmptyComponent={list.data ? <Empty text="No requisitions yet" /> : null} />
     </Screen>

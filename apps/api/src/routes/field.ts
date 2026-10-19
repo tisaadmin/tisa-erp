@@ -4,7 +4,7 @@ import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, type SQL 
 import { z } from 'zod';
 import { db } from '../db';
 import { approverFor, manages, teamIds } from '../lib/team';
-import { attachments, attendance, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
+import { attachments, attendance, auditLogs, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { istDate, istTime } from '../lib/dates';
 import { absPath, geoStampImage, normaliseUpload, saveBuffer, upload } from '../lib/files';
@@ -343,7 +343,18 @@ r.get('/requisitions/:id', requirePerm('requisitions:view'), async (req, res) =>
     ...dcs.map((d) => ({ ...d, total: null, kind: 'Delivery challan', link: `/challans/${d.id}` })), ...invs.map((d) => ({ ...d, kind: 'Invoice', link: `/invoices/${d.id}` })),
   ].sort((a, b) => +new Date(a.date) - +new Date(b.date));
   const canAct = can(req.user, 'requisitions:approve') || (row.raisedById !== req.user.id && (await manages(req.user.id, row.raisedById)));
-  res.json({ ...row, photos, docs, canAct });
+  // history for the requester: who did what and when (approvals from the audit trail, documents raised from it)
+  const logs = await db.select({ action: auditLogs.action, userId: auditLogs.userId, data: auditLogs.data, at: auditLogs.createdAt }).from(auditLogs)
+    .where(and(eq(auditLogs.entity, 'requisition'), eq(auditLogs.entityId, row.id))).orderBy(asc(auditLogs.createdAt));
+  const who = [...new Set([...logs.map((l) => l.userId), row.actionById].filter((x): x is string => !!x))];
+  const names = new Map((who.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, who)) : []).map((u) => [u.id, u.name]));
+  const LABEL: Record<string, string> = { create: 'Raised', approve: 'Approved', reject: 'Rejected', start: 'Work started', fulfil: 'Marked fulfilled', assign: 'Client / site assigned' };
+  const history = [
+    ...(logs.some((l) => l.action === 'create') ? [] : [{ at: row.createdAt, label: 'Raised', by: row.raisedBy.name, note: null as string | null }]),
+    ...logs.filter((l) => LABEL[l.action]).map((l) => ({ at: l.at, label: LABEL[l.action], by: l.userId ? names.get(l.userId) ?? null : null, note: ((l.data ?? {}) as { note?: string | null }).note ?? null })),
+    ...docs.map((d) => ({ at: d.date, label: `${d.kind} ${d.number}${d.kind === 'Delivery challan' ? ` — ${String(d.status).toLowerCase()}` : ''}`, by: null, note: null })),
+  ].sort((a, b) => +new Date(a.at) - +new Date(b.at));
+  res.json({ ...row, photos, docs, canAct, history, actionBy: row.actionById ? { id: row.actionById, name: names.get(row.actionById) ?? null } : null });
 });
 
 r.post('/requisitions', requirePerm('requisitions:create'), async (req, res) => {
