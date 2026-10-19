@@ -51,6 +51,7 @@ const REFS = {
   orders: [
     ref('Purchase orders', purchaseOrders, purchaseOrders.salesOrderId), ref('Delivery challans', deliveryChallans, deliveryChallans.orderId),
     ref('Invoices', invoices, invoices.orderId), ref('Accessory sheets', accessorySheets, accessorySheets.orderId),
+    ref('Tickets', tickets, tickets.orderId),
   ],
 } satisfies Record<string, Ref[]>;
 type Entity = keyof typeof REFS;

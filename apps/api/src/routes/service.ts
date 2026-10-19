@@ -2,7 +2,7 @@ import { Router, type Request } from 'express';
 import { and, desc, eq, gte, ilike, inArray, lte, or, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
-import { amcContracts, attachments, serviceReports, sites, ticketUpdates, tickets, users } from '../db/schema';
+import { amcContracts, attachments, deliveryChallans, salesOrderItems, salesOrders, serviceReports, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { addDays, fmtDateTime, istDate } from '../lib/dates';
 import { saveBuffer } from '../lib/files';
@@ -91,7 +91,94 @@ r.get('/tickets/:id', requirePerm('tickets:view'), async (req, res) => {
   const userIds = [...new Set(t!.updates.map((u) => u.userId).filter((x): x is string => !!x))];
   const names = userIds.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, userIds)) : [];
   const nameOf = new Map(names.map((n) => [n.id, n.name]));
-  res.json({ ...t, updates: t!.updates.map((u) => ({ ...u, userName: u.userId ? nameOf.get(u.userId) : null })), serviceReports: reports, photos });
+  const installation = t!.orderId ? await installationLines(t!.orderId) : null;
+  res.json({ ...t, updates: t!.updates.map((u) => ({ ...u, userName: u.userId ? nameOf.get(u.userId) : null })), serviceReports: reports, photos, installation });
+});
+
+// ═══════════════════════ Installation work (tickets of type INSTALLATION linked to an order) ═══════════════════════
+
+/** Order lines with delivered / installed quantities — what the installation team works through. */
+async function installationLines(orderId: string) {
+  const order = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, orderId), columns: { id: true, number: true, siteId: true, clientId: true, status: true } });
+  if (!order) throw notFound('Order');
+  const lines = await db.query.salesOrderItems.findMany({ where: eq(salesOrderItems.orderId, orderId), orderBy: [salesOrderItems.sortOrder] });
+  return {
+    order: { id: order.id, number: order.number },
+    lines: lines.map((l) => ({ orderItemId: l.id, description: l.description, unit: l.unit, qty: l.qty, deliveredQty: l.deliveredQty, installedQty: l.installedQty, pending: Math.max(0, Math.round((l.qty - l.installedQty) * 1000) / 1000) })),
+  };
+}
+
+r.get('/orders/:id/installation', requirePerm('tickets:view'), async (req, res) => {
+  const inst = await installationLines(req.params.id);
+  const list = await db.query.tickets.findMany({
+    where: and(eq(tickets.orderId, req.params.id), eq(tickets.type, 'INSTALLATION')), orderBy: [desc(tickets.createdAt)],
+    with: { assignedTo: { columns: { id: true, name: true } }, challan: { columns: { id: true, number: true } } },
+  });
+  const challans = await db.query.deliveryChallans.findMany({ where: and(eq(deliveryChallans.orderId, req.params.id), eq(deliveryChallans.type, 'SUPPLY')), columns: { id: true, number: true, date: true, status: true }, orderBy: [desc(deliveryChallans.date)] });
+  res.json({ ...inst, challans: challans.filter((c) => c.status !== 'CANCELLED'), tickets: list.map((t) => ({ id: t.id, number: t.number, title: t.title, status: t.status, scheduledAt: t.scheduledAt, assignedTo: t.assignedTo, challan: t.challan, createdAt: t.createdAt })) });
+});
+
+/** After material is delivered: an installation ticket for the order's site, assigned to someone from the projects team. */
+r.post('/orders/:id/installation-ticket', requirePerm('tickets:create'), async (req, res) => {
+  const d = z.object({
+    assignedToId: opt, scheduledAt: z.coerce.date().nullish(), priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).default('MEDIUM'),
+    title: opt, description: opt, challanId: opt,
+  }).parse(req.body ?? {});
+  if (d.assignedToId && !can(req.user, 'tickets:assign') && d.assignedToId !== req.user.id) throw forbidden('Only the projects head / a manager can assign installation work to others');
+  const order = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), with: { site: true } });
+  if (!order) throw notFound('Order');
+  if (['CANCELLED', 'CLOSED'].includes(order.status)) throw badRequest(`Order ${order.number} is ${order.status.toLowerCase()}`);
+  if (!order.siteId || !order.site) throw badRequest(`Order ${order.number} has no site — set the order's site first`);
+  const dc = d.challanId ? await db.query.deliveryChallans.findFirst({ where: eq(deliveryChallans.id, d.challanId) }) : null;
+  if (d.challanId && (!dc || dc.orderId !== order.id)) throw badRequest('That delivery challan is not for this order');
+  if (d.assignedToId && !(await db.query.users.findFirst({ where: and(eq(users.id, d.assignedToId), eq(users.active, true)), columns: { id: true } }))) throw badRequest('Assignee not found');
+  const inst = await installationLines(order.id);
+  const todo = inst.lines.filter((l) => l.pending > 0);
+  const description = d.description ?? [
+    `Installation for order ${order.number}${dc ? ` — material delivered on challan ${dc.number}` : ''}.`,
+    todo.length ? `\nTo install:\n${todo.map((l) => `• ${l.description} — ${l.pending} ${l.unit}${l.deliveredQty < l.qty ? ` (delivered ${l.deliveredQty} of ${l.qty})` : ''}`).join('\n')}` : '',
+  ].join('');
+  const t = await db.transaction(async (tx) => {
+    const [t] = await tx.insert(tickets).values({
+      number: await nextNumber(tx, 'TICKET'), type: 'INSTALLATION', priority: d.priority, clientId: order.clientId, siteId: order.siteId!, orderId: order.id, challanId: dc?.id ?? null,
+      title: d.title ?? `Installation — ${order.number}${dc ? ` (DC ${dc.number})` : ''}`, description, isBillable: false,
+      source: req.headers['x-client'] === 'mobile' ? 'MOBILE' : 'WEB', raisedById: req.user.id, assignedToId: d.assignedToId ?? null, scheduledAt: d.scheduledAt ?? null,
+      status: d.assignedToId ? 'ASSIGNED' : 'OPEN', slaDueAt: d.scheduledAt ?? addDays(new Date(), 7),
+    }).returning();
+    await tx.insert(ticketUpdates).values({ ticketId: t.id, userId: req.user.id, status: t.status, note: `Installation ticket raised for order ${order.number}${dc ? ` / challan ${dc.number}` : ''}` });
+    return t;
+  });
+  const payload = { title: `Installation ${t.number} — ${order.site.name}`, body: t.title, type: 'TICKET' as const, link: `/tickets/${t.id}`, entityType: 'TICKET', entityId: t.id };
+  if (t.assignedToId) await notifyUsers([t.assignedToId], { ...payload, title: `Installation ${t.number} assigned to you — ${order.site.name}` }, req.user.id);
+  else await notifyPermission('tickets:assign', payload, req.user.id);
+  audit(req, 'create', 'ticket', t.id, { orderId: order.id, challanId: dc?.id });
+  res.status(201).json(t);
+});
+
+/** The installer (or the office) records how much is installed — drives "Against installation" billing on the order. */
+r.post('/tickets/:id/installed', async (req, res) => {
+  const t = await loadTicketFor(req, req.params.id);
+  if (!t.orderId) throw badRequest('This ticket is not linked to an order');
+  if (!(t.assignedToId === req.user.id || can(req.user, 'tickets:edit') || can(req.user, 'orders:edit'))) throw forbidden('Only the assigned person or the office can update installation progress');
+  if (['CLOSED', 'CANCELLED'].includes(t.status)) throw badRequest(`Ticket is ${t.status.toLowerCase()}`);
+  const d = z.object({ lines: z.array(z.object({ orderItemId: z.string(), installedQty: z.coerce.number().min(0) })).min(1), note: opt }).parse(req.body);
+  const changes: string[] = [];
+  await db.transaction(async (tx) => {
+    for (const l of d.lines) {
+      const line = await tx.query.salesOrderItems.findFirst({ where: and(eq(salesOrderItems.id, l.orderItemId), eq(salesOrderItems.orderId, t.orderId!)) });
+      if (!line) throw badRequest('Line is not part of this order');
+      if (l.installedQty > line.qty) throw badRequest(`${line.description}: installed cannot be more than ordered (${line.qty} ${line.unit})`);
+      if (l.installedQty === line.installedQty) continue;
+      await tx.update(salesOrderItems).set({ installedQty: l.installedQty }).where(eq(salesOrderItems.id, line.id));
+      changes.push(`${line.description}: ${l.installedQty}/${line.qty} ${line.unit}`);
+    }
+    if (changes.length) {
+      await tx.update(salesOrders).set({ status: 'IN_PROGRESS' }).where(and(eq(salesOrders.id, t.orderId!), eq(salesOrders.status, 'OPEN')));
+      if (t.status === 'ASSIGNED' || t.status === 'OPEN') await tx.update(tickets).set({ status: 'IN_PROGRESS' }).where(eq(tickets.id, t.id));
+      await tx.insert(ticketUpdates).values({ ticketId: t.id, userId: req.user.id, status: t.status === 'ASSIGNED' || t.status === 'OPEN' ? 'IN_PROGRESS' : null, note: `Installed — ${changes.join('; ')}${d.note ? `\n${d.note}` : ''}` });
+    }
+  });
+  res.json({ ok: true, updated: changes.length, installation: await installationLines(t.orderId) });
 });
 
 const ticketSchema = z.object({

@@ -676,6 +676,9 @@ export const tickets = pgTable('tickets', {
   clientId: text().notNull().references(() => clients.id),
   siteId: text().notNull().references(() => sites.id),
   amcId: text().references(() => amcContracts.id),
+  /** installation work: the order (and the delivery challan) it installs */
+  orderId: text().references((): AnyPgColumn => salesOrders.id),
+  challanId: text().references((): AnyPgColumn => deliveryChallans.id),
   categoryId: text().references(() => systemCategories.id),
   title: text().notNull(),
   description: text(),
@@ -694,7 +697,7 @@ export const tickets = pgTable('tickets', {
   sourceRef: text(), // imported from the old ERP
   createdAt: createdAt(),
   updatedAt: updatedAt(),
-}, (t) => [index().on(t.status), index().on(t.assignedToId)]);
+}, (t) => [index().on(t.status), index().on(t.assignedToId), index().on(t.orderId)]);
 
 export const ticketUpdates = pgTable('ticket_updates', {
   id: id(),
@@ -977,6 +980,8 @@ export const ticketsRel = relations(tickets, ({ one, many }) => ({
   client: one(clients, { fields: [tickets.clientId], references: [clients.id] }),
   site: one(sites, { fields: [tickets.siteId], references: [sites.id] }),
   amc: one(amcContracts, { fields: [tickets.amcId], references: [amcContracts.id] }),
+  order: one(salesOrders, { fields: [tickets.orderId], references: [salesOrders.id] }),
+  challan: one(deliveryChallans, { fields: [tickets.challanId], references: [deliveryChallans.id] }),
   category: one(systemCategories, { fields: [tickets.categoryId], references: [systemCategories.id] }),
   assignedTo: one(users, { fields: [tickets.assignedToId], references: [users.id], relationName: 'assignee' }),
   raisedBy: one(users, { fields: [tickets.raisedById], references: [users.id], relationName: 'raiser' }),

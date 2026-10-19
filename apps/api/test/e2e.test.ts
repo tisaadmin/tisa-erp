@@ -1131,3 +1131,36 @@ test('documents keep the site and order they were raised from: PO, challan, orde
   assert.equal((await call('sales', 'PATCH', `/orders/${o2.id}`, { siteId: other.id })).status, 400);
   await ok('admin', 'PATCH', `/orders/${o2.id}`, { siteId: other.id });
 });
+
+test('installation tickets: after delivery, an installation ticket for the order is assigned to the projects team; the installer records installed quantities', async () => {
+  const order = await ok('sales', 'GET', `/orders/${ctx.order.id}`);
+  const dc = (await ok('stores', 'GET', `/challans?orderId=${order.id}`)).data[0];
+  assert.ok(dc, 'the order has a delivery challan');
+  const tech = (await ok('admin', 'GET', '/users?search=Imran')).data[0];
+  // Sales has no ticket rights; the service manager (tickets:assign) raises and assigns it
+  assert.equal((await call('sales', 'POST', `/orders/${order.id}/installation-ticket`, {})).status, 403);
+  const t = await ok('svc', 'POST', `/orders/${order.id}/installation-ticket`, { assignedToId: tech.id, challanId: dc.id, scheduledAt: '2026-12-05T10:00:00+05:30' });
+  assert.equal(t.type, 'INSTALLATION'); assert.equal(t.status, 'ASSIGNED'); assert.equal(t.orderId, order.id); assert.equal(t.siteId, order.siteId);
+  assert.match(t.title, /Installation — .*DC/); assert.match(t.description, /To install:/);
+  // a challan from another order is refused
+  const o2 = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
+  assert.equal((await call('svc', 'POST', `/orders/${o2.id}/installation-ticket`, { challanId: dc.id })).status, 400);
+  // the order shows its installation work
+  const inst = await ok('svc', 'GET', `/orders/${order.id}/installation`);
+  assert.ok(inst.tickets.some((x: any) => x.id === t.id && x.assignedTo.id === tech.id));
+  // the installer sees it in their list and records progress from the ticket
+  assert.ok((await ok('tech', 'GET', '/tickets?mine=1')).data.some((x: any) => x.id === t.id));
+  const full = await ok('tech', 'GET', `/tickets/${t.id}`);
+  const cam = full.installation.lines.find((l: any) => l.description.includes('2MP'));
+  assert.equal((await call('tech', 'POST', `/tickets/${t.id}/installed`, { lines: [{ orderItemId: cam.orderItemId, installedQty: cam.qty + 1 }] })).status, 400, 'not more than ordered');
+  const target = cam.installedQty === cam.qty ? cam.qty - 1 : cam.installedQty + 1;
+  const upd = await ok('tech', 'POST', `/tickets/${t.id}/installed`, { lines: [{ orderItemId: cam.orderItemId, installedQty: target }], note: 'Block A done' });
+  assert.equal(upd.updated, 1);
+  assert.equal(upd.installation.lines.find((l: any) => l.orderItemId === cam.orderItemId).installedQty, target);
+  const after = await ok('tech', 'GET', `/tickets/${t.id}`);
+  assert.equal(after.status, 'IN_PROGRESS');
+  assert.ok(after.updates.some((u: any) => u.note.startsWith('Installed — ') && u.note.includes(`${target}/`)));
+  assert.equal((await ok('sales', 'GET', `/orders/${order.id}`)).items.find((l: any) => l.id === cam.orderItemId).installedQty, target, 'drives installation billing on the order');
+  // someone else (not assigned, no edit rights) cannot update it
+  assert.equal((await call('sales', 'POST', `/tickets/${t.id}/installed`, { lines: [{ orderItemId: cam.orderItemId, installedQty: 5 }] })).status, 403);
+});

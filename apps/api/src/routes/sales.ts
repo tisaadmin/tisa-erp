@@ -5,9 +5,10 @@ import { z } from 'zod';
 import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { db } from '../db';
 import {
-  clients, deliveryChallanItems, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
+  clients, departments, deliveryChallanItems, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
 } from '../db/schema';
 import { audit } from '../lib/audit';
+import { notifyUsers } from '../lib/notify';
 import { badRequest, notFound, pageParams } from '../lib/http';
 import { r3 } from '../lib/gst';
 import { nextNumber } from '../lib/numbering';
@@ -374,15 +375,28 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
     if (d.orderId) await tx.update(salesOrders).set({ status: 'IN_PROGRESS' }).where(and(eq(salesOrders.id, d.orderId), eq(salesOrders.status, 'OPEN')));
     return dc;
   });
+  if (d.orderId && d.type === 'SUPPLY') await notifyProjectsHead(d.orderId, dc.number, 'dispatched', req.user.id);
   audit(req, 'create', 'challan', dc.id);
   res.status(201).json(dc);
 });
+
+/** Material for an order has gone to site → the head of the Projects department plans the installation. */
+async function notifyProjectsHead(orderId: string, challanNo: string, what: 'dispatched' | 'delivered', exceptUserId?: string) {
+  const projects = await db.query.departments.findFirst({ where: and(ilike(departments.name, 'projects%'), eq(departments.active, true)), columns: { headId: true } });
+  if (!projects?.headId) return;
+  const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, orderId), columns: { number: true } });
+  await notifyUsers([projects.headId], {
+    title: `Material ${what} — ${o?.number ?? ''}`, body: `Challan ${challanNo}${what === 'delivered' ? ': assign the installation' : ''}`,
+    type: 'TICKET', link: `/orders/${orderId}`, entityType: 'ORDER', entityId: orderId,
+  }, exceptUserId);
+}
 
 r.post('/challans/:id/delivered', requirePerm('challans:edit'), async (req, res) => {
   const { receivedBy } = z.object({ receivedBy: opt }).parse(req.body ?? {});
   const [row] = await db.update(deliveryChallans).set({ status: 'DELIVERED', receivedBy })
     .where(and(eq(deliveryChallans.id, req.params.id), eq(deliveryChallans.status, 'DISPATCHED'))).returning();
   if (!row) throw badRequest('Challan not found or not in DISPATCHED state');
+  if (row.orderId && row.type === 'SUPPLY') await notifyProjectsHead(row.orderId, row.number, 'delivered', req.user.id);
   res.json(row);
 });
 

@@ -10,6 +10,7 @@ import { useAuth } from '../lib/auth';
 import { fmtDate, inr, label, qty, STAGE_LABEL, toInputDate } from '../lib/format';
 import { useAction, useClients, useGet, useSites, type Page } from '../lib/hooks';
 import { OrderAccessoriesCard } from './Accessories';
+import { OrderInstallationCard } from '../components/Installation';
 import { OrderVendorBillsCard } from './VendorBills';
 import { DeleteOrderButton } from './Cleanup';
 
@@ -319,6 +320,7 @@ export function OrderDetail() {
       </div>
 
       <OrderAccessoriesCard orderId={o.id} />
+      <OrderInstallationCard orderId={o.id} />
       <OrderVendorBillsCard orderId={o.id} />
 
       <Card title="Execution & milestone billing" pad={false}>
@@ -500,6 +502,7 @@ export function ChallanDetail() {
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/challans/${dc.id}/pdf`)}>PDF</Button>
           {dc.status === 'DISPATCHED' && can('challans:edit') && <><Input className="w-48" placeholder="Received by" value={recv} onChange={(e) => setRecv(e.target.value)} /><Button variant="success" loading={delivered.isPending} onClick={() => delivered.mutate(undefined)}>Mark delivered</Button></>}
+          {dc.order && dc.type === 'SUPPLY' && dc.status !== 'CANCELLED' && can('tickets:create') && <Link to={`/orders/${dc.order.id}?install=${dc.id}`}><Button>Assign installation</Button></Link>}
           {dc.status !== 'CANCELLED' && can('challans:edit') && <Button variant="danger" loading={cancel.isPending} onClick={() => confirm('Cancel this challan and return stock?') && cancel.mutate(undefined)}>Cancel</Button>}
         </>} />
       <Card><KV cols={4} items={[['Date', fmtDate(dc.date)], ['Type', label(dc.type)], ['Order', dc.order ? <Link className="text-brand-700" to={`/orders/${dc.order.id}`}>{dc.order.number}</Link> : null], ['Vehicle', dc.vehicleNo], ['Transporter', dc.transporter], ['E-way bill', dc.ewayBillNo], ['Received by', dc.receivedBy]]} /></Card>

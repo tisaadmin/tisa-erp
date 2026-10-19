@@ -2,6 +2,7 @@ import { Clock, FileDown, MapPin, Plus, Send } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
+import { TicketInstallationCard } from '../components/Installation';
 import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Select, Spinner, Status, Table, Textarea, cx } from '../components/ui';
 import { api, fileUrl, openPdf, pathUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -122,6 +123,7 @@ export function TicketDetail() {
           {(open || can('tickets:assign')) && can('tickets:edit') && <Select className="w-40" value="" onChange={(e) => e.target.value && setStatusTo({ status: e.target.value, note: '' })} options={nextStatuses.filter((s) => s !== t.status)} placeholder="Change status…" />}
           {can('requisitions:create') && <Link to={`/requisitions?new=1&siteId=${t.siteId}&ticketId=${t.id}`}><Button>Requisition</Button></Link>}
         </>} />
+      {t.installation && <TicketInstallationCard ticket={t} onSaved={() => {}} />}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Ticket" className="lg:col-span-2">
           <KV items={[['Client', <Link className="text-brand-700" to={`/clients/${t.client.id}`}>{t.client.name}</Link>], ['Site', t.site.name], ['Address', [t.site.address, t.site.city].filter(Boolean).join(', ')],

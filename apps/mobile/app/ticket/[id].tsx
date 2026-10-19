@@ -45,6 +45,8 @@ export default function TicketScreen() {
         </Card>
       )}
 
+      {d.installation && <InstallationCard ticketId={d.id} inst={d.installation} editable={open} onSaved={t.reload} />}
+
       {!!d.photos.length && (
         <Card title={`Photos (${d.photos.length})`}>
           <ScrollView horizontal contentContainerStyle={{ gap: 8 }}>
@@ -66,5 +68,33 @@ export default function TicketScreen() {
         ))}
       </Card>
     </Screen>
+  );
+}
+
+/** Installation ticket: how much of each order line is installed (drives billing in the office). */
+function InstallationCard({ ticketId, inst, editable, onSaved }: { ticketId: string; inst: { order: { number: string }; lines: { orderItemId: string; description: string; unit: string; qty: number; deliveredQty: number; installedQty: number }[] }; editable: boolean; onSaved: () => void }) {
+  const [vals, setVals] = useState<Record<string, string>>(() => Object.fromEntries(inst.lines.map((l) => [l.orderItemId, String(l.installedQty)])));
+  const [note, setNote] = useState('');
+  const { busy, run } = useRun();
+  const changed = inst.lines.filter((l) => Number(vals[l.orderItemId]) !== l.installedQty);
+  return (
+    <Card title={`Installation — ${inst.order.number}`}>
+      {inst.lines.map((l) => (
+        <View key={l.orderItemId} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: '#eef2f7' }}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: C.text }}>{l.description}</Text>
+            <Text style={s.muted}>Ordered {l.qty} {l.unit} · delivered {l.deliveredQty}</Text>
+          </View>
+          {editable
+            ? <Input style={{ width: 70, textAlign: 'right' }} keyboardType="decimal-pad" value={vals[l.orderItemId]} onChangeText={(v) => setVals({ ...vals, [l.orderItemId]: v })} />
+            : <Text style={{ color: C.text }}>{l.installedQty}</Text>}
+        </View>
+      ))}
+      {editable && <>
+        <Input placeholder="Note (optional)" value={note} onChangeText={setNote} />
+        <Btn variant="success" title={changed.length ? `Save installed qty (${changed.length})` : 'Installed qty up to date'} disabled={!changed.length} busy={busy}
+          onPress={() => run(async () => { await api(`/tickets/${ticketId}/installed`, { body: { note: note || null, lines: changed.map((l) => ({ orderItemId: l.orderItemId, installedQty: Number(vals[l.orderItemId]) || 0 })) } }); setNote(''); onSaved(); })} />
+      </>}
+    </Card>
   );
 }
