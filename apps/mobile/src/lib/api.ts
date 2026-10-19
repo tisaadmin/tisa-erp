@@ -61,8 +61,9 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
       },
       body: opts.form ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined),
     });
-  } catch {
-    throw new ApiError(0, 'No internet connection — please try again when you have signal.');
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e);
+    throw new ApiError(0, `Could not reach the server — check your internet and try again.${why ? `\n(${why})` : ''}`);
   }
   if (res.status === 401 && retry && cached && !path.startsWith('/auth/login')) {
     if (await refresh()) return api<T>(path, opts, false);

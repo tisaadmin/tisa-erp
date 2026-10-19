@@ -65,7 +65,7 @@
       ]
     ],
     "extra": {
-      "apiUrl": "https://tisa-erp-production.up.railway.app",
+      "apiUrl": "https://erp.tisa.in",
       "router": {},
       "eas": {
         "projectId": "00c9d0e0-cf38-4a7f-8c10-b7f0096e5260"
