@@ -1,8 +1,8 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { useMemo } from 'react';
-import { useItems } from '../lib/hooks';
+import { useGet, useItems } from '../lib/hooks';
 import { inr, STAGE_LABEL, STAGES } from '../lib/format';
-import { Combo } from './Combo';
+import { ItemSuggest, type SuggestItem } from './ItemSuggest';
 import { Button, cx } from './ui';
 
 export type Line = { itemId?: string | null; description: string; hsnSac?: string | null; unit: string; qty: number; rate: number; discountPct: number; gstRate: number };
@@ -25,15 +25,19 @@ export function totalsOf(lines: Line[], interState: boolean) {
 
 export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice' }: { lines: Line[]; onChange: (l: Line[]) => void; interState: boolean; priceField?: 'salePrice' | 'purchasePrice' }) {
   const items = useItems();
-  const opts = useMemo(() => (items.data?.data ?? []).map((i) => ({ value: i.id, label: i.name, sub: [i.sku, i.brand, i.model, i.category?.name].filter(Boolean).join(' · ') })), [items.data]);
+  const stock = useGet<any[]>('/items/stock');
+  // inventory with live stock where the user may see it; plain item list otherwise
+  const catalogue: SuggestItem[] = useMemo(() => stock.data
+    ? stock.data.map((i) => ({ ...i, category: i.category }))
+    : (items.data?.data ?? []).map((i) => ({ ...i, category: i.category?.name ?? null, onHand: null })), [stock.data, items.data]);
   const set = (i: number, patch: Partial<Line>) => onChange(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const t = totalsOf(lines, interState);
   return (
     <div>
       <div className="overflow-x-auto rounded-md border border-slate-200">
-        <table className="tbl min-w-[1150px]">
+        <table className="tbl min-w-[1050px]">
           <thead>
-            <tr><th className="w-8">#</th><th className="w-60">Item</th><th className="min-w-56">Description</th><th className="w-28">HSN/SAC</th><th className="w-24 text-right">Qty</th><th className="w-20">Unit</th><th className="w-32 text-right">Rate</th><th className="w-20 text-right">Disc %</th><th className="w-24 text-right">GST %</th><th className="w-32 text-right">Taxable</th><th className="w-8" /></tr>
+            <tr><th className="w-8">#</th><th className="min-w-96">Item / description</th><th className="w-28">HSN/SAC</th><th className="w-24 text-right">Qty</th><th className="w-20">Unit</th><th className="w-32 text-right">Rate</th><th className="w-20 text-right">Disc %</th><th className="w-24 text-right">GST %</th><th className="w-32 text-right">Taxable</th><th className="w-8" /></tr>
           </thead>
           <tbody>
             {lines.map((l, i) => {
@@ -42,12 +46,11 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
                 <tr key={i}>
                   <td className="pt-3 text-slate-400">{i + 1}</td>
                   <td>
-                    <Combo options={opts} value={l.itemId} placeholder="Pick from inventory…" onChange={(v) => {
-                      const it = items.data?.data.find((x) => x.id === v);
-                      set(i, it ? { itemId: it.id, description: `${it.name}${it.brand ? ` — ${it.brand}` : ''}${it.model ? ` ${it.model}` : ''}`, hsnSac: it.hsnSac ?? '', unit: it.unit, rate: it[priceField], gstRate: it.gstRate } : { itemId: null });
-                    }} />
+                    <ItemSuggest value={l.description} itemId={l.itemId} items={catalogue} priceField={priceField}
+                      onText={(description) => set(i, { description })}
+                      onUnlink={() => set(i, { itemId: null })}
+                      onPick={(it) => set(i, { itemId: it.id, description: `${it.name}${it.brand && !it.name.toLowerCase().includes(it.brand.toLowerCase()) ? ` — ${it.brand}` : ''}${it.model && !it.name.toLowerCase().includes(it.model.toLowerCase()) ? ` ${it.model}` : ''}`, hsnSac: it.hsnSac ?? '', unit: it.unit, rate: it[priceField], gstRate: it.gstRate })} />
                   </td>
-                  <td><textarea rows={1} className="input min-h-8" value={l.description} onChange={(e) => set(i, { description: e.target.value })} placeholder="Description" /></td>
                   <td><input className="input" value={l.hsnSac ?? ''} onChange={(e) => set(i, { hsnSac: e.target.value })} /></td>
                   <td><input type="number" min={0} step="any" className="input text-right" value={l.qty} onChange={(e) => set(i, { qty: Number(e.target.value) })} /></td>
                   <td><input className="input" value={l.unit} onChange={(e) => set(i, { unit: e.target.value })} /></td>

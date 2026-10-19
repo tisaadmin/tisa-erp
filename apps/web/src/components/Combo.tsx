@@ -12,8 +12,13 @@ export function Combo({ options, value, onChange, placeholder = 'Select…', dis
   const ref = useRef<HTMLDivElement>(null);
   const selected = options.find((o) => o.value === value);
   const filtered = useMemo(() => {
-    const s = q.toLowerCase().trim();
-    return (s ? options.filter((o) => `${o.label} ${o.sub ?? ''}`.toLowerCase().includes(s)) : options).slice(0, 80);
+    // every typed word must appear, in any order ("dome 2mp" finds "2MP IP Dome Camera")
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    const squash = (t: string) => t.replace(/[^a-z0-9]+/g, '');
+    return (words.length ? options.filter((o) => {
+      const hay = `${o.label} ${o.sub ?? ''}`.toLowerCase();
+      return words.every((w) => hay.includes(w) || squash(hay).includes(squash(w)));
+    }) : options).slice(0, 80);
   }, [q, options]);
   useEffect(() => {
     const h = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
