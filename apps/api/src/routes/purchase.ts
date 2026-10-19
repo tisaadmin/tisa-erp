@@ -16,7 +16,7 @@ import { lineSchema, priceLines } from '../services/lines';
 import { postStock } from '../services/stock';
 import { sendPdf } from './sales';
 
-import { accessoriesRequiredFor, enforceRule } from '../services/workflow';
+import { accessoriesRequiredFor, enforceRule, workflowRules } from '../services/workflow';
 import type { AuthUser } from '../middleware/auth';
 
 /** Material for a new order is ordered only once its accessories & consumables list is approved. */
@@ -27,6 +27,26 @@ async function requireAccessoryList(orderId: string, user: AuthUser) {
   if (sheet?.status === 'APPROVED') return;
   await enforceRule('poRequiresAccessories', user, `${order.number} needs an approved accessories & consumables list before material can be ordered — ${sheet ? `the list is ${sheet.status.toLowerCase().replace('_', ' ')}; get it approved` : 'open the order → Accessories & consumables → Work out accessories, then submit it for approval'}`);
 }
+/** What a PO against this order may contain: the order's items + its accessories & consumables list (not a rejected one). */
+export async function orderPurchasable(orderId: string) {
+  const order = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, orderId), columns: { id: true, number: true }, with: { items: true } });
+  if (!order) throw badRequest('Order not found');
+  const sheets = await db.query.accessorySheets.findMany({ where: eq(accessorySheets.orderId, orderId), with: { lines: true } });
+  const sheet = sheets.find((x) => x.status === 'APPROVED') ?? sheets.find((x) => x.status !== 'REJECTED');
+  const lines = [...order.items.map((l) => ({ itemId: l.itemId, description: l.description })), ...(sheet?.lines ?? []).map((l) => ({ itemId: l.itemId, description: l.description }))];
+  return { order, itemIds: [...new Set(lines.map((l) => l.itemId).filter((x): x is string => !!x))], descriptions: [...new Set(lines.map((l) => descKey(l.description)).filter(Boolean))] };
+}
+const descKey = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+/** A PO against an order may only carry that order's items and its accessories (workflow rule poOnlyOrderItems). */
+async function requireOrderItemsOnly(orderId: string, lines: { itemId?: string | null; description?: string }[], user: AuthUser) {
+  const allowed = await orderPurchasable(orderId);
+  const ids = new Set(allowed.itemIds), descs = new Set(allowed.descriptions);
+  const extra = lines.filter((l) => (l.itemId ? !ids.has(l.itemId) : !descs.has(descKey(l.description))));
+  if (!extra.length) return;
+  await enforceRule('poOnlyOrderItems', user, `${extra.map((l) => `"${(l.description ?? "item").slice(0, 60)}"`).slice(0, 4).join(', ')}${extra.length > 4 ? ` and ${extra.length - 4} more` : ''} ${extra.length > 1 ? 'are' : 'is'} not on ${allowed.order.number} or its accessories & consumables list — a PO against an order can only have those items. Add it to the accessories list (and get it approved), or raise a separate PO.`);
+}
+
 const r = Router();
 const opt = z.string().trim().nullish().transform((v) => (v === '' ? null : v));
 const qs = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
@@ -63,6 +83,15 @@ r.get('/purchase-orders', requirePerm('purchase_orders:view'), async (req, res) 
   res.json({ data, total });
 });
 
+/** Items a PO against this order may carry (for the PO editor's item drop-down). */
+r.get('/purchase-orders/allowed-items', requirePerm('purchase_orders:view'), async (req, res) => {
+  const orderId = qs(req.query.salesOrderId);
+  if (!orderId) throw badRequest('salesOrderId is required');
+  const a = await orderPurchasable(orderId);
+  const rules = await workflowRules();
+  res.json({ itemIds: a.itemIds, restricted: rules.poOnlyOrderItems && !can(req.user, 'purchase_orders:extra_items') });
+});
+
 r.get('/purchase-orders/:id', requirePerm('purchase_orders:view'), async (req, res) => {
   const po = await db.query.purchaseOrders.findFirst({
     where: eq(purchaseOrders.id, req.params.id),
@@ -78,6 +107,7 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
   // an approved requisition is authority enough for a PO, like an order form
   if (!d.salesOrderId && !d.requisitionId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be raised against an order form or an approved requisition — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
   else if (d.salesOrderId) await requireAccessoryList(d.salesOrderId, req.user);
+  if (d.salesOrderId) await requireOrderItemsOnly(d.salesOrderId, d.lines, req.user);
   const { interState } = await poContext(d.vendorId);
   const company = await getCompany();
   const po = await db.transaction(async (tx) => {
@@ -103,6 +133,7 @@ r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, r
   const d = poSchema.parse(req.body);
   if (!d.salesOrderId && !d.requisitionId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be linked to an order form or an approved requisition — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
   else if (d.salesOrderId) await requireAccessoryList(d.salesOrderId, req.user);
+  if (d.salesOrderId) await requireOrderItemsOnly(d.salesOrderId, d.lines, req.user);
   const { interState } = await poContext(d.vendorId);
   const po = await db.transaction(async (tx) => {
     const ex = await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id) });

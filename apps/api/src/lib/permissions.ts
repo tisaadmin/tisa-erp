@@ -13,7 +13,7 @@ export const MODULES = {
   quotations: ['view', 'create', 'edit', 'delete', 'approve'],
   orders: ['view', 'create', 'edit', 'delete', 'without_quote'],
   accessories: ['view', 'create', 'edit', 'approve'],
-  purchase_orders: ['view', 'create', 'edit', 'delete', 'approve', 'without_order', 'without_accessories'],
+  purchase_orders: ['view', 'create', 'edit', 'delete', 'approve', 'without_order', 'without_accessories', 'extra_items'],
   grn: ['view', 'create'],
   /** supplier bills (payables) and payments made to vendors */
   vendor_bills: ['view', 'create', 'edit', 'cancel', 'pay'],

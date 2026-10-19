@@ -23,6 +23,11 @@ export const WORKFLOW_RULES = {
     help: 'For orders created in the ERP from 19 Oct 2026: work out the order\'s accessories & consumables list and get it approved before material is ordered. Orders imported from FFH are not affected.',
     exception: 'purchase_orders:without_accessories', default: true,
   },
+  poOnlyOrderItems: {
+    label: 'A PO against an order can only have that order\'s items and its accessories & consumables',
+    help: 'Purchase can order only what is on the order form or its accessories & consumables list. Anything else needs the exception permission (or a separate PO for stock).',
+    exception: 'purchase_orders:extra_items', default: true,
+  },
   dcRequiresOrder: {
     label: 'Supply delivery challans only against an order form',
     help: 'Material sent to a client as supply must be dispatched against its order. Returnable, job-work and site-transfer challans are not affected.',

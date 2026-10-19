@@ -56,6 +56,7 @@ export function PoEditor() {
   const orderRequired = !!rules.data?.find((r) => r.key === 'poRequiresOrder')?.enabled && !can('purchase_orders:without_order');
   const accBlocked = !!accStatus.data && !accStatus.data.ready && !can('purchase_orders:without_accessories');
   const [d, setD] = useState({ vendorId: null as string | null, salesOrderId: sp.get('salesOrderId'), deliverToSiteId: null as string | null, date: toInputDate(new Date()), expectedDate: '', terms: '', notes: '', lines: [emptyLine()] as Line[] });
+  const allowed = useGet<{ itemIds: string[]; restricted: boolean }>(d.salesOrderId ? '/purchase-orders/allowed-items' : null, { salesOrderId: d.salesOrderId });
   useEffect(() => {
     const p = existing.data;
     if (p) setD({ vendorId: p.vendorId, salesOrderId: p.salesOrderId, deliverToSiteId: p.deliverToSiteId, date: toInputDate(p.date), expectedDate: toInputDate(p.expectedDate), terms: p.terms ?? '', notes: p.notes ?? '', lines: p.items.map((l: any) => ({ ...l })) });
@@ -117,7 +118,10 @@ export function PoEditor() {
         </div>
         <div className="mt-2 text-xs text-slate-500">Tax: <b>{inter ? 'IGST (inter-state vendor)' : 'CGST + SGST'}</b> · lines with rate 0 take the item's purchase price</div>
       </Card>
-      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} priceField="purchasePrice" /></Card>
+      <Card title="Items">
+        {allowed.data?.restricted && <div className="mb-3 rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-800">This PO is against an order — only the order's items and its accessories & consumables can be added. Anything else needs a separate PO.</div>}
+        <LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} priceField="purchasePrice" onlyItemIds={allowed.data?.restricted ? allowed.data.itemIds : undefined} />
+      </Card>
       <Card title="Terms & notes"><div className="grid gap-3 md:grid-cols-2"><Field label="Terms (blank = default)"><Textarea value={d.terms} onChange={(e) => setD({ ...d, terms: e.target.value })} /></Field><Field label="Notes"><Textarea value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} /></Field></div></Card>
     </div>
   );

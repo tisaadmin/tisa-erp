@@ -37,8 +37,8 @@ export function rankItems(items: SuggestItem[], query: string, limit = 12) {
  * Item cell for quotations, orders, POs, invoices and bills: type the item and a drop-down of matching inventory items
  * (name, brand, part code, system, stock, price) appears; pick one to fill the line, or keep typing for a free-text line.
  */
-export function ItemSuggest({ value, itemId, items, priceField, onText, onPick, onUnlink }: {
-  value: string; itemId?: string | null; items: SuggestItem[]; priceField: 'salePrice' | 'purchasePrice';
+export function ItemSuggest({ value, itemId, items, priceField, onText, onPick, onUnlink, restricted }: {
+  value: string; itemId?: string | null; items: SuggestItem[]; priceField: 'salePrice' | 'purchasePrice'; restricted?: boolean;
   onText: (text: string) => void; onPick: (it: SuggestItem) => void; onUnlink: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -48,7 +48,9 @@ export function ItemSuggest({ value, itemId, items, priceField, onText, onPick, 
   const box = useRef<HTMLTextAreaElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const linked = itemId ? items.find((i) => i.id === itemId) : undefined;
-  const matches = useMemo(() => (open ? rankItems(items, q) : []), [open, q, items]);
+  const notAllowed = restricted && !!itemId && !linked;
+  // on a restricted list, show everything allowed as soon as the box is opened
+  const matches = useMemo(() => (!open ? [] : restricted && !q.trim() ? items.slice(0, 50) : rankItems(items, q, restricted ? 50 : 12)), [open, q, items, restricted]);
 
   // the drop-down floats above the page (not clipped by the scrolling table)
   const place = () => {
@@ -70,7 +72,7 @@ export function ItemSuggest({ value, itemId, items, priceField, onText, onPick, 
   return (
     <div>
       <textarea ref={box} rows={1} className="input min-h-8 resize-none [field-sizing:content]" value={value} placeholder="Type item name, brand or part code…"
-        onFocus={() => { if (!itemId && value.trim().length >= 2) { setQ(value); setOpen(true); setHi(0); } }}
+        onFocus={() => { if (!itemId && (value.trim().length >= 2 || restricted)) { setQ(value); setOpen(true); setHi(0); } }}
         onChange={(e) => { onText(e.target.value); setQ(e.target.value); setHi(0); setOpen(!itemId && e.target.value.trim().length >= 2); }}
         onKeyDown={(e) => {
           if (e.key === 'ArrowDown' && !open && value.trim()) { e.preventDefault(); setQ(value); setOpen(true); return; }
@@ -84,11 +86,12 @@ export function ItemSuggest({ value, itemId, items, priceField, onText, onPick, 
         <div className="mt-1 flex items-center gap-1 text-xs text-slate-500">
           <Package className="size-3 shrink-0 text-brand-600" />
           <span className="truncate">Inventory: {linked ? [linked.sku, linked.brand, linked.model].filter(Boolean).join(' · ') : 'linked item'}</span>
+          {notAllowed && <span className="shrink-0 font-medium text-red-600">· not on this order</span>}
           {linked?.trackStock && linked.onHand != null && <span className={cx('shrink-0', linked.onHand > 0 ? 'text-emerald-700' : 'text-red-600')}>· {qty(linked.onHand)} in stock</span>}
           <button type="button" title="Unlink from inventory (free-text line)" className="ml-auto rounded p-0.5 hover:bg-slate-100" onClick={onUnlink}><X className="size-3" /></button>
         </div>
       )}
-      {!itemId && value.trim().length >= 2 && !open && <div className="mt-1 text-xs text-amber-700">Not linked to inventory — <button type="button" className="underline" onClick={() => { setQ(value); setOpen(true); box.current?.focus(); }}>find item</button></div>}
+      {!itemId && value.trim().length >= 2 && !open && <div className={cx('mt-1 text-xs', restricted ? 'text-red-600' : 'text-amber-700')}>{restricted ? 'Not on this order — pick one of the order\'s items' : 'Not linked to inventory'} — <button type="button" className="underline" onClick={() => { setQ(value); setOpen(true); box.current?.focus(); }}>find item</button></div>}
       {open && pos && createPortal(
         <div ref={list} className="fixed z-[60] max-h-80 overflow-y-auto rounded-md border border-slate-200 bg-white py-1 shadow-xl"
           style={{ left: pos.left, width: pos.width, ...(pos.up ? { bottom: window.innerHeight - pos.top } : { top: pos.top }) }}>
@@ -105,7 +108,7 @@ export function ItemSuggest({ value, itemId, items, priceField, onText, onPick, 
               </div>
             </button>
           ))}
-          {!matches.length && <div className="px-3 py-2 text-sm text-slate-500">No inventory item matches “{q}” — it will be a free-text line. Stores can add it to inventory.</div>}
+          {!matches.length && <div className="px-3 py-2 text-sm text-slate-500">{restricted ? `Nothing on this order or its accessories list matches “${q}”. Items not on the order need a separate PO (or add them to the accessories list).` : `No inventory item matches “${q}” — it will be a free-text line. Stores can add it to inventory.`}</div>}
         </div>, document.body)}
     </div>
   );

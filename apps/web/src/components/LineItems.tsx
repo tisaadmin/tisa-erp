@@ -23,13 +23,17 @@ export function totalsOf(lines: Line[], interState: boolean) {
   return { gross: r2(gross), discount: r2(gross - taxable), taxable: r2(taxable), cgst: r2(cgst), sgst: r2(sgst), igst: interState ? r2(tax) : 0, roundOff: r2(total - raw), total };
 }
 
-export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice' }: { lines: Line[]; onChange: (l: Line[]) => void; interState: boolean; priceField?: 'salePrice' | 'purchasePrice' }) {
+export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds }: {
+  lines: Line[]; onChange: (l: Line[]) => void; interState: boolean; priceField?: 'salePrice' | 'purchasePrice';
+  /** when set, only these inventory items may be picked (e.g. a PO against an order) */ onlyItemIds?: string[];
+}) {
   const items = useItems();
   const stock = useGet<any[]>('/items/stock');
   // inventory with live stock where the user may see it; plain item list otherwise
   const catalogue: SuggestItem[] = useMemo(() => stock.data
     ? stock.data.map((i) => ({ ...i, category: i.category }))
     : (items.data?.data ?? []).map((i) => ({ ...i, category: i.category?.name ?? null, onHand: null })), [stock.data, items.data]);
+  const pickable = useMemo(() => (onlyItemIds ? catalogue.filter((i) => onlyItemIds.includes(i.id)) : catalogue), [catalogue, onlyItemIds]);
   const set = (i: number, patch: Partial<Line>) => onChange(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const t = totalsOf(lines, interState);
   return (
@@ -46,7 +50,7 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
                 <tr key={i}>
                   <td className="pt-3 text-slate-400">{i + 1}</td>
                   <td>
-                    <ItemSuggest value={l.description} itemId={l.itemId} items={catalogue} priceField={priceField}
+                    <ItemSuggest value={l.description} itemId={l.itemId} items={pickable} restricted={!!onlyItemIds} priceField={priceField}
                       onText={(description) => set(i, { description })}
                       onUnlink={() => set(i, { itemId: null })}
                       onPick={(it) => set(i, { itemId: it.id, description: `${it.name}${it.brand && !it.name.toLowerCase().includes(it.brand.toLowerCase()) ? ` — ${it.brand}` : ''}${it.model && !it.name.toLowerCase().includes(it.model.toLowerCase()) ? ` ${it.model}` : ''}`, hsnSac: it.hsnSac ?? '', unit: it.unit, rate: it[priceField], gstRate: it.gstRate })} />

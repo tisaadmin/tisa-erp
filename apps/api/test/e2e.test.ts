@@ -591,7 +591,7 @@ test('bulk order import: many product-details files matched by SO number; ready 
 
 test('workflow rules: PO / challan need an order, orders need a quote; exceptions by permission; rules can be switched off', async () => {
   const rules = await ok('admin', 'GET', '/settings/workflow');
-  assert.deepEqual(rules.map((r: any) => [r.key, r.enabled]), [['orderRequiresQuote', true], ['poRequiresOrder', true], ['poRequiresAccessories', false], ['dcRequiresOrder', true]]);
+  assert.deepEqual(rules.map((r: any) => [r.key, r.enabled]), [['orderRequiresQuote', true], ['poRequiresOrder', true], ['poRequiresAccessories', false], ['poOnlyOrderItems', true], ['dcRequiresOrder', true]]);
   const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
   // Purchase & Stores has the "PO without order" exception by default; Management (director) too; Sales has no PO rights at all
   const orderless = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] });
@@ -966,7 +966,19 @@ test('accessories & consumables list is a required step between the order and it
   await ok('svc', 'POST', `/accessory-sheets/${sheet.id}/decide`, { decision: 'APPROVE' });
   s0 = await ok('stores', 'GET', `/orders/${o.id}/accessories`);
   assert.equal(s0.ready, true); assert.equal(s0.toBuy.length, 0);
+  // a PO against the order carries only its items / accessories: the camera is on neither
+  const extra = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }, { itemId: ctx.cam.id, qty: 1 }] });
+  assert.equal(extra.status, 403); assert.match(extra.data.error, /not on .* accessories/);
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ description: 'Some free text thing', qty: 1, rate: 10 }] })).status, 403, 'free text not on the order');
+  const allowedIds = await ok('stores', 'GET', `/purchase-orders/allowed-items?salesOrderId=${o.id}`);
+  assert.deepEqual(allowedIds, { itemIds: [ctx.svcItem.id], restricted: true });
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] })).status, 201);
+  // the exception permission (Super Admin / Management) may add other items
+  assert.equal((await call('admin', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 201);
+  // and the rule can be switched off
+  await ok('admin', 'PUT', '/settings/workflow', { poOnlyOrderItems: false });
   assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 201);
+  await ok('admin', 'PUT', '/settings/workflow', { poOnlyOrderItems: true });
   void full;
   // the order value is untouched — the list is internal
   assert.equal((await ok('sales', 'GET', `/orders/${o.id}`)).total, o.total);
