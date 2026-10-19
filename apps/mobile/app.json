@@ -20,7 +20,6 @@
         "NSCameraUsageDescription": "Take geo-tagged site photos, selfies for attendance and expense receipts.",
         "NSPhotoLibraryUsageDescription": "Attach receipts and photos."
       },
-      "buildNumber": "1",
       "config": {
         "usesNonExemptEncryption": false
       }
@@ -40,8 +39,7 @@
       ],
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
-      ],
-      "versionCode": 1
+      ]
     },
     "plugins": [
       "expo-router",
