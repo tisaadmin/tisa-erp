@@ -1,5 +1,5 @@
 import { FileDown, Plus, Receipt, Truck, Upload } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
 import { emptyLine, LineItemsEditor, PaymentTermsEditor, Totals, type Line, type Term } from '../components/LineItems';
@@ -435,14 +435,19 @@ export function NewChallan() {
   const requisitionId = orderId ? null : sp.get('requisitionId');
   const rq = useRequisition(requisitionId);
   const [h, setH] = useState({ clientId: null as string | null, siteId: null as string | null, type: 'SUPPLY', vehicleNo: '', transporter: '', ewayBillNo: '', notes: '' });
-  const [lines, setLines] = useState<{ orderItemId?: string; description: string; unit: string; pending?: number; qty: number; serialNos: string; itemId?: string | null }[]>([]);
+  const [lines, setLines] = useState<{ orderItemId?: string; description: string; unit: string; pending?: number; qty: number; serialNos: string; itemId?: string | null; accessory?: boolean }[]>([]);
+  // the order's accessories & consumables still to be sent go on the same challan
+  const proj = useGet<{ accessories: { itemId: string | null; description: string; unit: string; required: number; sent: number; pending: number }[] }>(orderId ? `/projects/${orderId}` : null);
   useEffect(() => {
     const o = order.data;
-    if (o) {
+    if (o && (proj.data || proj.isError)) {
       setH((x) => ({ ...x, clientId: o.clientId, siteId: o.siteId }));
-      setLines(o.items.filter((l: any) => l.qty - l.deliveredQty > 0).map((l: any) => ({ orderItemId: l.id, itemId: l.itemId, description: l.description, unit: l.unit, pending: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, qty: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, serialNos: '' })));
+      setLines([
+        ...o.items.filter((l: any) => l.qty - l.deliveredQty > 0).map((l: any) => ({ orderItemId: l.id, itemId: l.itemId, description: l.description, unit: l.unit, pending: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, qty: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, serialNos: '' })),
+        ...(proj.data?.accessories ?? []).filter((a) => a.pending > 0).map((a) => ({ itemId: a.itemId, description: a.description, unit: a.unit, pending: a.pending, qty: 0, serialNos: '', accessory: true })),
+      ]);
     }
-  }, [order.data]);
+  }, [order.data, proj.data, proj.isError]);
   useEffect(() => {
     if (!rq.ready || !rq.req) return;
     setH((x) => ({ ...x, clientId: rq.req!.clientId, siteId: rq.req!.siteId, notes: x.notes || `Against requisition ${rq.req!.number}` }));
@@ -451,7 +456,8 @@ export function NewChallan() {
   }, [rq.ready]);
   const save = useAction(() => api('/challans', { body: { ...h, orderId, requisitionId, lines: lines.filter((l) => l.qty > 0).map((l) => ({ orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos })) } }),
     { success: 'Challan created — stock updated', invalidate: [['/challans'], ['/orders'], ['/items']], onSuccess: (dc: any) => nav(`/challans/${dc.id}`) });
-  if ((orderId && !order.data) || rq.loading) return <Spinner />;
+  if ((orderId && (!order.data || proj.isLoading)) || rq.loading) return <Spinner />;
+  const accIdx = lines.findIndex((l) => l.accessory);
   return (
     <div className="space-y-4">
       <RequisitionBanner req={rq.req} />
@@ -470,15 +476,16 @@ export function NewChallan() {
         <table className="tbl">
           <thead><tr><th>Description</th><th className="text-right">Pending</th><th className="w-28 text-right">Dispatch qty</th><th>Serial numbers</th>{!orderId && <th />}</tr></thead>
           <tbody>
-            {lines.map((l, i) => (
-              <tr key={i}>
+            {lines.map((l, i) => (<Fragment key={i}>
+              {i === accIdx && <tr><td colSpan={4} className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">Accessories & consumables (internal — not billed) <button type="button" className="ml-2 font-normal normal-case text-brand-700 underline" onClick={() => setLines(lines.map((x) => (x.accessory ? { ...x, qty: x.pending ?? 0 } : x)))}>send all pending</button></td></tr>}
+              <tr>
                 <td>{orderId ? l.description : <Input value={l.description} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} />}</td>
                 <td className="num">{l.pending != null ? `${qty(l.pending)} ${l.unit}` : '—'}</td>
                 <td><Input type="number" min={0} max={l.pending} step="any" className="text-right" value={l.qty} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, qty: Number(e.target.value) } : x)))} /></td>
                 <td><Input value={l.serialNos} placeholder="Optional" onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, serialNos: e.target.value } : x)))} /></td>
                 {!orderId && <td><Button size="sm" variant="ghost" onClick={() => setLines(lines.filter((_, j) => j !== i))}>×</Button></td>}
               </tr>
-            ))}
+            </Fragment>))}
           </tbody>
         </table>
         {!orderId && <div className="p-3"><Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setLines([...lines, { description: '', unit: 'Nos', qty: 1, serialNos: '' }])}>Add line</Button></div>}

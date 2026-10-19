@@ -45,6 +45,8 @@ function Gate() {
       <Stack.Screen name="report/new" options={{ title: 'Service report' }} />
       <Stack.Screen name="requisition/new" options={{ title: 'New requisition' }} />
       <Stack.Screen name="requisition/[id]" options={{ title: 'Requisition' }} />
+      <Stack.Screen name="projects" options={{ title: 'My projects' }} />
+      <Stack.Screen name="project/[id]" options={{ title: 'Project material' }} />
       <Stack.Screen name="expense/new" options={{ title: 'New expense claim' }} />
       <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
       <Stack.Screen name="approvals" options={{ title: 'Approvals' }} />

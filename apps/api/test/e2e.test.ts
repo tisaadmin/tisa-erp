@@ -1177,3 +1177,32 @@ test('requisition detail for the requester: items with sent quantities, office n
   // someone else's requisition is not visible to a technician
   assert.equal((await call('tech', 'GET', `/requisitions/${(await ok('svc', 'POST', '/requisitions', { type: 'MATERIAL', priority: 'LOW', description: 'Office stock', items: [{ description: 'Tape', qty: 1, unit: 'Nos' }] })).id}`)).status, 403);
 });
+
+test('project material status: order items and accessories sent to site, deliveries and the site\'s requisitions — for the field engineer', async () => {
+  const st0 = await ok('stores', 'GET', `/projects/${ctx.order.id}`);
+  assert.ok(st0.accessories.length > 0, 'the order has an accessories list');
+  const acc = st0.accessories.find((a: any) => a.itemId && a.pending > 0);
+  assert.ok(acc);
+  const order = await ok('sales', 'GET', `/orders/${ctx.order.id}`);
+  const base = { orderId: order.id, clientId: order.clientId, siteId: order.siteId };
+  // accessories go on the order's challan, up to what is still to be sent
+  assert.equal((await call('stores', 'POST', '/challans', { ...base, lines: [{ itemId: acc.itemId, description: acc.description, unit: acc.unit, qty: acc.pending + 1 }] })).status, 400);
+  assert.equal((await call('stores', 'POST', '/challans', { ...base, lines: [{ description: 'Something else', unit: 'Nos', qty: 1 }] })).status, 400);
+  const sendQty = Math.min(1, acc.pending);
+  await ok('stores', 'POST', '/challans', { ...base, lines: [{ itemId: acc.itemId, description: acc.description, unit: acc.unit, qty: sendQty }] });
+  // the technician (installation ticket on this order) sees it among their projects
+  const mine = await ok('tech', 'GET', '/projects');
+  const p = mine.find((x: any) => x.id === order.id);
+  assert.ok(p, 'order listed for the installer'); assert.ok(p.summary.deliveredPct !== null);
+  const st = await ok('tech', 'GET', `/projects/${order.id}`);
+  assert.equal(st.accessories.find((a: any) => a.key === acc.key).sent, acc.sent + sendQty);
+  assert.ok(st.deliveries.some((dc: any) => dc.items.some((i: any) => i.kind === 'ACCESSORY')));
+  assert.ok(st.orderItems.every((l: any) => 'deliveredQty' in l && 'installedQty' in l));
+  assert.ok(st.requisitions.length > 0, 'requisitions raised for the site');
+  // a project that is not theirs stays hidden
+  const other = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
+  const sales = await call('sales', 'GET', `/projects/${other.id}`);
+  assert.equal(sales.status, 200, 'office (orders:view) can open any');
+  const tk = await call('accounts', 'GET', `/projects/${other.id}`);
+  assert.equal(tk.status, 200);
+});

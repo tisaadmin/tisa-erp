@@ -9,7 +9,10 @@ export default function Requests() {
   const list = useFetch<{ data: any[] }>('/requisitions?pageSize=100');
   return (
     <Screen scroll={false}>
-      {can('requisitions:create') && <View style={{ padding: 12, backgroundColor: C.bg }}><Btn title="New requisition" icon="add" onPress={() => router.push('/requisition/new')} /></View>}
+      <View style={{ padding: 12, gap: 8, backgroundColor: C.bg }}>
+        {can('requisitions:create') && <Btn title="New requisition" icon="add" onPress={() => router.push('/requisition/new')} />}
+        <Btn title="Project material status" icon="business" variant="secondary" onPress={() => router.push('/projects')} />
+      </View>
       <FlatList data={list.data?.data ?? []} keyExtractor={(r) => r.id} onRefresh={list.reload} refreshing={list.loading}
         renderItem={({ item: r }) => (
           <Row title={`${label(r.type)} — ${r.site?.name ?? r.client?.name ?? 'site not set'}`}

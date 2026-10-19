@@ -19,6 +19,7 @@ export default function More() {
       </Card>
       <Card style={{ padding: 0, gap: 0 }}>
         <Row icon="notifications" title="Notifications" onPress={() => router.push('/notifications')} />
+        <Row icon="business" title="My projects" sub="Material delivered to site, accessories, requisitions" onPress={() => router.push('/projects')} />
         {(can('expenses:approve') || can('requisitions:approve') || can('leaves:approve') || (user?.teamSize ?? 0) > 0) && <Row icon="checkmark-done" title="Approvals" sub="Team expenses, requisitions, leave" onPress={() => router.push('/approvals')} />}
         {can('service_reports:create') && <Row icon="document-text" title="Service report (no ticket)" onPress={() => router.push('/report/new')} />}
       </Card>

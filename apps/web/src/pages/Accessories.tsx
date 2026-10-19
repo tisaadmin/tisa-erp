@@ -56,6 +56,13 @@ export function OrderAccessoriesCard({ orderId }: { orderId: string }) {
   const { can } = useAuth();
   const acc = useGet<OrderAcc>(`/orders/${orderId}/accessories`);
   const create = useAction(() => api(`/orders/${orderId}/accessory-sheet`, { method: 'POST' }), { invalidate: [['/accessory-sheets'], [`/orders/${orderId}/accessories`]], onSuccess: (s: any) => nav(`/accessories/${s.id}`) });
+  // how much of each accessory has gone to site on challans
+  const proj = useGet<{ accessories: { key: string; sent: number }[] }>(`/projects/${orderId}`);
+  const sentOf = (l: { itemId: string | null; description: string }) => {
+    if (!proj.data) return null;
+    const k = l.itemId ? `i:${l.itemId}` : `d:${l.description.toLowerCase().replace(/[^a-z0-9]+/g, '')}`;
+    return proj.data.accessories.find((a) => a.key === k)?.sent ?? 0;
+  };
   const d = acc.data;
   if (!d) return null;
   const s = d.sheet;
@@ -76,9 +83,9 @@ export function OrderAccessoriesCard({ orderId }: { orderId: string }) {
         : (
           <div className="overflow-x-auto">
             <table className="tbl">
-              <thead><tr><th>Accessory / consumable</th><th className="text-right">Qty</th><th className="text-right">In stock</th><th className="text-right">Est. cost</th></tr></thead>
+              <thead><tr><th>Accessory / consumable</th><th className="text-right">Qty</th><th className="text-right">Sent to site</th><th className="text-right">In stock</th><th className="text-right">Est. cost</th></tr></thead>
               <tbody>
-                {s.lines.map((l) => <tr key={l.id}><td>{l.description}</td><td className="num">{l.qty} {l.unit}</td><td className="num">{l.inStock ?? '—'}</td><td className="num">{inr(l.qty * l.rate)}</td></tr>)}
+                {s.lines.map((l) => { const snt = sentOf(l); return <tr key={l.id}><td>{l.description}</td><td className="num">{l.qty} {l.unit}</td><td className={`num ${snt == null ? '' : snt >= l.qty ? 'text-emerald-700' : snt > 0 ? 'text-amber-700' : 'text-slate-400'}`}>{snt ?? '—'}</td><td className="num">{l.inStock ?? '—'}</td><td className="num">{inr(l.qty * l.rate)}</td></tr>; })}
                 <tr><td colSpan={3} className="text-right font-medium">Estimated cost</td><td className="num font-medium">{inr(s.estimatedCost)}</td></tr>
               </tbody>
             </table>

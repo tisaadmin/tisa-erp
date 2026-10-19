@@ -4,7 +4,8 @@ import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, type SQL 
 import { z } from 'zod';
 import { db } from '../db';
 import { approverFor, manages, teamIds } from '../lib/team';
-import { attachments, attendance, auditLogs, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
+import { myProjectOrderIds, projectMaterialStatus } from '../services/projectStatus';
+import { attachments, attendance, auditLogs, salesOrders, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { istDate, istTime } from '../lib/dates';
 import { absPath, geoStampImage, normaliseUpload, saveBuffer, upload } from '../lib/files';
@@ -426,6 +427,34 @@ r.post('/requisitions/:id/:action', async (req, res) => {
   await notifyUsers([row.raisedById], { title: `Requisition ${row.number} ${flow.to.toLowerCase().replace('_', ' ')}`, body: note ?? undefined, type: 'REQUISITION', link: `/requisitions/${row.id}`, entityType: 'REQUISITION', entityId: row.id }, req.user.id);
   audit(req, req.params.action, 'requisition', row.id, { note });
   res.json(u);
+});
+
+// ═══════════════════════ Projects: material status at site ═══════════════════════
+
+/** The projects (orders) the caller works on — their own / their team's installation tickets and requisition sites. Office users with order rights can search all open orders. */
+r.get('/projects', async (req, res) => {
+  if (!['tickets:view', 'requisitions:view', 'orders:view'].some((p) => can(req.user, p))) throw forbidden();
+  const search = qs(req.query.search);
+  let ids = await myProjectOrderIds(db, [req.user.id, ...(await teamIds(req.user.id))]);
+  if (can(req.user, 'orders:view') && (search || req.query.all === '1')) {
+    const rows = await db.select({ id: salesOrders.id }).from(salesOrders).where(inArray(salesOrders.status, ['OPEN', 'IN_PROGRESS'])).orderBy(desc(salesOrders.date)).limit(150);
+    ids = [...new Set([...ids, ...rows.map((x) => x.id)])];
+  }
+  const out = [];
+  for (const id of ids.slice(0, 150)) {
+    const p = await projectMaterialStatus(db, id);
+    if (search && !`${p.order.number} ${p.order.client.name} ${p.order.site?.name ?? ''}`.toLowerCase().includes(search.toLowerCase())) continue;
+    out.push({ ...p.order, summary: p.summary, pendingRequisitions: p.requisitions.filter((x) => ['PENDING', 'APPROVED', 'IN_PROGRESS'].includes(x.status)).length });
+  }
+  res.json(out.sort((a, b) => +new Date(b.date) - +new Date(a.date)));
+});
+
+r.get('/projects/:orderId', async (req, res) => {
+  if (!can(req.user, 'orders:view')) {
+    const mine = await myProjectOrderIds(db, [req.user.id, ...(await teamIds(req.user.id))]);
+    if (!mine.includes(req.params.orderId)) throw forbidden('This project is not one of yours');
+  }
+  res.json(await projectMaterialStatus(db, req.params.orderId));
 });
 
 export default r;

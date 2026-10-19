@@ -45,6 +45,7 @@ export default function TicketScreen() {
         </Card>
       )}
 
+      {d.orderId && <Btn icon="business" variant="secondary" title="Project material status" onPress={() => router.push(`/project/${d.orderId}`)} />}
       {d.installation && <InstallationCard ticketId={d.id} inst={d.installation} editable={open} onSaved={t.reload} />}
 
       {!!d.photos.length && (

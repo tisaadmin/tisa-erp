@@ -19,6 +19,7 @@ import { getCompany, resolvePlaceOfSupply } from '../services/company';
 import { challanPdf, orderPdf, quotationPdf } from '../services/documents';
 import { lineSchema, priceLines } from '../services/lines';
 import { postStock } from '../services/stock';
+import { materialKey, projectMaterialStatus } from '../services/projectStatus';
 import { createSalesOrder, orderSchema } from '../services/orders';
 
 import { enforceRule } from '../services/workflow';
@@ -357,6 +358,20 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
       if (!description) throw badRequest(`Line ${i + 1} needs a description`);
       return { orderItemId: ol?.id ?? null, itemId: l.itemId ?? ol?.itemId ?? null, description, unit: l.unit ?? ol?.unit ?? 'Nos', qty: l.qty, serialNos: l.serialNos };
     });
+    // other lines on an order's challan are its accessories & consumables — never more than still to be sent
+    const extra = lines.filter((l) => !l.orderItemId);
+    if (d.orderId && extra.length) {
+      const st = await projectMaterialStatus(tx, d.orderId);
+      const acc = new Map(st.accessories.map((a) => [a.key, a]));
+      const want = new Map<string, number>();
+      for (const l of extra) want.set(materialKey(l), r3((want.get(materialKey(l)) ?? 0) + l.qty));
+      for (const [k, q] of want) {
+        const a = acc.get(k);
+        const name = extra.find((l) => materialKey(l) === k)!.description;
+        if (!a) throw badRequest(`"${name}" is not on order ${st.order.number} or its accessories & consumables list`);
+        if (q > a.pending + 1e-9) throw badRequest(`"${name}": ${q} on this challan, but only ${a.pending} ${a.unit} of the accessories list is still to be sent`);
+      }
+    }
     const number = await nextNumber(tx, 'CHALLAN', d.date);
     const [dc] = await tx.insert(deliveryChallans).values({
       number, date: d.date ?? new Date(), type: d.type, orderId: d.orderId, clientId: d.clientId, siteId: d.siteId, vehicleNo: d.vehicleNo,
