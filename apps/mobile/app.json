@@ -35,7 +35,8 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.CAMERA",
-        "android.permission.POST_NOTIFICATIONS"
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.RECORD_AUDIO"
       ],
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
@@ -67,7 +68,10 @@
     ],
     "extra": {
       "apiUrl": "https://tisa-erp-production.up.railway.app",
-      "router": {}
+      "router": {},
+      "eas": {
+        "projectId": "00c9d0e0-cf38-4a7f-8c10-b7f0096e5260"
+      }
     },
     "runtimeVersion": {
       "policy": "sdkVersion"
