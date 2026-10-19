@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
-import { and, asc, eq, ilike, or } from 'drizzle-orm';
+import { and, asc, eq, ilike, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
-import { companySettings, refreshTokens, roles, users } from '../db/schema';
+import { companySettings, departments, refreshTokens, roles, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { badRequest, notFound, pageParams } from '../lib/http';
 import { ALL_PERMISSIONS, MODULES } from '../lib/permissions';
@@ -25,6 +25,7 @@ const userSchema = z.object({
   phone: z.string().nullish(),
   designation: z.string().nullish(),
   department: z.string().nullish(),
+  departmentId: z.string().nullish(),
   roleId: z.string(),
   managerId: z.string().nullish(),
   isFieldStaff: z.boolean().default(false),
@@ -35,7 +36,7 @@ const userSchema = z.object({
 r.get('/users', requirePerm('users:view'), async (req, res) => {
   const { search } = pageParams(req.query);
   const rows = await db.query.users.findMany({
-    columns: publicUser, with: { role: { columns: { id: true, name: true } }, manager: { columns: { id: true, name: true } } },
+    columns: publicUser, with: { role: { columns: { id: true, name: true } }, manager: { columns: { id: true, name: true } }, dept: { columns: { id: true, name: true } } },
     // switched-off users are hidden unless asked for (?status=inactive or all)
     where: and(
       search ? or(ilike(users.name, `%${search}%`), ilike(users.email, `%${search}%`)) : undefined,
@@ -76,8 +77,18 @@ async function activeSuperAdmins() {
   return rows.filter((u) => isSuperAdminPerms(u.role.permissions)).map((u) => u.id);
 }
 
+/** departmentId wins; the department name is copied onto the user for display and old reports. */
+async function withDept<T extends { departmentId?: string | null; department?: string | null }>(data: T): Promise<T> {
+  if (data.departmentId === undefined) return data;
+  if (!data.departmentId) return { ...data, departmentId: null, department: null };
+  const d = await db.query.departments.findFirst({ where: eq(departments.id, data.departmentId), columns: { name: true } });
+  if (!d) throw badRequest('Department not found');
+  return { ...data, department: d.name };
+}
+
 r.post('/users', requirePerm('users:create'), async (req, res) => {
-  const { password, ...data } = userSchema.parse(req.body);
+  const { password, ...data0 } = userSchema.parse(req.body);
+  const data = await withDept(data0);
   if (!password) throw badRequest('Password is required (min 8 characters)');
   if ((await isSuperRole(data.roleId)) && !isSuperAdminPerms(req.user.permissions)) throw badRequest('Only the Super Admin can create another Super Admin');
   const rule = await emailRule(req, data.email);
@@ -88,7 +99,8 @@ r.post('/users', requirePerm('users:create'), async (req, res) => {
 });
 
 r.patch('/users/:id', requirePerm('users:edit'), async (req, res) => {
-  const { password, ...data } = userSchema.partial().parse(req.body);
+  const { password, ...data0 } = userSchema.partial().parse(req.body);
+  const data = await withDept(data0);
   if (data.managerId === req.params.id) throw badRequest('A user cannot report to themselves');
   const cur = await db.query.users.findFirst({ where: eq(users.id, req.params.id), with: { role: { columns: { permissions: true } } } });
   if (!cur) throw notFound('User');
@@ -113,6 +125,72 @@ r.patch('/users/:id', requirePerm('users:edit'), async (req, res) => {
 });
 
 // ── Login policy (official email domains) ──
+// ── Departments ──
+/** Any signed-in user can read the list (pickers); members and head included. */
+r.get('/departments', async (_req, res) => {
+  const rows = await db.query.departments.findMany({ with: { head: { columns: { id: true, name: true } } }, orderBy: [asc(departments.name)] });
+  const counts = await db.select({ id: users.departmentId, n: sql<number>`count(*)::int` }).from(users).where(eq(users.active, true)).groupBy(users.departmentId);
+  const members = await db.select({ id: users.id, name: users.name, designation: users.designation, departmentId: users.departmentId }).from(users).where(eq(users.active, true)).orderBy(asc(users.name));
+  res.json(rows.map((d) => ({ ...d, memberCount: counts.find((c) => c.id === d.id)?.n ?? 0, members: members.filter((m) => m.departmentId === d.id).map(({ departmentId: _x, ...m }) => m) })));
+});
+
+const deptSchema = z.object({ name: z.string().trim().min(2), description: z.string().nullish(), headId: z.string().nullish(), active: z.boolean().optional() });
+
+async function checkHead(headId: string | null | undefined) {
+  if (!headId) return;
+  const u = await db.query.users.findFirst({ where: and(eq(users.id, headId), eq(users.active, true)), columns: { id: true } });
+  if (!u) throw badRequest('The department head must be an active user');
+}
+
+r.post('/departments', requirePerm('departments:edit'), async (req, res) => {
+  const d = deptSchema.parse(req.body);
+  await checkHead(d.headId);
+  if (await db.query.departments.findFirst({ where: ilike(departments.name, d.name), columns: { id: true } })) throw badRequest(`Department "${d.name}" already exists`);
+  const [row] = await db.insert(departments).values({ ...d, headId: d.headId ?? null }).returning();
+  audit(req, 'create', 'department', row.id, d);
+  res.status(201).json(row);
+});
+
+r.patch('/departments/:id', requirePerm('departments:edit'), async (req, res) => {
+  const d = deptSchema.partial().parse(req.body);
+  await checkHead(d.headId);
+  const cur = await db.query.departments.findFirst({ where: eq(departments.id, req.params.id) });
+  if (!cur) throw notFound('Department');
+  if (d.name && d.name.toLowerCase() !== cur.name.toLowerCase()) {
+    const clash = await db.query.departments.findFirst({ where: ilike(departments.name, d.name), columns: { id: true } });
+    if (clash) throw badRequest(`Department "${d.name}" already exists`);
+  }
+  const [row] = await db.transaction(async (tx) => {
+    const out = await tx.update(departments).set(d).where(eq(departments.id, cur.id)).returning();
+    if (d.name && d.name !== cur.name) await tx.update(users).set({ department: d.name }).where(eq(users.departmentId, cur.id));
+    return out;
+  });
+  audit(req, 'update', 'department', cur.id, d);
+  res.json(row);
+});
+
+/** Set exactly who is in a department: listed people move in (from wherever they were), people left out leave it. */
+r.put('/departments/:id/members', requirePerm('departments:edit'), async (req, res) => {
+  const { userIds } = z.object({ userIds: z.array(z.string()) }).parse(req.body);
+  const dept = await db.query.departments.findFirst({ where: eq(departments.id, req.params.id) });
+  if (!dept) throw notFound('Department');
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({ departmentId: null, department: null })
+      .where(and(eq(users.departmentId, dept.id), userIds.length ? notInArray(users.id, userIds) : undefined));
+    if (userIds.length) await tx.update(users).set({ departmentId: dept.id, department: dept.name }).where(inArray(users.id, userIds));
+  });
+  audit(req, 'members', 'department', dept.id, { userIds });
+  res.json({ ok: true, members: userIds.length });
+});
+
+r.delete('/departments/:id', requirePerm('departments:edit'), async (req, res) => {
+  const n = await db.$count(users, eq(users.departmentId, req.params.id));
+  if (n) throw badRequest(`Move its ${n} member${n > 1 ? 's' : ''} to another department first`);
+  await db.delete(departments).where(eq(departments.id, req.params.id));
+  audit(req, 'delete', 'department', req.params.id);
+  res.status(204).end();
+});
+
 r.get('/settings/login', requirePerm('users:view'), async (_req, res) => {
   res.json({ domains: await loginDomains() });
 });

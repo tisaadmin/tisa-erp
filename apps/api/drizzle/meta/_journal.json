@@ -71,6 +71,13 @@
       "when": 1792388239560,
       "tag": "0009_item_create_rights",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1792397974479,
+      "tag": "0010_departments",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, session } from './api';
 
-export type Me = { id: string; name: string; email: string; roleName: string; permissions: string[]; managerId: string | null; isFieldStaff: boolean; mustChangePassword?: boolean };
+export type Me = { id: string; name: string; email: string; roleName: string; permissions: string[]; managerId: string | null; isFieldStaff: boolean; mustChangePassword?: boolean; teamSize?: number };
 type Ctx = { user: Me | null; loading: boolean; login: (email: string, password: string) => Promise<void>; logout: () => void; can: (perm: string) => boolean; changePassword: (current: string, next: string) => Promise<void> };
 
 const AuthCtx = createContext<Ctx>(null as unknown as Ctx);

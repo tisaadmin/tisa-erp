@@ -50,6 +50,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
   ] },
   { group: 'Admin', items: [
     { to: '/users', label: 'Users', icon: <Users />, perm: 'users:view' },
+    { to: '/departments', label: 'Departments', icon: <Building2 />, perm: 'users:view' },
     { to: '/roles', label: 'Roles & Access', icon: <ShieldCheck />, perm: 'roles:view' },
     { to: '/settings', label: 'Company Settings', icon: <Settings />, perm: 'settings:view' },
     { to: '/settings/fields', label: 'Forms & Fields', icon: <ListChecks />, perm: 'settings:view' },

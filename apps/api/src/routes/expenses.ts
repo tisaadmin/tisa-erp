@@ -1,6 +1,7 @@
 import { Router, type Request } from 'express';
 import { and, desc, eq, inArray, isNull, ne, or, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
+import { approverFor, manages } from '../lib/team';
 import { db, type Tx } from '../db';
 import { approvalLogs, attachments, expenseClaims, expenseLines, users } from '../db/schema';
 import { audit } from '../lib/audit';
@@ -16,7 +17,7 @@ import { can, requirePerm } from '../middleware/auth';
  *                         │                               │
  *                         ├── send back ─▶ SENT_BACK (editable, re-submit)
  *                         └── reject ────▶ REJECTED
- * The approver is the employee's reporting manager; if none is set, anyone with expenses:approve.
+ * The approver is the employee's reporting manager, else the head of their department; if neither, anyone with expenses:approve.
  */
 const r = Router();
 const opt = z.string().trim().nullish().transform((v) => (v === '' ? null : v));
@@ -44,8 +45,7 @@ async function linkReceipts(tx: Tx, claimId: string, userId: string, lines: z.in
 }
 
 async function submitClaim(tx: Tx, req: Request, claimId: string, from: string) {
-  const owner = await tx.query.users.findFirst({ where: eq(users.id, req.user.id) });
-  const approverId = owner?.managerId ?? null;
+  const approverId = await approverFor(req.user.id);
   const [c] = await tx.update(expenseClaims).set({ status: 'SUBMITTED', approverId, submittedAt: new Date() }).where(eq(expenseClaims.id, claimId)).returning();
   await log(tx, claimId, req.user.id, 'SUBMITTED', from, 'SUBMITTED');
   return c;
@@ -82,7 +82,7 @@ async function loadClaim(req: Request, id: string) {
   const c = await db.query.expenseClaims.findFirst({ where: eq(expenseClaims.id, id), with: withAll });
   if (!c) throw notFound('Expense claim');
   const mayView = c.userId === req.user.id || c.approverId === req.user.id || c.user.managerId === req.user.id
-    || can(req.user, 'expenses:approve') || can(req.user, 'expenses:finance');
+    || can(req.user, 'expenses:approve') || can(req.user, 'expenses:finance') || (await manages(req.user.id, c.userId));
   if (!mayView) throw forbidden();
   return c;
 }

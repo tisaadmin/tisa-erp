@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import rateLimit from 'express-rate-limit';
 import { and, eq, gt } from 'drizzle-orm';
 import { z } from 'zod';
+import { teamIds } from '../lib/team';
 import { env } from '../config';
 import { db } from '../db';
 import { refreshTokens, users } from '../db/schema';
@@ -31,7 +32,7 @@ r.post('/login', loginLimiter, async (req, res) => {
   if (!u || !u.active || !(await bcrypt.compare(password, u.passwordHash))) throw new HttpError(401, 'Invalid email or password');
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, u.id));
   const tokens = await issueTokens(u.id);
-  res.json({ ...tokens, user: await loadAuthUser(u.id) });
+  res.json({ ...tokens, user: { ...(await loadAuthUser(u.id)), teamSize: (await teamIds(u.id)).length } });
 });
 
 r.post('/refresh', async (req, res) => {
@@ -52,7 +53,8 @@ r.post('/logout', async (req, res) => {
 
 r.get('/me', authenticate, async (req, res) => {
   const u = await db.query.users.findFirst({ where: eq(users.id, req.user.id), columns: { passwordHash: false } });
-  res.json({ ...req.user, profile: u });
+  // teamSize > 0 → this person approves for others (department head or reporting manager)
+  res.json({ ...req.user, profile: u, teamSize: (await teamIds(req.user.id)).length });
 });
 
 r.post('/change-password', authenticate, async (req, res) => {
@@ -64,7 +66,7 @@ r.post('/change-password', authenticate, async (req, res) => {
   await db.delete(refreshTokens).where(eq(refreshTokens.userId, u.id));
   invalidateUserCache(u.id);
   // fresh session (other devices are signed out)
-  res.json({ ok: true, ...(await issueTokens(u.id)), user: await loadAuthUser(u.id) });
+  res.json({ ok: true, ...(await issueTokens(u.id)), user: { ...(await loadAuthUser(u.id)), teamSize: (await teamIds(u.id)).length } });
 });
 
 /** Mobile app registers its Expo push token after login. */

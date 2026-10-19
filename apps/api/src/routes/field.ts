@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
+import { approverFor, manages, teamIds } from '../lib/team';
 import { attachments, attendance, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { istDate, istTime } from '../lib/dates';
@@ -102,8 +103,7 @@ r.post('/attendance/check-out', requirePerm('attendance:mark'), upload.single('p
 /** IDs of users whose attendance the caller may see. */
 async function visibleUserIds(req: Request): Promise<string[] | null> {
   if (can(req.user, 'attendance:view_all')) return null; // all
-  const team = await db.select({ id: users.id }).from(users).where(eq(users.managerId, req.user.id));
-  return [req.user.id, ...team.map((t) => t.id)];
+  return [req.user.id, ...(await teamIds(req.user.id))];
 }
 
 r.get('/attendance', requirePerm('attendance:view'), async (req, res) => {
@@ -164,9 +164,9 @@ r.get('/leaves', requirePerm('leaves:view'), async (req, res) => {
   const scope = qs(req.query.scope) ?? 'mine';
   let where: SQL | undefined = eq(leaveRequests.userId, req.user.id);
   if (scope === 'approvals') {
-    const team = await db.select({ id: users.id }).from(users).where(eq(users.managerId, req.user.id));
+    const team = await teamIds(req.user.id);
     where = can(req.user, 'leaves:approve') ? eq(leaveRequests.status, 'PENDING')
-      : team.length ? and(eq(leaveRequests.status, 'PENDING'), inArray(leaveRequests.userId, team.map((t) => t.id))) : eq(leaveRequests.id, '__none__');
+      : team.length ? and(eq(leaveRequests.status, 'PENDING'), inArray(leaveRequests.userId, team)) : eq(leaveRequests.id, '__none__');
   }
   res.json(await db.query.leaveRequests.findMany({ where, orderBy: [desc(leaveRequests.createdAt)], with: { user: { columns: { id: true, name: true } } } }));
 });
@@ -176,7 +176,8 @@ r.post('/leaves', requirePerm('leaves:apply'), async (req, res) => {
   if (d.toDate < d.fromDate) throw badRequest('To date is before from date');
   const [row] = await db.insert(leaveRequests).values({ ...d, userId: req.user.id }).returning();
   const payload = { title: `Leave request — ${req.user.name}`, body: `${d.type} ${d.fromDate} → ${d.toDate}`, type: 'LEAVE' as const, link: '/attendance?tab=leaves', entityType: 'LEAVE', entityId: row.id };
-  if (req.user.managerId) await notifyUsers([req.user.managerId], payload);
+  const approver = await approverFor(req.user.id);
+  if (approver) await notifyUsers([approver], payload);
   else await notifyPermission('leaves:approve', payload, req.user.id);
   res.status(201).json(row);
 });
@@ -188,7 +189,7 @@ r.post('/leaves/:id/:decision', async (req, res) => {
   if (!lr) throw notFound('Leave request');
   if (lr.status !== 'PENDING') throw badRequest('Already decided');
   if (lr.userId === req.user.id) throw forbidden('You cannot approve your own leave');
-  if (!(can(req.user, 'leaves:approve') || lr.user.managerId === req.user.id)) throw forbidden();
+  if (!(can(req.user, 'leaves:approve') || (await manages(req.user.id, lr.userId)))) throw forbidden();
   const status = decision === 'approve' ? 'APPROVED' : 'REJECTED';
   await db.transaction(async (tx) => {
     await tx.update(leaveRequests).set({ status, approverId: req.user.id }).where(eq(leaveRequests.id, lr.id));
@@ -305,7 +306,7 @@ const reqSchema = z.object({
 r.get('/requisitions', requirePerm('requisitions:view'), async (req, res) => {
   const { pageSize, offset } = pageParams(req.query);
   const conds = [
-    can(req.user, 'requisitions:view_all') ? undefined : eq(requisitions.raisedById, req.user.id),
+    can(req.user, 'requisitions:view_all') ? undefined : inArray(requisitions.raisedById, [req.user.id, ...(await teamIds(req.user.id))]),
     qs(req.query.status) ? inArray(requisitions.status, qs(req.query.status)!.split(',')) : undefined,
     qs(req.query.siteId) ? eq(requisitions.siteId, qs(req.query.siteId)!) : undefined,
     qs(req.query.clientId) ? eq(requisitions.clientId, qs(req.query.clientId)!) : undefined,
@@ -329,7 +330,7 @@ r.get('/requisitions/:id', requirePerm('requisitions:view'), async (req, res) =>
     with: { site: { columns: { id: true, name: true, clientId: true } }, client: { columns: { id: true, name: true } }, raisedBy: { columns: { id: true, name: true, phone: true } }, ticket: { columns: { id: true, number: true, title: true } }, items: true },
   });
   if (!row) throw notFound('Requisition');
-  if (!can(req.user, 'requisitions:view_all') && row.raisedById !== req.user.id) throw forbidden();
+  if (!can(req.user, 'requisitions:view_all') && row.raisedById !== req.user.id && !(await manages(req.user.id, row.raisedById))) throw forbidden();
   const [photos, quotes, pos, dcs, invs] = await Promise.all([
     db.query.attachments.findMany({ where: and(eq(attachments.entityType, 'REQUISITION'), eq(attachments.entityId, row.id)) }),
     db.select({ id: quotations.id, number: quotations.number, date: quotations.date, total: quotations.total, status: quotations.status }).from(quotations).where(eq(quotations.requisitionId, row.id)),
@@ -341,7 +342,8 @@ r.get('/requisitions/:id', requirePerm('requisitions:view'), async (req, res) =>
     ...quotes.map((d) => ({ ...d, kind: 'Quotation', link: `/quotations/${d.id}` })), ...pos.map((d) => ({ ...d, kind: 'Purchase order', link: `/purchase-orders/${d.id}` })),
     ...dcs.map((d) => ({ ...d, total: null, kind: 'Delivery challan', link: `/challans/${d.id}` })), ...invs.map((d) => ({ ...d, kind: 'Invoice', link: `/invoices/${d.id}` })),
   ].sort((a, b) => +new Date(a.date) - +new Date(b.date));
-  res.json({ ...row, photos, docs });
+  const canAct = can(req.user, 'requisitions:approve') || (row.raisedById !== req.user.id && (await manages(req.user.id, row.raisedById)));
+  res.json({ ...row, photos, docs, canAct });
 });
 
 r.post('/requisitions', requirePerm('requisitions:create'), async (req, res) => {
@@ -361,19 +363,23 @@ r.post('/requisitions', requirePerm('requisitions:create'), async (req, res) => 
     if (d.ticketId) await tx.insert(ticketUpdates).values({ ticketId: d.ticketId, userId: req.user.id, note: `Requisition ${row.number} raised (${d.type.replace('_', ' ').toLowerCase()})` });
     return row;
   });
-  await notifyPermission('requisitions:approve', {
+  const reqNote = {
     title: `${d.priority === 'CRITICAL' || d.priority === 'HIGH' ? '⚠ ' : ''}${d.type.replace('_', ' ')} requisition — ${site?.name ?? 'site not set'}`,
-    body: `${req.user.name}: ${d.description.slice(0, 120)}`, type: 'REQUISITION', link: `/requisitions/${row.id}`, entityType: 'REQUISITION', entityId: row.id,
-  }, req.user.id);
+    body: `${req.user.name}: ${d.description.slice(0, 120)}`, type: 'REQUISITION' as const, link: `/requisitions/${row.id}`, entityType: 'REQUISITION', entityId: row.id,
+  };
+  await notifyPermission('requisitions:approve', reqNote, req.user.id);
+  const head = await approverFor(req.user.id);
+  if (head) await notifyUsers([head], reqNote, req.user.id);
   audit(req, 'create', 'requisition', row.id);
   res.status(201).json(row);
 });
 
 /** Office assigns (or corrects) the client / site of a requisition raised without one. */
-r.patch('/requisitions/:id/assign', requirePerm('requisitions:approve'), async (req, res) => {
+r.patch('/requisitions/:id/assign', async (req, res) => {
   const d = z.object({ clientId: opt, siteId: opt }).parse(req.body);
   const row = await db.query.requisitions.findFirst({ where: eq(requisitions.id, req.params.id) });
   if (!row) throw notFound('Requisition');
+  await mayActOnRequisition(req.user, row.raisedById);
   if (row.status === 'REJECTED') throw badRequest('This requisition was rejected');
   const site = d.siteId ? await db.query.sites.findFirst({ where: eq(sites.id, d.siteId) }) : null;
   if (d.siteId && !site) throw badRequest('Site not found');
@@ -390,12 +396,20 @@ const REQ_FLOW: Record<string, { from: string[]; to: string }> = {
   start: { from: ['APPROVED'], to: 'IN_PROGRESS' }, fulfil: { from: ['APPROVED', 'IN_PROGRESS'], to: 'FULFILLED' },
 };
 
-r.post('/requisitions/:id/:action', requirePerm('requisitions:approve'), async (req, res) => {
+/** Company-wide approvers (requisitions:approve), or the head / manager of the person who raised it. Never your own. */
+async function mayActOnRequisition(user: Request['user'], raisedById: string) {
+  if (can(user, 'requisitions:approve')) return;
+  if (raisedById !== user.id && (await manages(user.id, raisedById))) return;
+  throw forbidden(raisedById === user.id ? 'You cannot approve your own requisition' : 'Only the head of their department, their manager or an approver can act on this requisition');
+}
+
+r.post('/requisitions/:id/:action', async (req, res) => {
   const flow = REQ_FLOW[req.params.action];
   if (!flow) throw notFound('Action');
   const { note } = z.object({ note: opt }).parse(req.body ?? {});
   const row = await db.query.requisitions.findFirst({ where: eq(requisitions.id, req.params.id) });
   if (!row) throw notFound('Requisition');
+  await mayActOnRequisition(req.user, row.raisedById);
   if (!flow.from.includes(row.status)) throw badRequest(`Cannot ${req.params.action} a ${row.status.toLowerCase()} requisition`);
   const [u] = await db.update(requisitions).set({ status: flow.to, actionById: req.user.id, actionNote: note, actionAt: new Date() }).where(eq(requisitions.id, row.id)).returning();
   await notifyUsers([row.raisedById], { title: `Requisition ${row.number} ${flow.to.toLowerCase().replace('_', ' ')}`, body: note ?? undefined, type: 'REQUISITION', link: `/requisitions/${row.id}`, entityType: 'REQUISITION', entityId: row.id }, req.user.id);

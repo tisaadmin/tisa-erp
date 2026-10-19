@@ -19,7 +19,7 @@ export default function More() {
       </Card>
       <Card style={{ padding: 0, gap: 0 }}>
         <Row icon="notifications" title="Notifications" onPress={() => router.push('/notifications')} />
-        {(can('expenses:approve') || can('requisitions:approve') || can('leaves:approve')) && <Row icon="checkmark-done" title="Approvals" sub="Team expenses, requisitions, leave" onPress={() => router.push('/approvals')} />}
+        {(can('expenses:approve') || can('requisitions:approve') || can('leaves:approve') || (user?.teamSize ?? 0) > 0) && <Row icon="checkmark-done" title="Approvals" sub="Team expenses, requisitions, leave" onPress={() => router.push('/approvals')} />}
         {can('service_reports:create') && <Row icon="document-text" title="Service report (no ticket)" onPress={() => router.push('/report/new')} />}
       </Card>
       {can('leaves:apply') && (

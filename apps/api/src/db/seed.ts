@@ -7,7 +7,7 @@
 import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { db, pool } from './index';
-import { clients, companySettings, items, leads, roles, sites, stockMovements, systemCategories, users, vendors } from './schema';
+import { clients, companySettings, departments, items, leads, roles, sites, stockMovements, systemCategories, users, vendors } from './schema';
 import { DEFAULT_ROLES } from '../lib/permissions';
 import { nextCode } from '../lib/numbering';
 
@@ -73,6 +73,11 @@ async function main() {
     roleIds.set(r.name, row!.id);
   }
   console.log(`✓ ${DEFAULT_ROLES.length} roles`);
+
+  // Departments (rename / add more from Settings → Departments; never overwritten here)
+  for (const name of ['Management', 'Sales', 'Projects', 'Service', 'Purchase & Stores', 'Accounts', 'HR']) {
+    await db.insert(departments).values({ name }).onConflictDoNothing({ target: departments.name });
+  }
 
   // Company
   await db.insert(companySettings).values({

@@ -415,13 +415,15 @@ export function UsersPage() {
   const users = useUsers();
   const { user: me, can } = useAuth();
   const superAdmin = !!me?.permissions.includes('*');
+  const depts = useGet<any[]>('/departments');
+  const deptOpts = (depts.data ?? []).filter((d) => d.active).map((d) => ({ value: d.id, label: d.name, sub: d.head ? `Head: ${d.head.name}` : undefined }));
   const policy = useGet<{ domains: string[] }>('/settings/login');
   const domains = policy.data?.domains ?? ['tisa.in'];
   const roleOpts = (roles.data ?? []).map((r) => ({ value: r.id, label: r.name }));
   const userOpts = (users.data ?? []).map((u) => ({ value: u.id, label: u.name }));
   const fields: FieldDef[] = [
     { name: 'name', label: 'Full name', required: true }, { name: 'email', label: 'Email (login)', type: 'email', required: true, hint: superAdmin ? `Official @${domains.join(' / @')} address — or any other email (allowed because you are Super Admin)` : `Must be an official @${domains.join(' / @')} address` }, { name: 'phone', label: 'Mobile' },
-    { name: 'employeeCode', label: 'Employee code' }, { name: 'designation', label: 'Designation' }, { name: 'department', label: 'Department' },
+    { name: 'employeeCode', label: 'Employee code' }, { name: 'designation', label: 'Designation' }, { name: 'departmentId', label: 'Department', type: 'combo', options: deptOpts, hint: 'The department head approves their leave, expenses & requisitions' },
     { name: 'roleId', label: 'Role (access level)', type: 'combo', options: roleOpts, required: true }, { name: 'managerId', label: 'Reports to (approves expenses & leave)', type: 'combo', options: userOpts },
     { name: 'password', label: 'Temporary password', hint: 'Min 8 chars. They must choose their own at first sign-in. Leave blank to keep the current one.' },
     { name: 'isFieldStaff', label: 'Field staff', type: 'checkbox', hint: 'Uses the mobile app' }, { name: 'active', label: 'Active', type: 'checkbox', hint: 'Can sign in' },
@@ -434,11 +436,86 @@ export function UsersPage() {
       cols={[
         { key: 'name', label: 'Name', render: (r) => <>{r.name}<div className="text-xs text-slate-400">{r.employeeCode} · {r.designation}</div></> },
         { key: 'email', label: 'Email', render: (r) => <>{r.email}{r.externalEmail && <div><Badge t="amber">Non-official email · allowed by Super Admin</Badge></div>}{r.mustChangePassword && r.active && <div><Badge t="gray">Temporary password</Badge></div>}</> }, { key: 'phone', label: 'Mobile', render: (r) => r.phone ?? '—' },
-        { key: 'role', label: 'Role', render: (r) => <Badge t="blue">{r.role?.name}</Badge> }, { key: 'manager', label: 'Reports to', render: (r) => r.manager?.name ?? '—' },
+        { key: 'role', label: 'Role', render: (r) => <Badge t="blue">{r.role?.name}</Badge> }, { key: 'dept', label: 'Department', render: (r) => r.dept?.name ?? r.department ?? '—' }, { key: 'manager', label: 'Reports to', render: (r) => r.manager?.name ?? '—' },
         { key: 'field', label: 'Field', render: (r) => (r.isFieldStaff ? <Badge t="violet">Mobile</Badge> : '') },
         { key: 'lastLoginAt', label: 'Last login', render: (r) => fmtDateTime(r.lastLoginAt) }, { key: 'active', label: 'Status', render: (r) => <Status s={r.active ? 'ACTIVE' : 'INACTIVE'} /> },
       ]} />
     </>
+  );
+}
+
+// ───────── Departments ─────────
+type Dept = { id: string; name: string; description: string | null; active: boolean; head: { id: string; name: string } | null; memberCount: number; members: { id: string; name: string; designation: string | null }[] };
+
+/** Verticals / departments: a head who manages everyone in it, and the people in it. Super Admin edits. */
+export function DepartmentsPage() {
+  const { can } = useAuth();
+  const editable = can('departments:edit');
+  const list = useGet<Dept[]>('/departments');
+  const users = useUsers();
+  const [edit, setEdit] = useState<{ id?: string; name: string; description: string; headId: string | null; active: boolean } | null>(null);
+  const [members, setMembers] = useState<{ dept: Dept; ids: string[]; search: string } | null>(null);
+  const save = useAction((v: NonNullable<typeof edit>) => v.id
+    ? api(`/departments/${v.id}`, { method: 'PATCH', body: { name: v.name, description: v.description || null, headId: v.headId, active: v.active } })
+    : api('/departments', { body: { name: v.name, description: v.description || null, headId: v.headId } }), { success: 'Department saved', invalidate: [['/departments'], ['/users']], onSuccess: () => setEdit(null) });
+  const saveMembers = useAction((m: NonNullable<typeof members>) => api(`/departments/${m.dept.id}/members`, { method: 'PUT', body: { userIds: m.ids } }), { success: 'Members saved', invalidate: [['/departments'], ['/users']], onSuccess: () => setMembers(null) });
+  const remove = useAction((id: string) => api(`/departments/${id}`, { method: 'DELETE' }), { success: 'Department removed', invalidate: [['/departments']] });
+  const userOpts = (users.data ?? []).map((u) => ({ value: u.id, label: u.name, sub: u.designation ?? undefined }));
+  const deptOf = new Map<string, string>();
+  for (const d of list.data ?? []) for (const m of d.members) deptOf.set(m.id, d.name);
+  return (
+    <div>
+      <PageHeader title="Departments" subtitle="Each department's head approves leave, expenses and requisitions of its members and sees their attendance. What they can do in each module comes from their role."
+        actions={editable && <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setEdit({ name: '', description: '', headId: null, active: true })}>New department</Button>} />
+      {!list.data ? <Spinner /> : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {list.data.map((d) => (
+          <Card key={d.id} title={<span className={d.active ? '' : 'text-slate-400'}>{d.name}{!d.active && ' (switched off)'}</span>}
+            actions={editable && <div className="flex gap-1">
+              <Button size="sm" onClick={() => setMembers({ dept: d, ids: d.members.map((m) => m.id), search: '' })}>Members</Button>
+              <Button size="sm" variant="ghost" onClick={() => setEdit({ id: d.id, name: d.name, description: d.description ?? '', headId: d.head?.id ?? null, active: d.active })}>Edit</Button>
+            </div>}>
+            <div className="text-sm">
+              <div className="mb-2"><span className="text-slate-500">Head: </span>{d.head ? <span className="font-medium">{d.head.name}</span> : <span className="text-amber-700">not set</span>}</div>
+              {d.description && <p className="mb-2 text-slate-500">{d.description}</p>}
+              <div className="text-slate-500">{d.memberCount} member{d.memberCount === 1 ? '' : 's'}</div>
+              <div className="mt-1 flex flex-wrap gap-1">{d.members.slice(0, 12).map((m) => <Badge key={m.id}>{m.name}</Badge>)}{d.members.length > 12 && <Badge t="gray">+{d.members.length - 12}</Badge>}</div>
+              {editable && !d.memberCount && <button className="mt-2 text-xs text-red-600 underline" onClick={() => confirm(`Remove the ${d.name} department?`) && remove.mutate(d.id)}>Remove</button>}
+            </div>
+          </Card>
+        ))}
+      </div>}
+      <Modal open={!!edit} onClose={() => setEdit(null)} title={edit?.id ? 'Edit department' : 'New department'}
+        footer={<><Button onClick={() => setEdit(null)}>Cancel</Button><Button variant="primary" loading={save.isPending} onClick={() => edit && save.mutate(edit)}>Save</Button></>}>
+        {edit && <div className="grid gap-3">
+          <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} placeholder="e.g. Projects" /></Field>
+          <Field label="Head of department" hint="Approves leave, expenses and requisitions of everyone in this department">
+            <Combo options={userOpts} value={edit.headId} onChange={(v) => setEdit({ ...edit, headId: v })} />
+          </Field>
+          <Field label="Description"><Textarea value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} /></Field>
+          {edit.id && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={edit.active} onChange={(e) => setEdit({ ...edit, active: e.target.checked })} /> Active</label>}
+        </div>}
+      </Modal>
+      <Modal open={!!members} onClose={() => setMembers(null)} title={`Members — ${members?.dept.name ?? ''}`} wide
+        footer={<><span className="mr-auto text-sm text-slate-500">{members?.ids.length ?? 0} selected</span><Button onClick={() => setMembers(null)}>Cancel</Button><Button variant="primary" loading={saveMembers.isPending} onClick={() => members && saveMembers.mutate(members)}>Save members</Button></>}>
+        {members && <div>
+          <Input className="mb-3" placeholder="Search people…" value={members.search} onChange={(e) => setMembers({ ...members, search: e.target.value })} />
+          <p className="mb-2 text-xs text-slate-500">A person belongs to one department — ticking someone from another department moves them here.</p>
+          <div className="grid max-h-[60vh] gap-1 overflow-y-auto sm:grid-cols-2">
+            {userOpts.filter((u) => !members.search || u.label.toLowerCase().includes(members.search.toLowerCase())).map((u) => {
+              const on = members.ids.includes(u.value);
+              const other = deptOf.get(u.value);
+              return (
+                <label key={u.value} className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-sm ${on ? 'border-brand-300 bg-brand-50' : 'border-slate-200'}`}>
+                  <input type="checkbox" checked={on} onChange={() => setMembers({ ...members, ids: on ? members.ids.filter((x) => x !== u.value) : [...members.ids, u.value] })} />
+                  <span className="min-w-0 flex-1 truncate">{u.label}{u.sub && <span className="text-xs text-slate-400"> · {u.sub}</span>}</span>
+                  {other && other !== members.dept.name && <Badge t="gray">{other}</Badge>}
+                </label>
+              );
+            })}
+          </div>
+        </div>}
+      </Modal>
+    </div>
   );
 }
 

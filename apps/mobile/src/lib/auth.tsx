@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 import { api, initApi, setLogoutHandler, setSession, getSession } from './api';
 import { registerPush } from './push';
 
-export type Me = { id: string; name: string; email: string; roleName: string; permissions: string[]; managerId: string | null; isFieldStaff: boolean; mustChangePassword?: boolean };
+export type Me = { id: string; name: string; email: string; roleName: string; permissions: string[]; managerId: string | null; isFieldStaff: boolean; mustChangePassword?: boolean; teamSize?: number };
 type Ctx = { user: Me | null; ready: boolean; login: (e: string, p: string) => Promise<void>; logout: () => Promise<void>; can: (p: string) => boolean; changePassword: (current: string, next: string) => Promise<void> };
 const C = createContext<Ctx>(null as unknown as Ctx);
 

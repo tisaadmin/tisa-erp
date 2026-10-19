@@ -28,6 +28,8 @@ export const MODULES = {
   requisitions: ['view', 'view_all', 'create', 'approve'],
   expenses: ['view', 'create', 'approve', 'finance'],
   users: ['view', 'create', 'edit'],
+  /** create departments, set their head and move people between them — Super Admin by default */
+  departments: ['edit'],
   roles: ['view', 'edit'],
   settings: ['view', 'edit'],
   reports: ['view'],
@@ -57,7 +59,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: st
   { name: 'Super Admin', description: 'Full access to everything', permissions: ['*'] },
   {
     name: 'Management', description: 'Directors — view everything, approve anything',
-    permissions: ALL_PERMISSIONS.filter((p) => !p.startsWith('roles:edit') && !p.startsWith('users:') && p !== 'records:delete' && p !== 'purchase_orders:without_accessories' && p !== 'items:create').concat(['users:view']),
+    permissions: ALL_PERMISSIONS.filter((p) => !p.startsWith('roles:edit') && !p.startsWith('users:') && p !== 'records:delete' && p !== 'purchase_orders:without_accessories' && p !== 'items:create' && p !== 'departments:edit').concat(['users:view']),
   },
   {
     name: 'Sales', description: 'Leads, clients, quotations, order forms',
@@ -90,6 +92,14 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: st
     name: 'HR', description: 'Attendance, leaves, employees',
     permissions: ['dashboard:view', ...all('attendance'), ...all('leaves'), 'users:view', 'users:create', 'users:edit',
       'expenses:view', 'expenses:create', 'expenses:approve'],
+  },
+  {
+    name: 'Projects Head', description: 'Projects department — installation work, material for projects; approves leave, expenses and requisitions of the people in the departments they head',
+    permissions: ['dashboard:view', 'reports:view', ...view('clients', 'sites', 'quotations', 'invoices', 'amc', 'items', 'stock', 'vendors', 'grn', 'orders'), 'sites:edit',
+      'tickets:view', 'tickets:view_all', 'tickets:create', 'tickets:edit', 'tickets:assign', ...all('service_reports'),
+      'accessories:view', 'accessories:create', 'accessories:edit', 'accessories:approve',
+      'purchase_orders:view', 'purchase_orders:create', 'purchase_orders:edit', 'challans:view', 'challans:create', 'challans:edit',
+      'requisitions:view', 'requisitions:create', 'attendance:view', 'attendance:mark', 'leaves:view', 'leaves:apply', 'expenses:view', 'expenses:create'],
   },
   { name: 'Field Technician', description: 'Mobile app user — attendance, tickets, service reports, requisitions, expenses', permissions: FIELD_BASE },
 ];

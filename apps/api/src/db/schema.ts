@@ -6,7 +6,7 @@
 import { randomUUID } from 'node:crypto';
 import { relations } from 'drizzle-orm';
 import {
-  boolean, date, doublePrecision, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex,
+  type AnyPgColumn, boolean, date, doublePrecision, index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
 const id = () => text().primaryKey().$defaultFn(() => randomUUID());
@@ -98,7 +98,9 @@ export const users = pgTable('users', {
   phone: text(),
   passwordHash: text().notNull(),
   designation: text(),
+  /** department name (kept in step with departmentId, for display / old data) */
   department: text(),
+  departmentId: text().references((): AnyPgColumn => departments.id, { onDelete: 'set null' }),
   roleId: text().notNull().references(() => roles.id),
   managerId: text(),
   isFieldStaff: boolean().notNull().default(false),
@@ -111,6 +113,16 @@ export const users = pgTable('users', {
   lastLoginAt: ts(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
+});
+
+/** Departments / verticals. The head manages everyone in the department (approvals, attendance, team views). */
+export const departments = pgTable('departments', {
+  id: id(),
+  name: text().notNull().unique(),
+  description: text(),
+  headId: text().references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
+  active: boolean().notNull().default(true),
+  createdAt: createdAt(),
 });
 
 export const refreshTokens = pgTable('refresh_tokens', {
@@ -877,7 +889,9 @@ export const notifications = pgTable('notifications', {
 export const usersRel = relations(users, ({ one }) => ({
   role: one(roles, { fields: [users.roleId], references: [roles.id] }),
   manager: one(users, { fields: [users.managerId], references: [users.id] }),
+  dept: one(departments, { fields: [users.departmentId], references: [departments.id] }),
 }));
+export const departmentsRel = relations(departments, ({ one }) => ({ head: one(users, { fields: [departments.headId], references: [users.id] }) }));
 export const clientsRel = relations(clients, ({ many }) => ({ sites: many(sites) }));
 export const sitesRel = relations(sites, ({ one }) => ({ client: one(clients, { fields: [sites.clientId], references: [clients.id] }) }));
 export const leadsRel = relations(leads, ({ one, many }) => ({

@@ -4,7 +4,7 @@ import { Spinner } from './components/ui';
 import { useAuth } from './lib/auth';
 import Login, { SetPassword } from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import { AmcPage, ClientDetail, ClientsPage, InventoryPage, LeadsPage, SitesPage, UsersPage, VendorsPage } from './pages/Masters';
+import { AmcPage, ClientDetail, ClientsPage, DepartmentsPage, InventoryPage, LeadsPage, SitesPage, UsersPage, VendorsPage } from './pages/Masters';
 import { ChallanDetail, ChallansPage, NewChallan, OrderDetail, OrderEditor, OrdersPage, QuotationDetail, QuotationEditor, QuotationsPage } from './pages/Sales';
 import { OrderImportPage } from './pages/OrderImport';
 import { OrderBulkImportPage } from './pages/OrderBulkImport';
@@ -74,6 +74,7 @@ export default function App() {
         <Route path="expenses/:id" element={<ExpenseDetail />} />
         <Route path="expenses/:id/edit" element={<ExpenseEditor />} />
         <Route path="users" element={<UsersPage />} />
+        <Route path="departments" element={<DepartmentsPage />} />
         <Route path="roles" element={<RolesPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/fields" element={<FieldsPage />} />

@@ -6,9 +6,10 @@ import { fmtDate, inr, label } from '../src/lib/format';
 
 /** Manager approvals on the go: team expense claims, site requisitions, leave. */
 export default function Approvals() {
-  const { can } = useAuth();
+  const { can, user } = useAuth();
+  const reqApprover = can('requisitions:approve') || (user?.teamSize ?? 0) > 0;
   const exp = useFetch<{ data: any[] }>('/expenses?scope=approvals');
-  const req = useFetch<{ data: any[] }>(can('requisitions:approve') ? '/requisitions?status=PENDING' : null);
+  const req = useFetch<{ data: any[] }>(reqApprover ? '/requisitions?status=PENDING' : null);
   const lv = useFetch<any[]>('/leaves?scope=approvals');
   const { busy, run } = useRun();
   const act = (path: string, body: object, reload: () => void) => run(async () => { await api(path, { body }); reload(); });
@@ -29,9 +30,9 @@ export default function Approvals() {
         ))}
         {exp.data && !exp.data.data.length && <Empty text="No claims waiting" />}
       </Card>
-      {can('requisitions:approve') && (
+      {reqApprover && (
         <Card title="Requisitions">
-          {(req.data?.data ?? []).map((r) => (
+          {(req.data?.data ?? []).filter((r) => r.raisedBy?.id !== user?.id).map((r) => (
             <View key={r.id} style={{ gap: 6, paddingBottom: 10 }}>
               <Text style={s.cardTitle}>{label(r.type)} · {r.site?.name ?? 'site not set'}</Text>
               <Text style={s.muted}>{r.raisedBy.name}: {r.description}</Text>
@@ -41,7 +42,7 @@ export default function Approvals() {
               </View>
             </View>
           ))}
-          {req.data && !req.data.data.length && <Empty text="No pending requisitions" />}
+          {req.data && !req.data.data.filter((r) => r.raisedBy?.id !== user?.id).length && <Empty text="No pending requisitions" />}
         </Card>
       )}
       <Card title="Leave">

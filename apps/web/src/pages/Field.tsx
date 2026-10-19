@@ -202,14 +202,14 @@ export function RequisitionDetail() {
   return (
     <div className="space-y-4">
       <PageHeader back="/requisitions" title={<>{r.number} <Status s={r.status} /></>} subtitle={`${label(r.type)} · ${r.client?.name ?? 'client not assigned'}${r.site ? ` · ${r.site.name}` : ''}`}
-        actions={can('requisitions:approve') && actions.length > 0 && <>
+        actions={r.canAct && actions.length > 0 && <>
           <Input className="w-56" placeholder="Note to requester" value={note} onChange={(e) => setNote(e.target.value)} />
           {actions.map(([a, l, v]) => <Button key={a} variant={v} loading={act.isPending} onClick={() => act.mutate(a)}>{l}</Button>)}
         </>} />
       {(!r.client || !r.site) && r.status !== 'REJECTED' && (
         <div className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-800">
           {r.client ? 'No site on this requisition yet.' : 'This requisition has no client or site yet.'} Assign it so it can be quoted, ordered, delivered or billed.
-          {can('requisitions:approve') && <Button size="sm" onClick={() => setAssign({ clientId: r.clientId, siteId: r.siteId })}>Assign client / site</Button>}
+          {r.canAct && <Button size="sm" onClick={() => setAssign({ clientId: r.clientId, siteId: r.siteId })}>Assign client / site</Button>}
         </div>
       )}
       {canConvert.length > 0 && r.status !== 'REJECTED' && (
@@ -226,7 +226,7 @@ export function RequisitionDetail() {
         ['Client', r.client?.name ?? '—'], ['Site', r.site?.name ?? '—'],
         ['Ticket', r.ticket ? <Link className="text-brand-700" to={`/tickets/${r.ticket.id}`}>{r.ticket.number}</Link> : null], ['Action note', r.actionNote], ['Actioned', fmtDateTime(r.actionAt)]]} />
         <p className="mt-4 text-sm whitespace-pre-line">{r.description}</p>
-        {can('requisitions:approve') && r.client && r.site && r.status !== 'REJECTED' && <button className="mt-2 text-xs text-brand-700 underline" onClick={() => setAssign({ clientId: r.clientId, siteId: r.siteId })}>Change client / site</button>}
+        {r.canAct && r.client && r.site && r.status !== 'REJECTED' && <button className="mt-2 text-xs text-brand-700 underline" onClick={() => setAssign({ clientId: r.clientId, siteId: r.siteId })}>Change client / site</button>}
       </Card>
       {!!r.items.length && <Card title="Materials" pad={false}><Table rows={r.items} cols={[{ key: 'description', label: 'Item' }, { key: 'qty', label: 'Requested', num: true, render: (i: any) => `${qty(i.qty)} ${i.unit}` }, { key: 'issuedQty', label: 'Sent on challans', num: true, render: (i: any) => <span className={i.issuedQty >= i.qty ? 'text-emerald-700' : ''}>{qty(i.issuedQty)}</span> }]} /></Card>}
       {!!r.docs?.length && <Card title="Documents raised from this requisition" pad={false}><Table rows={r.docs} to={(d: any) => d.link} cols={[{ key: 'kind', label: 'Document' }, { key: 'number', label: 'Number' }, { key: 'date', label: 'Date', render: (d: any) => fmtDate(d.date) }, { key: 'total', label: 'Value', num: true, render: (d: any) => (d.total != null ? inr(d.total) : '—') }, { key: 'status', label: 'Status', render: (d: any) => <Status s={d.status} /> }]} /></Card>}

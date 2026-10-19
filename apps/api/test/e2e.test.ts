@@ -1015,3 +1015,71 @@ test('requisitions: raised without a site, assigned later, then converted into q
   r = await ok('svc', 'GET', `/requisitions/${r0.id}`);
   assert.deepEqual(r.docs.map((d: any) => d.kind).sort(), ['Delivery challan', 'Delivery challan', 'Invoice', 'Purchase order', 'Quotation']);
 });
+
+test('departments: Super Admin sets up a Projects department with a head; the head approves leave, expenses and requisitions of its members only', async () => {
+  const roles = await ok('admin', 'GET', '/roles');
+  const roleId = (n: string) => roles.find((r: any) => r.name === n).id;
+  assert.ok(roleId('Projects Head'), 'Projects Head role exists');
+  const depts = await ok('admin', 'GET', '/departments');
+  const projects = depts.find((d: any) => d.name === 'Projects');
+  assert.ok(projects, 'standard departments are seeded');
+  // only departments:edit may change departments
+  assert.equal((await call('sales', 'POST', '/departments', { name: 'Sales 2' })).status, 403);
+  assert.equal((await call('admin', 'POST', '/departments', { name: 'projects' })).status, 400, 'duplicate name (any case)');
+
+  const login = async (who: string, email: string) => {
+    const r = await ok('', 'POST', '/auth/login', { email, password: 'Temp@12345' });
+    tokens[who] = r.accessToken;
+    const c = await call(who, 'POST', '/auth/change-password', { currentPassword: 'Temp@12345', newPassword: 'Proj@2026!' });
+    assert.equal(c.status, 200, JSON.stringify(c.data)); tokens[who] = c.data.accessToken;
+  };
+  const head = await ok('admin', 'POST', '/users', { name: 'Prakash Head', email: 'prakash.ph@tisa.in', roleId: roleId('Projects Head'), password: 'Temp@12345' });
+  const eng = await ok('admin', 'POST', '/users', { name: 'Ravi Engineer', email: 'ravi.pe@tisa.in', roleId: roleId('Field Technician'), password: 'Temp@12345', isFieldStaff: true, departmentId: projects.id });
+  await login('phead', 'prakash.ph@tisa.in'); await login('peng', 'ravi.pe@tisa.in');
+  assert.equal((await ok('admin', 'GET', '/users?search=Ravi')).data[0].department, 'Projects', 'department name copied onto the user');
+
+  // before a head is set nobody manages Ravi
+  assert.equal((await ok('phead', 'GET', '/auth/me')).teamSize, 0);
+  await ok('admin', 'PATCH', `/departments/${projects.id}`, { headId: head.id });
+  await ok('admin', 'PUT', `/departments/${projects.id}/members`, { userIds: [eng.id, head.id] });
+  assert.equal((await ok('phead', 'GET', '/auth/me')).teamSize, 1, 'head manages the department, not themselves');
+
+  // leave → head approves; someone outside the department is not theirs
+  const lv = await ok('peng', 'POST', '/leaves', { fromDate: '2026-12-01', toDate: '2026-12-01', type: 'CASUAL' });
+  assert.ok((await ok('phead', 'GET', '/leaves?scope=approvals')).some((l: any) => l.id === lv.id));
+  const other = await ok('tech', 'POST', '/leaves', { fromDate: '2026-12-02', toDate: '2026-12-02', type: 'CASUAL' });
+  assert.ok(!(await ok('phead', 'GET', '/leaves?scope=approvals')).some((l: any) => l.id === other.id));
+  assert.equal((await call('phead', 'POST', `/leaves/${other.id}/approve`, {})).status, 403);
+  await ok('phead', 'POST', `/leaves/${lv.id}/approve`, {});
+
+  // expenses go to the head
+  const claim = await ok('peng', 'POST', '/expenses', { title: 'Site travel', submit: true, lines: [{ date: '2026-11-20', category: 'TRAVEL', description: 'Auto to site', amount: 240 }] });
+  const full = await ok('phead', 'GET', `/expenses/${claim.id}`);
+  assert.equal(full.approverId, head.id);
+  assert.ok((await ok('phead', 'GET', '/expenses?scope=approvals')).data.some((c: any) => c.id === claim.id));
+  await ok('phead', 'POST', `/expenses/${claim.id}/approve`, {});
+
+  // requisitions: head sees and approves the team's, not their own and not other departments'
+  const rq = await ok('peng', 'POST', '/requisitions', { type: 'MATERIAL', priority: 'MEDIUM', description: 'Cable for block B', items: [{ description: 'CAT6 cable', qty: 1, unit: 'Box' }] });
+  assert.ok((await ok('phead', 'GET', '/requisitions')).data.some((x: any) => x.id === rq.id));
+  assert.equal((await ok('phead', 'GET', `/requisitions/${rq.id}`)).canAct, true);
+  await ok('phead', 'POST', `/requisitions/${rq.id}/approve`, {});
+  const own = await ok('phead', 'POST', '/requisitions', { type: 'MATERIAL', priority: 'MEDIUM', description: 'For my own use', items: [{ description: 'Tool kit', qty: 1, unit: 'Nos' }] });
+  assert.equal((await call('phead', 'POST', `/requisitions/${own.id}/approve`, {})).status, 403, 'not your own');
+  const techReq = await ok('tech', 'POST', '/requisitions', { type: 'MATERIAL', priority: 'MEDIUM', description: 'Service spares', items: [{ description: 'Adapter', qty: 1, unit: 'Nos' }] });
+  assert.equal((await call('phead', 'GET', `/requisitions/${techReq.id}`)).status, 403);
+  assert.equal((await call('phead', 'POST', `/requisitions/${techReq.id}/approve`, {})).status, 403);
+
+  // attendance: head sees the team's muster
+  const muster = await ok('phead', 'GET', '/attendance/muster?month=2026-12');
+  const names = (muster.staff ?? muster.rows ?? muster).map((x: any) => x.name ?? x.user?.name);
+  assert.ok(names.includes('Ravi Engineer') && !names.includes('Imran Shaikh'), JSON.stringify(names));
+
+  // rename keeps users in step; moving Ravi out ends the head's rights
+  await ok('admin', 'PATCH', `/departments/${projects.id}`, { name: 'Projects & Installations' });
+  assert.equal((await ok('admin', 'GET', '/users?search=Ravi')).data[0].department, 'Projects & Installations');
+  await ok('admin', 'PUT', `/departments/${projects.id}/members`, { userIds: [head.id] });
+  assert.equal((await ok('phead', 'GET', '/auth/me')).teamSize, 0);
+  assert.equal((await call('admin', 'DELETE', `/departments/${projects.id}`)).status, 400, 'has a member');
+  await ok('admin', 'PATCH', `/departments/${projects.id}`, { name: 'Projects' });
+});
