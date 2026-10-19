@@ -16,6 +16,7 @@ import { notifyPermission, notifyUsers } from '../lib/notify';
 import { nextNumber } from '../lib/numbering';
 import { can, requirePerm } from '../middleware/auth';
 import { onHand } from '../services/stock';
+import { accessoriesRequiredFor, workflowRules } from '../services/workflow';
 
 const r = Router();
 const qs = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
@@ -149,6 +150,35 @@ r.post('/orders/:id/accessory-sheet', requirePerm('accessories:create'), async (
   res.status(201).json(sheet);
 });
 
+/**
+ * The order's accessories & consumables list as part of the order: whether it is required before material can be ordered,
+ * its lines (internal cost — not billed to the client), and what to buy (required − in stock) for the PO.
+ */
+r.get('/orders/:id/accessories', requirePerm('orders:view'), async (req, res) => {
+  const order = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), columns: { id: true, number: true, sourceRef: true, createdAt: true } });
+  if (!order) throw notFound('Order');
+  const rules = await workflowRules();
+  const required = rules.poRequiresAccessories && accessoriesRequiredFor(order);
+  const s = await db.query.accessorySheets.findFirst({ where: eq(accessorySheets.orderId, order.id), with: { lines: { orderBy: [asc(accessorySheetLines.sortOrder)] } } });
+  if (!s) return res.json({ required, ready: !required, sheet: null, toBuy: [] });
+  const itemIds = [...new Set(s.lines.map((l) => l.itemId).filter((x): x is string => !!x))];
+  const stock = await onHand(db, itemIds);
+  // to buy: per stock item, total required minus what stores already holds; free-text lines as they are
+  const per = new Map<string, { itemId: string | null; description: string; unit: string; qty: number; rate: number }>();
+  for (const l of s.lines) {
+    const k = l.itemId ?? `line:${l.id}`;
+    const x = per.get(k) ?? { itemId: l.itemId, description: l.description, unit: l.unit, qty: 0, rate: l.rate };
+    x.qty = r3(x.qty + l.qty); per.set(k, x);
+  }
+  const toBuy = [...per.values()].map((x) => ({ ...x, inStock: x.itemId ? stock.get(x.itemId) ?? 0 : 0, qty: x.itemId ? Math.max(0, r3(x.qty - (stock.get(x.itemId) ?? 0))) : x.qty })).filter((x) => x.qty > 0);
+  res.json({
+    required, ready: !required || s.status === 'APPROVED',
+    sheet: { id: s.id, number: s.number, status: s.status, notes: s.notes, estimatedCost: s.estimatedCost, approvedAt: s.approvedAt,
+      lines: s.lines.map((l) => ({ id: l.id, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, rate: l.rate, inStock: l.itemId ? stock.get(l.itemId) ?? 0 : null })) },
+    toBuy: s.status === 'APPROVED' ? toBuy : [],
+  });
+});
+
 r.get('/accessory-sheets/:id', requirePerm('accessories:view'), async (req, res) => {
   const sheet = await loadSheet(req.params.id);
   const itemIds = [...new Set(sheet.lines.map((l) => l.itemId).filter((x): x is string => !!x))];
@@ -201,7 +231,7 @@ r.post('/accessory-sheets/:id/recalculate', requirePerm('accessories:edit'), asy
 r.post('/accessory-sheets/:id/submit', requirePerm('accessories:edit'), async (req, res) => {
   const sheet = await loadSheet(req.params.id);
   if (!editable(sheet.status)) throw badRequest('Only a draft or sent-back sheet can be submitted');
-  if (!sheet.lines.length) throw badRequest('Add at least one accessory before submitting');
+  if (!sheet.lines.length && !(sheet.notes ?? '').trim()) throw badRequest('Add the accessories, or write in the notes why this order needs none, before submitting');
   await db.transaction(async (tx) => {
     await tx.update(accessorySheets).set({ status: 'SUBMITTED', preparedById: sheet.preparedById ?? req.user.id }).where(eq(accessorySheets.id, sheet.id));
     await logApproval(tx, sheet.id, 'SUBMITTED', sheet.status, 'SUBMITTED', req.user.id);

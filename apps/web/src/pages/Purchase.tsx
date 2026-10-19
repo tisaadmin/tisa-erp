@@ -47,8 +47,11 @@ export function PoEditor() {
   const so = useGet<any>(sp.get('salesOrderId') && !sheetId ? `/orders/${sp.get('salesOrderId')}` : null);
   const acc = useGet<any>(sheetId ? `/accessory-sheets/${sheetId}` : null);
   const rules = useGet<{ key: string; enabled: boolean }[]>('/settings/workflow');
+  const [soId, setSoId] = useState<string | null>(sp.get('salesOrderId'));
+  const accStatus = useGet<{ required: boolean; ready: boolean; sheet: { id: string; number: string; status: string } | null; toBuy: { itemId: string | null; description: string; unit: string; qty: number; rate: number }[] }>(soId && !sheetId ? `/orders/${soId}/accessories` : null);
   const { can } = useAuth();
   const orderRequired = !!rules.data?.find((r) => r.key === 'poRequiresOrder')?.enabled && !can('purchase_orders:without_order');
+  const accBlocked = !!accStatus.data && !accStatus.data.ready && !can('purchase_orders:without_accessories');
   const [d, setD] = useState({ vendorId: null as string | null, salesOrderId: sp.get('salesOrderId'), deliverToSiteId: null as string | null, date: toInputDate(new Date()), expectedDate: '', terms: '', notes: '', lines: [emptyLine()] as Line[] });
   useEffect(() => {
     const p = existing.data;
@@ -56,9 +59,13 @@ export function PoEditor() {
   }, [existing.data]);
   useEffect(() => {
     // Pre-fill product lines from the sales order (at purchase price via the item master on save).
+    // order items + the approved accessories & consumables not covered by stock
     const o = so.data;
-    if (o && !id) setD((x) => ({ ...x, deliverToSiteId: o.siteId, lines: o.items.filter((l: any) => l.itemId).map((l: any) => ({ itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: 0, discountPct: 0, gstRate: l.gstRate })) }));
-  }, [so.data, id]);
+    if (!o || id || (accStatus.isLoading)) return;
+    const acc = (accStatus.data?.toBuy ?? []).map((a) => ({ itemId: a.itemId, description: a.description, hsnSac: '', unit: a.unit, qty: a.qty, rate: a.rate, discountPct: 0, gstRate: 18 }));
+    setD((x) => ({ ...x, deliverToSiteId: o.siteId, notes: acc.length && !x.notes ? `Includes accessories & consumables from ${accStatus.data?.sheet?.number}` : x.notes,
+      lines: [...o.items.filter((l: any) => l.itemId).map((l: any) => ({ itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: 0, discountPct: 0, gstRate: l.gstRate })), ...acc] }));
+  }, [so.data, accStatus.data, accStatus.isLoading, id]);
   useEffect(() => {
     // From an approved accessory sheet: buy what stores can't cover (required − in stock), at the item's purchase price.
     const s = acc.data;
@@ -83,11 +90,17 @@ export function PoEditor() {
   return (
     <div className="space-y-4">
       <PageHeader back="/purchase-orders" title={id ? `Edit ${existing.data.number}` : 'New purchase order'}
-        actions={<><Button loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" loading={save.isPending} onClick={() => save.mutate(true)}>Submit for approval</Button></>} />
+        actions={<><Button disabled={accBlocked} loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" disabled={accBlocked} loading={save.isPending} onClick={() => save.mutate(true)}>Submit for approval</Button></>} />
+      {accBlocked && (
+        <div className="rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          This order needs an approved <b>accessories &amp; consumables list</b> before material can be ordered{accStatus.data?.sheet ? <> — {accStatus.data.sheet.number} is {accStatus.data.sheet.status.toLowerCase().replace('_', ' ')}</> : ''}.{' '}
+          <Link className="font-medium underline" to={accStatus.data?.sheet ? `/accessories/${accStatus.data.sheet.id}` : `/orders/${d.salesOrderId}`}>{accStatus.data?.sheet ? 'Open the list' : 'Go to the order'}</Link>
+        </div>
+      )}
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
           <Field label="Vendor" required><Combo options={(vendors.data?.data ?? []).map((v) => ({ value: v.id, label: v.name }))} value={d.vendorId} onChange={(v) => setD({ ...d, vendorId: v })} /></Field>
-          <Field label="Against sales order" required={orderRequired} hint={orderRequired ? 'Required — POs are raised against an order form' : undefined}><Combo options={(orders.data?.data ?? []).map((o) => ({ value: o.id, label: o.number, sub: o.client?.name }))} value={d.salesOrderId} onChange={(v) => setD({ ...d, salesOrderId: v })} /></Field>
+          <Field label="Against sales order" required={orderRequired} hint={orderRequired ? 'Required — POs are raised against an order form' : undefined}><Combo options={(orders.data?.data ?? []).map((o) => ({ value: o.id, label: o.number, sub: o.client?.name }))} value={d.salesOrderId} onChange={(v) => { setD({ ...d, salesOrderId: v }); setSoId(v); }} /></Field>
           <Field label="Deliver to site (blank = store)"><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={d.deliverToSiteId} onChange={(v) => setD({ ...d, deliverToSiteId: v })} /></Field>
           <Field label="PO date"><Input type="date" value={d.date} onChange={(e) => setD({ ...d, date: e.target.value })} /></Field>
           <Field label="Expected delivery"><Input type="date" value={d.expectedDate} onChange={(e) => setD({ ...d, expectedDate: e.target.value })} /></Field>

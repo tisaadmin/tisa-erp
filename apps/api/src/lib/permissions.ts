@@ -13,7 +13,7 @@ export const MODULES = {
   quotations: ['view', 'create', 'edit', 'delete', 'approve'],
   orders: ['view', 'create', 'edit', 'delete', 'without_quote'],
   accessories: ['view', 'create', 'edit', 'approve'],
-  purchase_orders: ['view', 'create', 'edit', 'delete', 'approve', 'without_order'],
+  purchase_orders: ['view', 'create', 'edit', 'delete', 'approve', 'without_order', 'without_accessories'],
   grn: ['view', 'create'],
   /** supplier bills (payables) and payments made to vendors */
   vendor_bills: ['view', 'create', 'edit', 'cancel', 'pay'],
@@ -57,7 +57,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: st
   { name: 'Super Admin', description: 'Full access to everything', permissions: ['*'] },
   {
     name: 'Management', description: 'Directors — view everything, approve anything',
-    permissions: ALL_PERMISSIONS.filter((p) => !p.startsWith('roles:edit') && !p.startsWith('users:') && p !== 'records:delete').concat(['users:view']),
+    permissions: ALL_PERMISSIONS.filter((p) => !p.startsWith('roles:edit') && !p.startsWith('users:') && p !== 'records:delete' && p !== 'purchase_orders:without_accessories').concat(['users:view']),
   },
   {
     name: 'Sales', description: 'Leads, clients, quotations, order forms',

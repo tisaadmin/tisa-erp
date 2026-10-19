@@ -157,6 +157,10 @@ test('inter-state client gets IGST', async () => {
 
 test('purchase: PO approval → GRN → stock in', async () => {
   const vendor = (await ok('stores', 'GET', '/vendors')).data[0];
+  // new orders need an approved accessories & consumables list first (tested in full further down) — switched off here
+  const blockedPo = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.cam.id, qty: 20 }] });
+  assert.equal(blockedPo.status, 403); assert.match(blockedPo.data.error, /accessories & consumables list/);
+  await ok('admin', 'PUT', '/settings/workflow', { poRequiresAccessories: false });
   const po = await ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.cam.id, qty: 20 }], submit: true });
   assert.equal(po.status, 'PENDING_APPROVAL');
   assert.equal(po.taxable, 20 * ctx.cam.purchasePrice);
@@ -583,7 +587,7 @@ test('bulk order import: many product-details files matched by SO number; ready 
 
 test('workflow rules: PO / challan need an order, orders need a quote; exceptions by permission; rules can be switched off', async () => {
   const rules = await ok('admin', 'GET', '/settings/workflow');
-  assert.deepEqual(rules.map((r: any) => [r.key, r.enabled]), [['orderRequiresQuote', true], ['poRequiresOrder', true], ['dcRequiresOrder', true]]);
+  assert.deepEqual(rules.map((r: any) => [r.key, r.enabled]), [['orderRequiresQuote', true], ['poRequiresOrder', true], ['poRequiresAccessories', false], ['dcRequiresOrder', true]]);
   const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
   // Purchase & Stores has the "PO without order" exception by default; Management (director) too; Sales has no PO rights at all
   const orderless = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] });
@@ -898,4 +902,36 @@ test('users list hides switched-off users unless asked', async () => {
   assert.ok((await ok('admin', 'GET', '/users?status=inactive')).data.every((x: any) => !x.active));
   assert.ok((await ok('admin', 'GET', '/users?status=inactive')).data.some((x: any) => x.id === u.id));
   assert.ok((await ok('admin', 'GET', '/users?status=all')).data.some((x: any) => x.id === u.id));
+});
+
+test('accessories & consumables list is a required step between the order and its purchase orders', async () => {
+  await ok('admin', 'PUT', '/settings/workflow', { poRequiresAccessories: true });
+  const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
+  // ctx.order's sheet was approved in the accessories test → it is part of the order, and its shortfall prefills the PO
+  const st = await ok('stores', 'GET', `/orders/${ctx.order.id}/accessories`);
+  assert.equal(st.required, true); assert.equal(st.ready, true); assert.equal(st.sheet.status, 'APPROVED');
+  assert.ok(st.sheet.lines.length > 0);
+  assert.ok(Array.isArray(st.toBuy));
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 201);
+  // a brand-new order: blocked until its list is approved; "no accessories needed" is a valid, approved list
+  const o = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
+  let s0 = await ok('stores', 'GET', `/orders/${o.id}/accessories`);
+  assert.equal(s0.ready, false); assert.equal(s0.sheet, null);
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 403);
+  const sheet = await ok('sales', 'POST', `/orders/${o.id}/accessory-sheet`);
+  const full = await ok('sales', 'GET', `/accessory-sheets/${sheet.id}`);
+  await ok('sales', 'PUT', `/accessory-sheets/${sheet.id}`, { notes: '', lines: [] });
+  assert.equal((await call('sales', 'POST', `/accessory-sheets/${sheet.id}/submit`)).status, 400, 'an empty list needs a reason');
+  await ok('sales', 'PUT', `/accessory-sheets/${sheet.id}`, { notes: 'Service-only order, no material', lines: [] });
+  await ok('sales', 'POST', `/accessory-sheets/${sheet.id}/submit`);
+  s0 = await ok('stores', 'GET', `/orders/${o.id}/accessories`);
+  assert.equal(s0.ready, false, 'submitted is not enough');
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 403);
+  await ok('svc', 'POST', `/accessory-sheets/${sheet.id}/decide`, { decision: 'APPROVE' });
+  s0 = await ok('stores', 'GET', `/orders/${o.id}/accessories`);
+  assert.equal(s0.ready, true); assert.equal(s0.toBuy.length, 0);
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 201);
+  void full;
+  // the order value is untouched — the list is internal
+  assert.equal((await ok('sales', 'GET', `/orders/${o.id}`)).total, o.total);
 });

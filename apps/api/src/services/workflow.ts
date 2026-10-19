@@ -18,6 +18,11 @@ export const WORKFLOW_RULES = {
     help: 'Every PO must be linked to a sales order. Purchases for stock or the office need the exception permission.',
     exception: 'purchase_orders:without_order', default: true,
   },
+  poRequiresAccessories: {
+    label: 'Purchase orders only after the accessories & consumables list is approved',
+    help: 'For orders created in the ERP from 19 Oct 2026: work out the order\'s accessories & consumables list and get it approved before material is ordered. Orders imported from FFH are not affected.',
+    exception: 'purchase_orders:without_accessories', default: true,
+  },
   dcRequiresOrder: {
     label: 'Supply delivery challans only against an order form',
     help: 'Material sent to a client as supply must be dispatched against its order. Returnable, job-work and site-transfer challans are not affected.',
@@ -38,3 +43,7 @@ export async function enforceRule(rule: WorkflowRule, user: AuthUser, message: s
   if (can(user, WORKFLOW_RULES[rule].exception)) return;
   throw new HttpError(403, message);
 }
+
+/** Orders created in the ERP from this date on need an approved accessories & consumables list before a PO. */
+export const ACCESSORIES_REQUIRED_FROM = new Date('2026-10-19T00:00:00+05:30');
+export const accessoriesRequiredFor = (order: { sourceRef: string | null; createdAt: Date }) => !order.sourceRef && order.createdAt >= ACCESSORIES_REQUIRED_FROM;

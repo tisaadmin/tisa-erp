@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { and, desc, eq, ilike, inArray, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
-import { goodsReceiptItems, goodsReceipts, items, purchaseOrderItems, purchaseOrders, stockMovements, vendors } from '../db/schema';
+import { accessorySheets, goodsReceiptItems, goodsReceipts, items, purchaseOrderItems, purchaseOrders, salesOrders, stockMovements, vendors } from '../db/schema';
 import { audit } from '../lib/audit';
 import { r3 } from '../lib/gst';
 import { badRequest, notFound, pageParams } from '../lib/http';
@@ -15,7 +15,17 @@ import { lineSchema, priceLines } from '../services/lines';
 import { postStock } from '../services/stock';
 import { sendPdf } from './sales';
 
-import { enforceRule } from '../services/workflow';
+import { accessoriesRequiredFor, enforceRule } from '../services/workflow';
+import type { AuthUser } from '../middleware/auth';
+
+/** Material for a new order is ordered only once its accessories & consumables list is approved. */
+async function requireAccessoryList(orderId: string, user: AuthUser) {
+  const order = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, orderId), columns: { number: true, sourceRef: true, createdAt: true } });
+  if (!order || !accessoriesRequiredFor(order)) return;
+  const sheet = await db.query.accessorySheets.findFirst({ where: eq(accessorySheets.orderId, orderId), columns: { status: true } });
+  if (sheet?.status === 'APPROVED') return;
+  await enforceRule('poRequiresAccessories', user, `${order.number} needs an approved accessories & consumables list before material can be ordered — ${sheet ? `the list is ${sheet.status.toLowerCase().replace('_', ' ')}; get it approved` : 'open the order → Accessories & consumables → Work out accessories, then submit it for approval'}`);
+}
 const r = Router();
 const opt = z.string().trim().nullish().transform((v) => (v === '' ? null : v));
 const qs = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
@@ -65,6 +75,7 @@ r.get('/purchase-orders/:id', requirePerm('purchase_orders:view'), async (req, r
 r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, res) => {
   const d = poSchema.parse(req.body);
   if (!d.salesOrderId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be raised against an order form — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
+  else await requireAccessoryList(d.salesOrderId, req.user);
   const { interState } = await poContext(d.vendorId);
   const company = await getCompany();
   const po = await db.transaction(async (tx) => {
@@ -87,6 +98,7 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
 r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, res) => {
   const d = poSchema.parse(req.body);
   if (!d.salesOrderId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be linked to an order form — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
+  else await requireAccessoryList(d.salesOrderId, req.user);
   const { interState } = await poContext(d.vendorId);
   const po = await db.transaction(async (tx) => {
     const ex = await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id) });

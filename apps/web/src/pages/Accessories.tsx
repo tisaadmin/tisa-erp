@@ -48,27 +48,43 @@ export function AccessorySheetsPage() {
 // ═══════════════════════ On the order page ═══════════════════════
 
 /** Accessories card shown on an order: status of its sheet, or a button to start one. */
+type OrderAcc = { required: boolean; ready: boolean; sheet: null | { id: string; number: string; status: string; notes: string | null; estimatedCost: number; lines: { id: string; itemId: string | null; description: string; unit: string; qty: number; rate: number; inStock: number | null }[] }; toBuy: { description: string; qty: number }[] };
+
+/** The order's accessories & consumables list, shown as part of the order (internal cost — not billed to the client). */
 export function OrderAccessoriesCard({ orderId }: { orderId: string }) {
   const nav = useNavigate();
   const { can } = useAuth();
-  const sheets = useGet<Page<any>>(can('accessories:view') ? '/accessory-sheets' : null, { orderId, pageSize: 5 });
-  const create = useAction(() => api(`/orders/${orderId}/accessory-sheet`, { method: 'POST' }), { invalidate: [['/accessory-sheets']], onSuccess: (s: any) => nav(`/accessories/${s.id}`) });
-  if (!can('accessories:view')) return null;
-  const s = sheets.data?.data[0];
+  const acc = useGet<OrderAcc>(`/orders/${orderId}/accessories`);
+  const create = useAction(() => api(`/orders/${orderId}/accessory-sheet`, { method: 'POST' }), { invalidate: [['/accessory-sheets'], [`/orders/${orderId}/accessories`]], onSuccess: (s: any) => nav(`/accessories/${s.id}`) });
+  const d = acc.data;
+  if (!d) return null;
+  const s = d.sheet;
   return (
-    <Card title="Accessories & consumables">
-      {s ? (
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <Link to={`/accessories/${s.id}`} className="font-medium text-brand-700">{s.number}</Link> <Status s={s.status} />
-          <span className="text-slate-500">{s.lines} lines · est. cost {inr(s.estimatedCost)}</span>
-          <Link to={`/accessories/${s.id}`} className="ml-auto"><Button size="sm">Open</Button></Link>
-        </div>
-      ) : (
-        <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
-          No accessory sheet yet. It is calculated from the accessory templates of the items on this order.
-          {can('accessories:create') && <Button size="sm" variant="primary" className="ml-auto" loading={create.isPending} onClick={() => create.mutate(undefined)}>Work out accessories</Button>}
+    <Card title={<span className="flex items-center gap-2">Accessories &amp; consumables {s && <Status s={s.status} />} <span className="text-xs font-normal text-slate-500">internal — not billed to the client</span></span>}
+      actions={<div className="flex gap-2">
+        {s && <Link to={`/accessories/${s.id}`}><Button size="sm">{['DRAFT', 'REJECTED'].includes(s.status) && can('accessories:edit') ? 'Edit list' : 'Open'}</Button></Link>}
+        {!s && can('accessories:create') && <Button size="sm" variant="primary" loading={create.isPending} onClick={() => create.mutate(undefined)}>Work out accessories</Button>}
+        {d.ready && s?.status === 'APPROVED' && can('purchase_orders:create') && <Link to={`/purchase-orders/new?salesOrderId=${orderId}`}><Button size="sm" variant="primary">Raise PO</Button></Link>}
+      </div>}>
+      {d.required && !d.ready && (
+        <div className="mb-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Step required before ordering material: {s ? <>the list is <b>{s.status.toLowerCase().replace('_', ' ')}</b> — it must be submitted and approved before a purchase order can be raised.</> : <>work out this order's accessories &amp; consumables and get the list approved. Purchase orders for this order are blocked until then.</>}
         </div>
       )}
+      {!s ? <p className="text-sm text-slate-500">No list yet. It is calculated from the accessory templates of the items on this order; adjust it, then submit for approval.</p>
+        : !s.lines.length ? <p className="text-sm text-slate-600">No accessories needed{s.notes ? <> — {s.notes}</> : ''}.</p>
+        : (
+          <div className="overflow-x-auto">
+            <table className="tbl">
+              <thead><tr><th>Accessory / consumable</th><th className="text-right">Qty</th><th className="text-right">In stock</th><th className="text-right">Est. cost</th></tr></thead>
+              <tbody>
+                {s.lines.map((l) => <tr key={l.id}><td>{l.description}</td><td className="num">{l.qty} {l.unit}</td><td className="num">{l.inStock ?? '—'}</td><td className="num">{inr(l.qty * l.rate)}</td></tr>)}
+                <tr><td colSpan={3} className="text-right font-medium">Estimated cost</td><td className="num font-medium">{inr(s.estimatedCost)}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      {s?.status === 'APPROVED' && <p className="mt-2 text-xs text-slate-500">{d.toBuy.length ? `${d.toBuy.length} line${d.toBuy.length > 1 ? 's' : ''} not covered by stock will be added to the next PO for this order.` : 'Stores already holds everything on this list.'}</p>}
     </Card>
   );
 }
@@ -90,7 +106,7 @@ export function AccessorySheetDetail() {
   const itemOpts = useMemo(() => (items.data?.data ?? []).map((i) => ({ value: i.id, label: i.name, sub: [i.sku, i.brand, i.unit].filter(Boolean).join(' · ') })), [items.data]);
   const s = sheet.data;
   const editable = !!s && ['DRAFT', 'REJECTED'].includes(s.status) && can('accessories:edit');
-  const invalidate = [['/accessory-sheets']];
+  const invalidate = [['/accessory-sheets'], [`/orders/${sheet.data?.order?.id}/accessories`]];
   const save = useAction(() => api(`/accessory-sheets/${id}`, { method: 'PUT', body: { notes, lines } }), { success: 'Saved', invalidate });
   const recalc = useAction(() => api(`/accessory-sheets/${id}/recalculate`, { method: 'POST' }), { success: 'Recalculated from the templates', invalidate });
   const submit = useAction(async () => { if (dirty) await api(`/accessory-sheets/${id}`, { method: 'PUT', body: { notes, lines } }); return api(`/accessory-sheets/${id}/submit`, { method: 'POST' }); }, { success: 'Submitted for approval', invalidate });
@@ -123,7 +139,7 @@ export function AccessorySheetDetail() {
         actions={<>
           {editable && <Button icon={<RefreshCw className="size-4" />} loading={recalc.isPending} onClick={() => { if (!dirty || confirm('Recalculate from the templates? Unsaved changes to template lines will be replaced; lines you added are kept.')) recalc.mutate(undefined); }}>Recalculate</Button>}
           {editable && <Button disabled={!dirty} loading={save.isPending} onClick={() => save.mutate(undefined)}>Save</Button>}
-          {editable && <Button variant="primary" disabled={!lines.length} loading={submit.isPending} onClick={() => submit.mutate(undefined)}>Submit for approval</Button>}
+          {editable && <Button variant="primary" disabled={!lines.length && !notes.trim()} loading={submit.isPending} onClick={() => submit.mutate(undefined)}>{lines.length ? 'Submit for approval' : 'Submit: no accessories needed'}</Button>}
           {s.status === 'SUBMITTED' && s.canApprove && <>
             <Button icon={<XCircle className="size-4" />} onClick={() => setDecide('REJECT')}>Send back</Button>
             <Button variant="primary" icon={<CheckCircle2 className="size-4" />} onClick={() => setDecide('APPROVE')}>Approve</Button>
@@ -181,7 +197,7 @@ export function AccessorySheetDetail() {
         </Card>
       ))}
       {!lines.length && !editable && <Card><p className="text-sm text-slate-500">No accessories on this sheet.</p></Card>}
-      {!lines.length && editable && <p className="text-sm text-slate-500">None of this order's items has an accessory template yet. Add accessories by hand, or set up <Link className="text-brand-700 underline" to="/accessories/templates">accessory templates</Link> and press Recalculate.</p>}
+      {!lines.length && editable && <p className="text-sm text-slate-500">None of this order's items has an accessory template yet. Add accessories by hand, or set up <Link className="text-brand-700 underline" to="/accessories/templates">accessory templates</Link> and press Recalculate. If this order truly needs none, write the reason in Notes and submit.</p>}
 
       <Card title="Notes">{editable ? <Textarea rows={3} value={notes} onChange={(e) => { setNotes(e.target.value); setDirty(true); }} /> : <p className="whitespace-pre-wrap text-sm">{s.notes || '—'}</p>}</Card>
 
