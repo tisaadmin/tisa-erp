@@ -1,5 +1,5 @@
 import { FileDown, PackageCheck, Plus } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
 import { emptyLine, LineItemsEditor, type Line } from '../components/LineItems';
@@ -56,7 +56,9 @@ export function PoEditor() {
   const orderRequired = !!rules.data?.find((r) => r.key === 'poRequiresOrder')?.enabled && !can('purchase_orders:without_order');
   const accBlocked = !!accStatus.data && !accStatus.data.ready && !can('purchase_orders:without_accessories');
   const [d, setD] = useState({ vendorId: null as string | null, salesOrderId: sp.get('salesOrderId'), deliverToSiteId: null as string | null, date: toInputDate(new Date()), expectedDate: '', terms: '', notes: '', lines: [emptyLine()] as Line[] });
-  const allowed = useGet<{ itemIds: string[]; restricted: boolean }>(d.salesOrderId ? '/purchase-orders/allowed-items' : null, { salesOrderId: d.salesOrderId });
+  type Allowed = { itemIds: string[]; restricted: boolean; lines: { key: string; itemId: string | null; qty: number; ordered: number; remaining: number }[] };
+  const allowed = useGet<Allowed>(d.salesOrderId ? '/purchase-orders/allowed-items' : null, { salesOrderId: d.salesOrderId, poId: id });
+  const limits = useMemo(() => (allowed.data?.restricted ? Object.fromEntries(allowed.data.lines.filter((l) => l.itemId).map((l) => [l.itemId!, l])) as Record<string, Allowed['lines'][number]> : undefined), [allowed.data]);
   useEffect(() => {
     const p = existing.data;
     if (p) setD({ vendorId: p.vendorId, salesOrderId: p.salesOrderId, deliverToSiteId: p.deliverToSiteId, date: toInputDate(p.date), expectedDate: toInputDate(p.expectedDate), terms: p.terms ?? '', notes: p.notes ?? '', lines: p.items.map((l: any) => ({ ...l })) });
@@ -65,11 +67,12 @@ export function PoEditor() {
     // Pre-fill product lines from the sales order (at purchase price via the item master on save).
     // order items + the approved accessories & consumables not covered by stock
     const o = so.data;
-    if (!o || id || (accStatus.isLoading)) return;
+    if (!o || id || accStatus.isLoading || allowed.isLoading) return;
     const acc = (accStatus.data?.toBuy ?? []).map((a) => ({ itemId: a.itemId, description: a.description, hsnSac: '', unit: a.unit, qty: a.qty, rate: a.rate, discountPct: 0, gstRate: 18 }));
     setD((x) => ({ ...x, deliverToSiteId: o.siteId, notes: acc.length && !x.notes ? `Includes accessories & consumables from ${accStatus.data?.sheet?.number}` : x.notes,
-      lines: [...o.items.filter((l: any) => l.itemId).map((l: any) => ({ itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: 0, discountPct: 0, gstRate: l.gstRate })), ...acc] }));
-  }, [so.data, accStatus.data, accStatus.isLoading, id]);
+      lines: capToOrder([...o.items.filter((l: any) => l.itemId).map((l: any) => ({ itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: 0, discountPct: 0, gstRate: l.gstRate })), ...acc]) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [so.data, accStatus.data, accStatus.isLoading, allowed.isLoading, id]);
   useEffect(() => {
     // From an approved accessory sheet: buy what stores can't cover (required − in stock), at the item's purchase price.
     const s = acc.data;
@@ -90,6 +93,18 @@ export function PoEditor() {
     setD((x) => ({ ...x, deliverToSiteId: rq.req!.siteId, notes: x.notes || `For requisition ${rq.req!.number}${rq.req!.client ? ` (${rq.req!.client.name})` : ''}`, lines: lines.length ? lines : x.lines }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rq.ready]);
+  /** prefilled lines never exceed what is still left to order on the order (earlier POs counted) */
+  function capToOrder(lines: Line[]): Line[] {
+    if (!limits) return lines;
+    const left = new Map(Object.values(limits).map((l) => [l.itemId!, l.remaining]));
+    const out = lines.map((l) => {
+      if (!l.itemId || !left.has(l.itemId)) return l;
+      const q = Math.min(l.qty, left.get(l.itemId)!);
+      left.set(l.itemId, Math.round((left.get(l.itemId)! - q) * 1000) / 1000);
+      return { ...l, qty: q };
+    }).filter((l) => l.qty > 0);
+    return out.length ? out : [emptyLine()];
+  }
   const vendor = vendors.data?.data.find((v) => v.id === d.vendorId);
   const inter = !!vendor?.stateCode && vendor.stateCode !== companyState;
   const save = useAction((submit: boolean) => {
@@ -119,8 +134,8 @@ export function PoEditor() {
         <div className="mt-2 text-xs text-slate-500">Tax: <b>{inter ? 'IGST (inter-state vendor)' : 'CGST + SGST'}</b> · lines with rate 0 take the item's purchase price</div>
       </Card>
       <Card title="Items">
-        {allowed.data?.restricted && <div className="mb-3 rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-800">This PO is against an order — only the order's items and its accessories & consumables can be added. Anything else needs a separate PO.</div>}
-        <LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} priceField="purchasePrice" onlyItemIds={allowed.data?.restricted ? allowed.data.itemIds : undefined} />
+        {allowed.data?.restricted && <div className="mb-3 rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-800">This PO is against an order — only the order's items and its accessories & consumables can be added, up to the quantity still left to order. Anything else needs a separate PO.</div>}
+        <LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} priceField="purchasePrice" onlyItemIds={allowed.data?.restricted ? allowed.data.itemIds : undefined} limits={limits} />
       </Card>
       <Card title="Terms & notes"><div className="grid gap-3 md:grid-cols-2"><Field label="Terms (blank = default)"><Textarea value={d.terms} onChange={(e) => setD({ ...d, terms: e.target.value })} /></Field><Field label="Notes"><Textarea value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} /></Field></div></Card>
     </div>

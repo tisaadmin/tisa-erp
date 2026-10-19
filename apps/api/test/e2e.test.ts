@@ -161,7 +161,11 @@ test('purchase: PO approval → GRN → stock in', async () => {
   const blockedPo = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.cam.id, qty: 20 }] });
   assert.equal(blockedPo.status, 403); assert.match(blockedPo.data.error, /accessories & consumables list/);
   await ok('admin', 'PUT', '/settings/workflow', { poRequiresAccessories: false });
-  const po = await ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.cam.id, qty: 20 }], submit: true });
+  // the order has 10 cameras: stores cannot order 20 against it
+  const over = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.cam.id, qty: 20 }] });
+  assert.equal(over.status, 403); assert.match(over.data.error, /More than the order needs .* 10 left to order/);
+  // the Super Admin has the exception (extra stock bought along with the order)
+  const po = await ok('admin', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.cam.id, qty: 20 }], submit: true });
   assert.equal(po.status, 'PENDING_APPROVAL');
   assert.equal(po.taxable, 20 * ctx.cam.purchasePrice);
   assert.equal((await call('stores', 'POST', '/grns', { poId: po.id, lines: [] })).status, 400);
@@ -602,7 +606,7 @@ test('workflow rules: PO / challan need an order, orders need a quote; exception
   await ok('admin', 'PATCH', `/roles/${storesRole.id}`, { permissions: storesRole.permissions.filter((p: string) => p !== 'purchase_orders:without_order') });
   const blocked = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] });
   assert.equal(blocked.status, 403); assert.match(blocked.data.error, /against an order form/);
-  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 201, 'linked to an order is fine');
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] })).status, 201, 'linked to an order is fine');
   // supply challan without an order: blocked; returnable is allowed
   const sc = await call('stores', 'POST', '/challans', { clientId: ctx.client.id, type: 'SUPPLY', lines: [{ itemId: ctx.cam.id, qty: 1 }] });
   assert.equal(sc.status, 403);
@@ -948,7 +952,7 @@ test('accessories & consumables list is a required step between the order and it
   assert.equal(st.required, true); assert.equal(st.ready, true); assert.equal(st.sheet.status, 'APPROVED');
   assert.ok(st.sheet.lines.length > 0);
   assert.ok(Array.isArray(st.toBuy));
-  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 201);
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] })).status, 201);
   // a brand-new order: blocked until its list is approved; "no accessories needed" is a valid, approved list
   const o = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
   let s0 = await ok('stores', 'GET', `/orders/${o.id}/accessories`);
@@ -971,8 +975,17 @@ test('accessories & consumables list is a required step between the order and it
   assert.equal(extra.status, 403); assert.match(extra.data.error, /not on .* accessories/);
   assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ description: 'Some free text thing', qty: 1, rate: 10 }] })).status, 403, 'free text not on the order');
   const allowedIds = await ok('stores', 'GET', `/purchase-orders/allowed-items?salesOrderId=${o.id}`);
-  assert.deepEqual(allowedIds, { itemIds: [ctx.svcItem.id], restricted: true });
-  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] })).status, 201);
+  assert.deepEqual(allowedIds.itemIds, [ctx.svcItem.id]); assert.equal(allowedIds.restricted, true);
+  assert.equal(allowedIds.lines[0].remaining, 1);
+  // quantity: the order has 1 — 2 is refused, 1 is fine, then nothing is left
+  const tooMany = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.svcItem.id, qty: 2 }] });
+  assert.equal(tooMany.status, 403); assert.match(tooMany.data.error, /1 left to order/);
+  const okPo = await ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
+  assert.equal((await ok('stores', 'GET', `/purchase-orders/allowed-items?salesOrderId=${o.id}`)).lines[0].remaining, 0);
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] })).status, 403, 'already fully ordered');
+  // editing that PO itself does not count its own quantity twice
+  assert.equal((await call('stores', 'PUT', `/purchase-orders/${okPo.id}`, { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] })).status, 200);
+  assert.equal((await ok('stores', 'GET', `/purchase-orders/allowed-items?salesOrderId=${o.id}&poId=${okPo.id}`)).lines[0].remaining, 1);
   // the exception permission (Super Admin / Management) may add other items
   assert.equal((await call('admin', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 201);
   // and the rule can be switched off

@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
-import { and, desc, eq, ilike, inArray, type SQL } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, notInArray, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
 import { accessorySheets, goodsReceiptItems, goodsReceipts, items, purchaseOrderItems, purchaseOrders, salesOrders, stockMovements, vendors } from '../db/schema';
@@ -27,24 +27,51 @@ async function requireAccessoryList(orderId: string, user: AuthUser) {
   if (sheet?.status === 'APPROVED') return;
   await enforceRule('poRequiresAccessories', user, `${order.number} needs an approved accessories & consumables list before material can be ordered — ${sheet ? `the list is ${sheet.status.toLowerCase().replace('_', ' ')}; get it approved` : 'open the order → Accessories & consumables → Work out accessories, then submit it for approval'}`);
 }
-/** What a PO against this order may contain: the order's items + its accessories & consumables list (not a rejected one). */
-export async function orderPurchasable(orderId: string) {
+/**
+ * What a PO against this order may contain: the order's items + its accessories & consumables list (not a rejected one),
+ * up to the quantity on them less what earlier POs for the order (not cancelled / rejected) already carry.
+ * Lines are keyed by inventory item, or by description for free-text lines.
+ */
+export async function orderPurchasable(orderId: string, excludePoId?: string) {
   const order = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, orderId), columns: { id: true, number: true }, with: { items: true } });
   if (!order) throw badRequest('Order not found');
   const sheets = await db.query.accessorySheets.findMany({ where: eq(accessorySheets.orderId, orderId), with: { lines: true } });
   const sheet = sheets.find((x) => x.status === 'APPROVED') ?? sheets.find((x) => x.status !== 'REJECTED');
-  const lines = [...order.items.map((l) => ({ itemId: l.itemId, description: l.description })), ...(sheet?.lines ?? []).map((l) => ({ itemId: l.itemId, description: l.description }))];
-  return { order, itemIds: [...new Set(lines.map((l) => l.itemId).filter((x): x is string => !!x))], descriptions: [...new Set(lines.map((l) => descKey(l.description)).filter(Boolean))] };
+  const need = new Map<string, { qty: number; description: string; itemId: string | null }>();
+  for (const l of [...order.items, ...(sheet?.lines ?? [])]) {
+    const k = lineKey(l);
+    if (!k) continue;
+    const cur = need.get(k);
+    need.set(k, { qty: (cur?.qty ?? 0) + Number(l.qty), description: cur?.description ?? l.description, itemId: l.itemId ?? null });
+  }
+  const pos = await db.query.purchaseOrders.findMany({
+    where: and(eq(purchaseOrders.salesOrderId, orderId), notInArray(purchaseOrders.status, ['CANCELLED', 'REJECTED'])), columns: { id: true }, with: { items: true },
+  });
+  const ordered = new Map<string, number>();
+  for (const po of pos) if (po.id !== excludePoId) for (const l of po.items) { const k = lineKey(l); if (k) ordered.set(k, (ordered.get(k) ?? 0) + Number(l.qty)); }
+  const lines = [...need.entries()].map(([key, v]) => ({ key, ...v, ordered: ordered.get(key) ?? 0, remaining: Math.max(0, r2q(v.qty - (ordered.get(key) ?? 0))) }));
+  return { order, lines, itemIds: lines.map((l) => l.itemId).filter((x): x is string => !!x) };
 }
 const descKey = (s: unknown) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+const lineKey = (l: { itemId?: string | null; description?: string | null }) => (l.itemId ? `i:${l.itemId}` : descKey(l.description) ? `d:${descKey(l.description)}` : '');
+const r2q = (n: number) => Math.round(n * 1000) / 1000;
 
-/** A PO against an order may only carry that order's items and its accessories (workflow rule poOnlyOrderItems). */
-async function requireOrderItemsOnly(orderId: string, lines: { itemId?: string | null; description?: string }[], user: AuthUser) {
-  const allowed = await orderPurchasable(orderId);
-  const ids = new Set(allowed.itemIds), descs = new Set(allowed.descriptions);
-  const extra = lines.filter((l) => (l.itemId ? !ids.has(l.itemId) : !descs.has(descKey(l.description))));
-  if (!extra.length) return;
-  await enforceRule('poOnlyOrderItems', user, `${extra.map((l) => `"${(l.description ?? "item").slice(0, 60)}"`).slice(0, 4).join(', ')}${extra.length > 4 ? ` and ${extra.length - 4} more` : ''} ${extra.length > 1 ? 'are' : 'is'} not on ${allowed.order.number} or its accessories & consumables list — a PO against an order can only have those items. Add it to the accessories list (and get it approved), or raise a separate PO.`);
+/** A PO against an order may only carry that order's items and its accessories, and no more than their quantity (rule poOnlyOrderItems). */
+async function requireOrderItemsOnly(orderId: string, lines: { itemId?: string | null; description?: string; qty: number }[], user: AuthUser, excludePoId?: string) {
+  const allowed = await orderPurchasable(orderId, excludePoId);
+  const byKey = new Map(allowed.lines.map((l) => [l.key, l]));
+  const name = (l: { description?: string }) => `"${(l.description ?? 'item').slice(0, 60)}"`;
+  const extra = lines.filter((l) => !byKey.has(lineKey(l)));
+  if (extra.length) {
+    await enforceRule('poOnlyOrderItems', user, `${extra.map(name).slice(0, 4).join(', ')}${extra.length > 4 ? ` and ${extra.length - 4} more` : ''} ${extra.length > 1 ? 'are' : 'is'} not on ${allowed.order.number} or its accessories & consumables list — a PO against an order can only have those items. Add it to the accessories list (and get it approved), or raise a separate PO.`);
+    return;
+  }
+  const want = new Map<string, number>();
+  for (const l of lines) want.set(lineKey(l), (want.get(lineKey(l)) ?? 0) + Number(l.qty));
+  const over = [...want.entries()].map(([k, q]) => ({ a: byKey.get(k)!, q })).filter(({ a, q }) => q > a.remaining + 1e-9);
+  if (over.length) {
+    await enforceRule('poOnlyOrderItems', user, `More than the order needs — ${over.map(({ a, q }) => `"${a.description.slice(0, 50)}": ${q} on this PO, but ${a.remaining} left to order (${a.qty} on the order${a.ordered ? `, ${a.ordered} already on other POs` : ''})`).slice(0, 4).join('; ')}. Reduce the quantity.`);
+  }
 }
 
 const r = Router();
@@ -87,9 +114,9 @@ r.get('/purchase-orders', requirePerm('purchase_orders:view'), async (req, res) 
 r.get('/purchase-orders/allowed-items', requirePerm('purchase_orders:view'), async (req, res) => {
   const orderId = qs(req.query.salesOrderId);
   if (!orderId) throw badRequest('salesOrderId is required');
-  const a = await orderPurchasable(orderId);
+  const a = await orderPurchasable(orderId, qs(req.query.poId));
   const rules = await workflowRules();
-  res.json({ itemIds: a.itemIds, restricted: rules.poOnlyOrderItems && !can(req.user, 'purchase_orders:extra_items') });
+  res.json({ itemIds: a.itemIds, lines: a.lines, restricted: rules.poOnlyOrderItems && !can(req.user, 'purchase_orders:extra_items') });
 });
 
 r.get('/purchase-orders/:id', requirePerm('purchase_orders:view'), async (req, res) => {
@@ -133,7 +160,7 @@ r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, r
   const d = poSchema.parse(req.body);
   if (!d.salesOrderId && !d.requisitionId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be linked to an order form or an approved requisition — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
   else if (d.salesOrderId) await requireAccessoryList(d.salesOrderId, req.user);
-  if (d.salesOrderId) await requireOrderItemsOnly(d.salesOrderId, d.lines, req.user);
+  if (d.salesOrderId) await requireOrderItemsOnly(d.salesOrderId, d.lines, req.user, req.params.id);
   const { interState } = await poContext(d.vendorId);
   const po = await db.transaction(async (tx) => {
     const ex = await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id) });

@@ -23,9 +23,10 @@ export function totalsOf(lines: Line[], interState: boolean) {
   return { gross: r2(gross), discount: r2(gross - taxable), taxable: r2(taxable), cgst: r2(cgst), sgst: r2(sgst), igst: interState ? r2(tax) : 0, roundOff: r2(total - raw), total };
 }
 
-export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds }: {
+export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds, limits }: {
   lines: Line[]; onChange: (l: Line[]) => void; interState: boolean; priceField?: 'salePrice' | 'purchasePrice';
   /** when set, only these inventory items may be picked (e.g. a PO against an order) */ onlyItemIds?: string[];
+  /** per item: quantity on the order and how much is still left to order */ limits?: Record<string, { qty: number; ordered: number; remaining: number }>;
 }) {
   const items = useItems();
   const stock = useGet<any[]>('/items/stock');
@@ -34,6 +35,8 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
     ? stock.data.map((i) => ({ ...i, category: i.category }))
     : (items.data?.data ?? []).map((i) => ({ ...i, category: i.category?.name ?? null, onHand: null })), [stock.data, items.data]);
   const pickable = useMemo(() => (onlyItemIds ? catalogue.filter((i) => onlyItemIds.includes(i.id)) : catalogue), [catalogue, onlyItemIds]);
+  const used = new Map<string, number>();
+  for (const l of lines) if (l.itemId) used.set(l.itemId, (used.get(l.itemId) ?? 0) + (Number(l.qty) || 0));
   const set = (i: number, patch: Partial<Line>) => onChange(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const t = totalsOf(lines, interState);
   return (
@@ -56,7 +59,10 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
                       onPick={(it) => set(i, { itemId: it.id, description: `${it.name}${it.brand && !it.name.toLowerCase().includes(it.brand.toLowerCase()) ? ` — ${it.brand}` : ''}${it.model && !it.name.toLowerCase().includes(it.model.toLowerCase()) ? ` ${it.model}` : ''}`, hsnSac: it.hsnSac ?? '', unit: it.unit, rate: it[priceField], gstRate: it.gstRate })} />
                   </td>
                   <td><input className="input" value={l.hsnSac ?? ''} onChange={(e) => set(i, { hsnSac: e.target.value })} /></td>
-                  <td><input type="number" min={0} step="any" className="input text-right" value={l.qty} onChange={(e) => set(i, { qty: Number(e.target.value) })} /></td>
+                  <td>
+                    <input type="number" min={0} step="any" className={cx('input text-right', l.itemId && limits?.[l.itemId] && (used.get(l.itemId) ?? 0) > limits[l.itemId].remaining && 'border-red-400 text-red-700')} value={l.qty} onChange={(e) => set(i, { qty: Number(e.target.value) })} />
+                    {l.itemId && limits?.[l.itemId] && <div className={cx('mt-1 text-right text-[11px] leading-tight', (used.get(l.itemId) ?? 0) > limits[l.itemId].remaining ? 'font-medium text-red-600' : 'text-slate-400')}>{limits[l.itemId].remaining} left of {limits[l.itemId].qty}</div>}
+                  </td>
                   <td><input className="input" value={l.unit} onChange={(e) => set(i, { unit: e.target.value })} /></td>
                   <td><input type="number" min={0} step="any" className="input text-right" value={l.rate} onChange={(e) => set(i, { rate: Number(e.target.value) })} /></td>
                   <td><input type="number" min={0} max={100} step="any" className="input text-right" value={l.discountPct} onChange={(e) => set(i, { discountPct: Number(e.target.value) })} /></td>

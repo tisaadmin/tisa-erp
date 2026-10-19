@@ -24,8 +24,8 @@ export const WORKFLOW_RULES = {
     exception: 'purchase_orders:without_accessories', default: true,
   },
   poOnlyOrderItems: {
-    label: 'A PO against an order can only have that order\'s items and its accessories & consumables',
-    help: 'Purchase can order only what is on the order form or its accessories & consumables list. Anything else needs the exception permission (or a separate PO for stock).',
+    label: 'A PO against an order can only have that order\'s items and its accessories & consumables, up to their quantity',
+    help: 'Purchase can order only what is on the order form or its accessories & consumables list, and no more than the quantity there less what earlier POs for the order already carry. Anything else needs the exception permission (or a separate PO for stock).',
     exception: 'purchase_orders:extra_items', default: true,
   },
   dcRequiresOrder: {
