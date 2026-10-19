@@ -1,7 +1,8 @@
 import { FileDown, Mail, Plus } from 'lucide-react';
-import { useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { emptyLine, LineItemsEditor, type Line } from '../components/LineItems';
+import { RequisitionBanner, useRequisition } from '../components/FromRequisition';
 import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Select, Spinner, Stat, Status, Table, Tabs, Textarea } from '../components/ui';
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -68,12 +69,23 @@ export function InvoicesPage() {
 
 export function InvoiceEditor() {
   const nav = useNavigate();
+  const [sp] = useSearchParams();
   const companyState = useCompanyState();
+  const requisitionId = sp.get('requisitionId');
+  const rq = useRequisition(requisitionId);
   const [d, setD] = useState({ type: 'SERVICE', clientId: null as string | null, siteId: null as string | null, stateCode: null as string | null | undefined, date: toInputDate(new Date()), dueDate: '', notes: '', lines: [emptyLine()] as Line[] });
+  useEffect(() => {
+    if (!rq.ready || !rq.req) return;
+    const lines = rq.lines('salePrice');
+    setD((x) => ({ ...x, clientId: rq.req!.clientId, siteId: rq.req!.siteId, notes: x.notes || `Against requisition ${rq.req!.number}`, lines: lines.length ? lines : x.lines }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rq.ready]);
   const inter = !!d.stateCode && d.stateCode !== companyState;
-  const save = useAction(() => api('/invoices', { body: { ...d, dueDate: d.dueDate || null } }), { success: 'Draft invoice created', invalidate: [['/invoices']], onSuccess: (i: any) => nav(`/invoices/${i.id}`) });
+  const save = useAction(() => api('/invoices', { body: { ...d, dueDate: d.dueDate || null, requisitionId } }), { success: 'Draft invoice created', invalidate: [['/invoices']], onSuccess: (i: any) => nav(`/invoices/${i.id}`) });
+  if (rq.loading) return <Spinner />;
   return (
     <div className="space-y-4">
+      <RequisitionBanner req={rq.req} />
       <PageHeader back="/invoices" title="New invoice" actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Save draft</Button>} />
       <Card>
         <div className="grid gap-3 md:grid-cols-5">

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
 import { and, desc, eq, ilike, inArray, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
@@ -35,7 +36,7 @@ const all = (c: (SQL | undefined)[]) => { const x = c.filter((s): s is SQL => !!
 
 const poSchema = z.object({
   vendorId: z.string(), salesOrderId: opt, deliverToSiteId: opt, date: z.coerce.date().optional(), expectedDate: z.coerce.date().nullish(),
-  terms: opt, notes: opt, lines: z.array(lineSchema).min(1), submit: z.boolean().default(false),
+  terms: opt, notes: opt, requisitionId: opt, lines: z.array(lineSchema).min(1), submit: z.boolean().default(false),
 });
 
 async function poContext(vendorId: string) {
@@ -74,18 +75,21 @@ r.get('/purchase-orders/:id', requirePerm('purchase_orders:view'), async (req, r
 
 r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, res) => {
   const d = poSchema.parse(req.body);
-  if (!d.salesOrderId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be raised against an order form — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
-  else await requireAccessoryList(d.salesOrderId, req.user);
+  // an approved requisition is authority enough for a PO, like an order form
+  if (!d.salesOrderId && !d.requisitionId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be raised against an order form or an approved requisition — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
+  else if (d.salesOrderId) await requireAccessoryList(d.salesOrderId, req.user);
   const { interState } = await poContext(d.vendorId);
   const company = await getCompany();
   const po = await db.transaction(async (tx) => {
+    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId) : null;
     const { rows, totals } = await priceLines(tx, d.lines, interState, 'purchasePrice');
     const [po] = await tx.insert(purchaseOrders).values({
       number: await nextNumber(tx, 'PURCHASE_ORDER', d.date), date: d.date ?? new Date(), vendorId: d.vendorId, salesOrderId: d.salesOrderId,
       deliverToSiteId: d.deliverToSiteId, expectedDate: d.expectedDate, terms: d.terms ?? company.poTerms, notes: d.notes, isInterState: interState,
-      ...totals, status: d.submit ? 'PENDING_APPROVAL' : 'DRAFT', createdById: req.user.id,
+      ...totals, status: d.submit ? 'PENDING_APPROVAL' : 'DRAFT', createdById: req.user.id, requisitionId: rq?.id ?? null,
     }).returning();
     await tx.insert(purchaseOrderItems).values(rows.map(({ paymentTerms: _p, ...l }) => ({ ...l, poId: po.id })));
+    if (rq) await markRequisitionUsed(tx, rq, { kind: 'Purchase order', number: po.number }, req.user.id);
     return po;
   });
   if (po.status === 'PENDING_APPROVAL') {
@@ -97,8 +101,8 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
 
 r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, res) => {
   const d = poSchema.parse(req.body);
-  if (!d.salesOrderId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be linked to an order form — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
-  else await requireAccessoryList(d.salesOrderId, req.user);
+  if (!d.salesOrderId && !d.requisitionId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be linked to an order form or an approved requisition — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
+  else if (d.salesOrderId) await requireAccessoryList(d.salesOrderId, req.user);
   const { interState } = await poContext(d.vendorId);
   const po = await db.transaction(async (tx) => {
     const ex = await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id) });

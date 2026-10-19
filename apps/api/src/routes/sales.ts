@@ -1,4 +1,5 @@
 import { Router, type Response } from 'express';
+import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
 import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
@@ -40,7 +41,7 @@ const qs = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
 const quoteSchema = z.object({
   clientId: opt, leadId: opt, siteId: opt, date: z.coerce.date().optional(), validUntil: z.coerce.date().nullish(),
-  subject: opt, placeOfSupply: opt, paymentTerms: termsSchema.nullish(), terms: opt, notes: opt,
+  subject: opt, placeOfSupply: opt, paymentTerms: termsSchema.nullish(), terms: opt, notes: opt, requisitionId: opt,
   lines: z.array(lineSchema).min(1, 'Add at least one line'),
 });
 
@@ -88,13 +89,15 @@ r.post('/quotations', requirePerm('quotations:create'), async (req, res) => {
   validateTerms(d.paymentTerms);
   const company = await getCompany();
   const q = await db.transaction(async (tx) => {
+    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId) : null;
     const { placeOfSupply, interState } = await quoteTaxContext(tx, d);
     const { rows, totals } = await priceLines(tx, d.lines, interState);
     const [q] = await tx.insert(quotations).values({
       number: await nextNumber(tx, 'QUOTATION', d.date), date: d.date ?? new Date(), validUntil: d.validUntil, clientId: d.clientId,
       leadId: d.leadId, siteId: d.siteId, subject: d.subject, placeOfSupply, paymentTerms: d.paymentTerms ?? null,
-      terms: d.terms ?? company.quoteTerms, notes: d.notes, ...totals, createdById: req.user.id,
+      terms: d.terms ?? company.quoteTerms, notes: d.notes, ...totals, createdById: req.user.id, requisitionId: rq?.id ?? null,
     }).returning();
+    if (rq) await markRequisitionUsed(tx, rq, { kind: 'Quotation', number: q.number }, req.user.id);
     await tx.insert(quotationItems).values(rows.map(({ paymentTerms: _pt, ...l }) => ({ ...l, quotationId: q.id })));
     if (d.leadId) await tx.update(leads).set({ status: 'QUOTED' }).where(and(eq(leads.id, d.leadId), inArray(leads.status, ['NEW', 'CONTACTED', 'SITE_SURVEY'])));
     return q;
@@ -275,7 +278,7 @@ r.get('/orders/:id/pdf', requirePerm('orders:view'), async (req, res) => {
 const dcSchema = z.object({
   orderId: opt, clientId: z.string(), siteId: opt, date: z.coerce.date().optional(),
   type: z.enum(['SUPPLY', 'RETURNABLE', 'JOB_WORK', 'SITE_TRANSFER']).default('SUPPLY'),
-  vehicleNo: opt, transporter: opt, ewayBillNo: opt, location: z.string().default('MAIN'), notes: opt,
+  vehicleNo: opt, transporter: opt, ewayBillNo: opt, location: z.string().default('MAIN'), notes: opt, requisitionId: opt,
   lines: z.array(z.object({ orderItemId: opt, itemId: opt, description: opt, unit: opt, qty: z.coerce.number().positive(), serialNos: opt })).min(1),
 });
 
@@ -305,10 +308,12 @@ r.get('/challans/:id', requirePerm('challans:view'), async (req, res) => {
 
 r.post('/challans', requirePerm('challans:create'), async (req, res) => {
   const d = dcSchema.parse(req.body);
-  if (d.type === 'SUPPLY' && !d.orderId) await enforceRule('dcRequiresOrder', req.user, 'A supply delivery challan must be raised against an order form — open the order and use "Delivery challan" (returnable, job-work and site-transfer challans are allowed without one)');
+  // an approved requisition is authority enough for a supply challan, like an order form
+  if (d.type === 'SUPPLY' && !d.orderId && !d.requisitionId) await enforceRule('dcRequiresOrder', req.user, 'A supply delivery challan must be raised against an order form or an approved requisition — open the order (or requisition) and use "Delivery challan" (returnable, job-work and site-transfer challans are allowed without one)');
   const dc = await db.transaction(async (tx) => {
     const client = await tx.query.clients.findFirst({ where: eq(clients.id, d.clientId) });
     if (!client) throw badRequest('Client not found');
+    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId) : null;
     if (d.siteId) {
       const site = await tx.query.sites.findFirst({ where: eq(sites.id, d.siteId) });
       if (!site || site.clientId !== d.clientId) throw badRequest('Site does not belong to this client');
@@ -336,9 +341,10 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
     const number = await nextNumber(tx, 'CHALLAN', d.date);
     const [dc] = await tx.insert(deliveryChallans).values({
       number, date: d.date ?? new Date(), type: d.type, orderId: d.orderId, clientId: d.clientId, siteId: d.siteId, vehicleNo: d.vehicleNo,
-      transporter: d.transporter, ewayBillNo: d.ewayBillNo, location: d.location, notes: d.notes, createdById: req.user.id,
+      transporter: d.transporter, ewayBillNo: d.ewayBillNo, location: d.location, notes: d.notes, createdById: req.user.id, requisitionId: rq?.id ?? null,
     }).returning();
     await tx.insert(deliveryChallanItems).values(lines.map((l) => ({ ...l, challanId: dc.id })));
+    if (rq) await markRequisitionUsed(tx, rq, { kind: 'Delivery challan', number }, req.user.id, lines.map((l) => ({ itemId: l.itemId, description: l.description, qty: l.qty })));
     for (const l of lines) {
       if (l.orderItemId) {
         const ol = byId.get(l.orderItemId)!;

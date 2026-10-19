@@ -1,9 +1,9 @@
 import { Router, type Request } from 'express';
 import fs from 'node:fs';
-import { and, asc, desc, eq, gte, inArray, isNotNull, lte, or, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
-import { attachments, attendance, leaveRequests, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
+import { attachments, attendance, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { istDate, istTime } from '../lib/dates';
 import { absPath, geoStampImage, normaliseUpload, saveBuffer, upload } from '../lib/files';
@@ -297,7 +297,7 @@ r.get('/files-by-path', async (req, res) => {
 
 const reqSchema = z.object({
   type: z.enum(['MATERIAL', 'PENDING_WORK', 'REPAIR']), priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).default('MEDIUM'),
-  siteId: z.string(), ticketId: opt, description: z.string().trim().min(3), requiredBy: z.coerce.date().nullish(),
+  clientId: opt, siteId: opt, ticketId: opt, description: z.string().trim().min(3), requiredBy: z.coerce.date().nullish(),
   items: z.array(z.object({ itemId: opt, description: z.string().min(1), qty: z.coerce.number().positive(), unit: z.string().default('Nos') })).default([]),
   photoIds: z.array(z.string()).default([]),
 });
@@ -308,13 +308,15 @@ r.get('/requisitions', requirePerm('requisitions:view'), async (req, res) => {
     can(req.user, 'requisitions:view_all') ? undefined : eq(requisitions.raisedById, req.user.id),
     qs(req.query.status) ? inArray(requisitions.status, qs(req.query.status)!.split(',')) : undefined,
     qs(req.query.siteId) ? eq(requisitions.siteId, qs(req.query.siteId)!) : undefined,
+    qs(req.query.clientId) ? eq(requisitions.clientId, qs(req.query.clientId)!) : undefined,
+    req.query.unassigned === '1' ? isNull(requisitions.siteId) : undefined,
     qs(req.query.type) ? eq(requisitions.type, qs(req.query.type)!) : undefined,
   ].filter((x): x is SQL => !!x);
   const where = conds.length ? and(...conds) : undefined;
   const [data, total] = await Promise.all([
     db.query.requisitions.findMany({
       where, limit: pageSize, offset, orderBy: [desc(requisitions.createdAt)],
-      with: { site: { columns: { id: true, name: true } }, raisedBy: { columns: { id: true, name: true } }, ticket: { columns: { id: true, number: true } }, items: true },
+      with: { site: { columns: { id: true, name: true } }, client: { columns: { id: true, name: true } }, raisedBy: { columns: { id: true, name: true } }, ticket: { columns: { id: true, number: true } }, items: true },
     }),
     db.$count(requisitions, where),
   ]);
@@ -324,22 +326,34 @@ r.get('/requisitions', requirePerm('requisitions:view'), async (req, res) => {
 r.get('/requisitions/:id', requirePerm('requisitions:view'), async (req, res) => {
   const row = await db.query.requisitions.findFirst({
     where: eq(requisitions.id, req.params.id),
-    with: { site: { with: { client: { columns: { id: true, name: true } } } }, raisedBy: { columns: { id: true, name: true, phone: true } }, ticket: { columns: { id: true, number: true, title: true } }, items: true },
+    with: { site: { columns: { id: true, name: true, clientId: true } }, client: { columns: { id: true, name: true } }, raisedBy: { columns: { id: true, name: true, phone: true } }, ticket: { columns: { id: true, number: true, title: true } }, items: true },
   });
   if (!row) throw notFound('Requisition');
   if (!can(req.user, 'requisitions:view_all') && row.raisedById !== req.user.id) throw forbidden();
-  const photos = await db.query.attachments.findMany({ where: and(eq(attachments.entityType, 'REQUISITION'), eq(attachments.entityId, row.id)) });
-  res.json({ ...row, photos });
+  const [photos, quotes, pos, dcs, invs] = await Promise.all([
+    db.query.attachments.findMany({ where: and(eq(attachments.entityType, 'REQUISITION'), eq(attachments.entityId, row.id)) }),
+    db.select({ id: quotations.id, number: quotations.number, date: quotations.date, total: quotations.total, status: quotations.status }).from(quotations).where(eq(quotations.requisitionId, row.id)),
+    db.select({ id: purchaseOrders.id, number: purchaseOrders.number, date: purchaseOrders.date, total: purchaseOrders.total, status: purchaseOrders.status }).from(purchaseOrders).where(eq(purchaseOrders.requisitionId, row.id)),
+    db.select({ id: deliveryChallans.id, number: deliveryChallans.number, date: deliveryChallans.date, status: deliveryChallans.status }).from(deliveryChallans).where(eq(deliveryChallans.requisitionId, row.id)),
+    db.select({ id: invoices.id, number: invoices.number, date: invoices.date, total: invoices.total, status: invoices.status }).from(invoices).where(eq(invoices.requisitionId, row.id)),
+  ]);
+  const docs = [
+    ...quotes.map((d) => ({ ...d, kind: 'Quotation', link: `/quotations/${d.id}` })), ...pos.map((d) => ({ ...d, kind: 'Purchase order', link: `/purchase-orders/${d.id}` })),
+    ...dcs.map((d) => ({ ...d, total: null, kind: 'Delivery challan', link: `/challans/${d.id}` })), ...invs.map((d) => ({ ...d, kind: 'Invoice', link: `/invoices/${d.id}` })),
+  ].sort((a, b) => +new Date(a.date) - +new Date(b.date));
+  res.json({ ...row, photos, docs });
 });
 
 r.post('/requisitions', requirePerm('requisitions:create'), async (req, res) => {
   const d = reqSchema.parse(req.body);
   if (d.type === 'MATERIAL' && !d.items.length) throw badRequest('Add at least one material line');
-  const site = await db.query.sites.findFirst({ where: eq(sites.id, d.siteId) });
-  if (!site) throw badRequest('Site not found');
+  const site = d.siteId ? await db.query.sites.findFirst({ where: eq(sites.id, d.siteId) }) : null;
+  if (d.siteId && !site) throw badRequest('Site not found');
+  const clientId = site?.clientId ?? d.clientId ?? null;
+  if (clientId && !site && !(await db.query.clients.findFirst({ where: eq(clients.id, clientId), columns: { id: true } }))) throw badRequest('Client not found');
   const row = await db.transaction(async (tx) => {
     const [row] = await tx.insert(requisitions).values({
-      number: await nextNumber(tx, 'REQUISITION'), type: d.type, priority: d.priority, siteId: d.siteId, ticketId: d.ticketId, raisedById: req.user.id,
+      number: await nextNumber(tx, 'REQUISITION'), type: d.type, priority: d.priority, siteId: d.siteId ?? null, clientId, ticketId: d.ticketId, raisedById: req.user.id,
       description: d.description, requiredBy: d.requiredBy,
     }).returning();
     if (d.items.length) await tx.insert(requisitionItems).values(d.items.map((i) => ({ ...i, requisitionId: row.id })));
@@ -348,11 +362,27 @@ r.post('/requisitions', requirePerm('requisitions:create'), async (req, res) => 
     return row;
   });
   await notifyPermission('requisitions:approve', {
-    title: `${d.priority === 'CRITICAL' || d.priority === 'HIGH' ? '⚠ ' : ''}${d.type.replace('_', ' ')} requisition — ${site.name}`,
+    title: `${d.priority === 'CRITICAL' || d.priority === 'HIGH' ? '⚠ ' : ''}${d.type.replace('_', ' ')} requisition — ${site?.name ?? 'site not set'}`,
     body: `${req.user.name}: ${d.description.slice(0, 120)}`, type: 'REQUISITION', link: `/requisitions/${row.id}`, entityType: 'REQUISITION', entityId: row.id,
   }, req.user.id);
   audit(req, 'create', 'requisition', row.id);
   res.status(201).json(row);
+});
+
+/** Office assigns (or corrects) the client / site of a requisition raised without one. */
+r.patch('/requisitions/:id/assign', requirePerm('requisitions:approve'), async (req, res) => {
+  const d = z.object({ clientId: opt, siteId: opt }).parse(req.body);
+  const row = await db.query.requisitions.findFirst({ where: eq(requisitions.id, req.params.id) });
+  if (!row) throw notFound('Requisition');
+  if (row.status === 'REJECTED') throw badRequest('This requisition was rejected');
+  const site = d.siteId ? await db.query.sites.findFirst({ where: eq(sites.id, d.siteId) }) : null;
+  if (d.siteId && !site) throw badRequest('Site not found');
+  if (site && d.clientId && site.clientId !== d.clientId) throw badRequest('That site belongs to a different client');
+  const clientId = site?.clientId ?? d.clientId ?? null;
+  if (!clientId) throw badRequest('Choose the client (and the site if known)');
+  const [u] = await db.update(requisitions).set({ clientId, siteId: site?.id ?? null }).where(eq(requisitions.id, row.id)).returning();
+  audit(req, 'assign', 'requisition', row.id, { clientId, siteId: site?.id ?? null });
+  res.json(u);
 });
 
 const REQ_FLOW: Record<string, { from: string[]; to: string }> = {

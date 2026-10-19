@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
 import { randomBytes } from 'node:crypto';
 import { and, desc, eq, gt, ilike, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
@@ -59,13 +60,14 @@ r.get('/invoices/:id', requirePerm('invoices:view'), async (req, res) => {
 const manualSchema = z.object({
   type: z.enum(['TAX_INVOICE', 'SERVICE', 'AMC', 'PROFORMA']).default('TAX_INVOICE'),
   clientId: z.string(), siteId: opt, amcId: opt, ticketId: opt, date: z.coerce.date().optional(), dueDate: z.coerce.date().nullish(),
-  notes: opt, terms: opt, lines: z.array(lineSchema).min(1),
+  notes: opt, terms: opt, requisitionId: opt, lines: z.array(lineSchema).min(1),
 });
 
 r.post('/invoices', requirePerm('invoices:create'), async (req, res) => {
   const d = manualSchema.parse(req.body);
   const inv = await db.transaction(async (tx) => {
     const ctx = await resolvePlaceOfSupply(tx, d.clientId, d.siteId);
+    const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId) : null;
     if (d.amcId) {
       const amc = await tx.query.amcContracts.findFirst({ where: eq(amcContracts.id, d.amcId) });
       if (!amc || amc.clientId !== d.clientId) throw badRequest('AMC does not belong to this client');
@@ -75,9 +77,10 @@ r.post('/invoices', requirePerm('invoices:create'), async (req, res) => {
     const [inv] = await tx.insert(invoices).values({
       number: draftNo(), type: d.type, date, dueDate: d.dueDate ?? addDays(date, ctx.client.paymentTermsDays), clientId: d.clientId, siteId: d.siteId,
       amcId: d.amcId, ticketId: d.ticketId, placeOfSupply: ctx.placeOfSupply, isInterState: ctx.isInterState, billingGstin: ctx.billingGstin,
-      notes: d.notes, terms: d.terms, ...totals, createdById: req.user.id,
+      notes: d.notes, terms: d.terms, ...totals, createdById: req.user.id, requisitionId: rq?.id ?? null,
     }).returning();
     await tx.insert(invoiceItems).values(rows.map(({ paymentTerms: _p, ...l }) => ({ ...l, invoiceId: inv.id })));
+    if (rq) await markRequisitionUsed(tx, rq, { kind: 'Draft invoice', number: inv.number }, req.user.id);
     return inv;
   });
   audit(req, 'create', 'invoice', inv.id);

@@ -30,6 +30,7 @@ const REFS = {
   clients: [
     ref('Sites', sites, sites.clientId), ref('Leads', leads, leads.convertedClientId), ref('Quotations', quotations, quotations.clientId),
     ref('Orders', salesOrders, salesOrders.clientId), ref('Delivery challans', deliveryChallans, deliveryChallans.clientId),
+    ref('Requisitions', requisitions, requisitions.clientId),
     ref('AMC contracts', amcContracts, amcContracts.clientId), ref('Invoices', invoices, invoices.clientId), ref('Tickets', tickets, tickets.clientId),
   ],
   sites: [

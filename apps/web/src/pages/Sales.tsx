@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
 import { emptyLine, LineItemsEditor, PaymentTermsEditor, Totals, type Line, type Term } from '../components/LineItems';
+import { RequisitionBanner, useRequisition } from '../components/FromRequisition';
 import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Select, Spinner, Status, Table, Textarea, cx } from '../components/ui';
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -70,19 +71,28 @@ export function QuotationEditor() {
   const companyState = useCompanyState();
   const existing = useGet<any>(id ? `/quotations/${id}` : null);
   const leads = useGet<Page<any>>('/leads', { pageSize: 500 });
+  const requisitionId = id ? null : sp.get('requisitionId');
+  const rq = useRequisition(requisitionId);
   const [d, setD] = useState<DocState>({ clientId: sp.get('clientId'), siteId: null, leadId: sp.get('leadId'), date: toInputDate(new Date()), validUntil: toInputDate(new Date(Date.now() + 30 * 864e5)), lines: [emptyLine()], paymentTerms: [{ stage: 'ADVANCE', percent: 50 }, { stage: 'DELIVERY', percent: 40 }, { stage: 'COMMISSIONING', percent: 10 }], useTerms: true });
   useEffect(() => {
     const q = existing.data;
     if (q) setD({ clientId: q.clientId, siteId: q.siteId, leadId: q.leadId, date: toInputDate(q.date), validUntil: toInputDate(q.validUntil), subject: q.subject ?? '', terms: q.terms ?? '', notes: q.notes ?? '', lines: linesFrom(q.items), paymentTerms: q.paymentTerms ?? [], useTerms: !!q.paymentTerms, stateCode: q.placeOfSupply });
   }, [existing.data]);
+  useEffect(() => {
+    if (!rq.ready || !rq.req) return;
+    const lines = rq.lines('salePrice');
+    setD((x) => ({ ...x, clientId: rq.req!.clientId, siteId: rq.req!.siteId, subject: x.subject || rq.req!.description.split('\n')[0].slice(0, 120), lines: lines.length ? lines : x.lines }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rq.ready]);
   const inter = !!d.stateCode && d.stateCode !== companyState;
   const save = useAction((submit: boolean) => {
-    const body = { clientId: d.clientId, siteId: d.siteId, leadId: d.leadId, date: d.date, validUntil: d.validUntil || null, subject: d.subject, terms: d.terms || undefined, notes: d.notes, lines: d.lines, paymentTerms: d.useTerms ? d.paymentTerms : null };
+    const body = { clientId: d.clientId, siteId: d.siteId, leadId: d.leadId, date: d.date, validUntil: d.validUntil || null, subject: d.subject, terms: d.terms || undefined, notes: d.notes, lines: d.lines, paymentTerms: d.useTerms ? d.paymentTerms : null, requisitionId };
     return (id ? api(`/quotations/${id}`, { method: 'PUT', body }) : api('/quotations', { body })).then(async (q: any) => { if (submit) await api(`/quotations/${q.id}/status`, { body: { status: 'PENDING_APPROVAL' } }); return q; });
   }, { success: 'Quotation saved', invalidate: [['/quotations']], onSuccess: (q: any) => nav(`/quotations/${q.id}`) });
-  if (id && !existing.data) return <Spinner />;
+  if ((id && !existing.data) || rq.loading) return <Spinner />;
   return (
     <div className="space-y-4">
+      <RequisitionBanner req={rq.req} />
       <PageHeader back="/quotations" title={id ? `Edit ${existing.data.number}` : 'New quotation'}
         actions={<><Button loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" loading={save.isPending} onClick={() => save.mutate(true)}>Save & submit for approval</Button></>} />
       <Card>
@@ -417,6 +427,8 @@ export function NewChallan() {
   const nav = useNavigate();
   const orderId = sp.get('orderId');
   const order = useGet<any>(orderId ? `/orders/${orderId}` : null);
+  const requisitionId = orderId ? null : sp.get('requisitionId');
+  const rq = useRequisition(requisitionId);
   const [h, setH] = useState({ clientId: null as string | null, siteId: null as string | null, type: 'SUPPLY', vehicleNo: '', transporter: '', ewayBillNo: '', notes: '' });
   const [lines, setLines] = useState<{ orderItemId?: string; description: string; unit: string; pending?: number; qty: number; serialNos: string; itemId?: string | null }[]>([]);
   useEffect(() => {
@@ -426,11 +438,18 @@ export function NewChallan() {
       setLines(o.items.filter((l: any) => l.qty - l.deliveredQty > 0).map((l: any) => ({ orderItemId: l.id, itemId: l.itemId, description: l.description, unit: l.unit, pending: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, qty: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, serialNos: '' })));
     }
   }, [order.data]);
-  const save = useAction(() => api('/challans', { body: { ...h, orderId, lines: lines.filter((l) => l.qty > 0).map((l) => ({ orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos })) } }),
+  useEffect(() => {
+    if (!rq.ready || !rq.req) return;
+    setH((x) => ({ ...x, clientId: rq.req!.clientId, siteId: rq.req!.siteId, notes: x.notes || `Against requisition ${rq.req!.number}` }));
+    setLines(rq.lines('salePrice', true).map((l) => ({ itemId: l.itemId, description: l.description, unit: l.unit, pending: l.qty, qty: l.qty, serialNos: '' })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rq.ready]);
+  const save = useAction(() => api('/challans', { body: { ...h, orderId, requisitionId, lines: lines.filter((l) => l.qty > 0).map((l) => ({ orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos })) } }),
     { success: 'Challan created — stock updated', invalidate: [['/challans'], ['/orders'], ['/items']], onSuccess: (dc: any) => nav(`/challans/${dc.id}`) });
-  if (orderId && !order.data) return <Spinner />;
+  if ((orderId && !order.data) || rq.loading) return <Spinner />;
   return (
     <div className="space-y-4">
+      <RequisitionBanner req={rq.req} />
       <PageHeader back={orderId ? `/orders/${orderId}` : '/challans'} title="New delivery challan" subtitle={order.data && `Against order ${order.data.number} · ${order.data.client.name}`}
         actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Dispatch</Button>} />
       <Card>

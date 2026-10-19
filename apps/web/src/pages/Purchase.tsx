@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
 import { emptyLine, LineItemsEditor, type Line } from '../components/LineItems';
+import { RequisitionBanner, useRequisition } from '../components/FromRequisition';
 import { Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Select, Spinner, Status, Table, Textarea } from '../components/ui';
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -44,6 +45,8 @@ export function PoEditor() {
   const orders = useGet<Page<any>>('/orders', { pageSize: 200, status: '' });
   const existing = useGet<any>(id ? `/purchase-orders/${id}` : null);
   const sheetId = sp.get('accessorySheetId');
+  const requisitionId = id ? null : sp.get('requisitionId');
+  const rq = useRequisition(requisitionId);
   const so = useGet<any>(sp.get('salesOrderId') && !sheetId ? `/orders/${sp.get('salesOrderId')}` : null);
   const acc = useGet<any>(sheetId ? `/accessory-sheets/${sheetId}` : null);
   const rules = useGet<{ key: string; enabled: boolean }[]>('/settings/workflow');
@@ -80,15 +83,22 @@ export function PoEditor() {
       .map((x) => ({ itemId: x.itemId, description: x.description, hsnSac: '', unit: x.unit, qty: x.qty, rate: x.rate, discountPct: 0, gstRate: 18 }));
     setD((p) => ({ ...p, salesOrderId: s.order.id, deliverToSiteId: s.order.site?.id ?? null, notes: `Accessories for ${s.order.number} (${s.number})`, lines: lines.length ? lines : [emptyLine()] }));
   }, [acc.data, id]);
+  useEffect(() => {
+    if (!rq.ready || !rq.req) return;
+    const lines = rq.lines('purchasePrice', true);
+    setD((x) => ({ ...x, deliverToSiteId: rq.req!.siteId, notes: x.notes || `For requisition ${rq.req!.number}${rq.req!.client ? ` (${rq.req!.client.name})` : ''}`, lines: lines.length ? lines : x.lines }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rq.ready]);
   const vendor = vendors.data?.data.find((v) => v.id === d.vendorId);
   const inter = !!vendor?.stateCode && vendor.stateCode !== companyState;
   const save = useAction((submit: boolean) => {
-    const body = { ...d, expectedDate: d.expectedDate || null, terms: d.terms || undefined, submit, lines: d.lines.map((l) => ({ ...l, rate: l.rate || undefined })) };
+    const body = { ...d, requisitionId: requisitionId ?? undefined, expectedDate: d.expectedDate || null, terms: d.terms || undefined, submit, lines: d.lines.map((l) => ({ ...l, rate: l.rate || undefined })) };
     return id ? api(`/purchase-orders/${id}`, { method: 'PUT', body }) : api('/purchase-orders', { body });
   }, { success: 'PO saved', invalidate: [['/purchase-orders']], onSuccess: (p: any) => nav(`/purchase-orders/${p.id}`) });
-  if (id && !existing.data) return <Spinner />;
+  if ((id && !existing.data) || rq.loading) return <Spinner />;
   return (
     <div className="space-y-4">
+      <RequisitionBanner req={rq.req} />
       <PageHeader back="/purchase-orders" title={id ? `Edit ${existing.data.number}` : 'New purchase order'}
         actions={<><Button disabled={accBlocked} loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" disabled={accBlocked} loading={save.isPending} onClick={() => save.mutate(true)}>Submit for approval</Button></>} />
       {accBlocked && (

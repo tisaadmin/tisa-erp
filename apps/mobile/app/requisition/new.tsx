@@ -16,7 +16,7 @@ export default function NewRequisition() {
   const [photos, setPhotos] = useState<{ id: string; uri: string }[]>([]);
   const { busy, run } = useRun();
   const addPhoto = () => run(async () => {
-    if (!d.siteId) throw new Error('Pick the site first');
+    if (!d.siteId) throw new Error('Pick the site first — photos are stamped against a site');
     const uri = await takePhoto();
     if (!uri) return;
     const fix = await getFix();
@@ -31,7 +31,7 @@ export default function NewRequisition() {
     <Screen>
       <Field label="Type"><Chips options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} value={d.type} onChange={(type) => setD({ ...d, type })} /></Field>
       <Field label="Priority"><Chips options={['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']} value={d.priority} onChange={(priority) => setD({ ...d, priority })} /></Field>
-      <Field label="Site"><Picker items={sites.data?.data ?? []} value={d.siteId} onChange={(x) => setD({ ...d, siteId: x.id })} getLabel={(x) => x.name} getSub={(x) => x.client?.name} /></Field>
+      <Field label="Site (leave blank if not known — the office will assign it)"><Picker items={sites.data?.data ?? []} value={d.siteId} onChange={(x) => setD({ ...d, siteId: x.id })} getLabel={(x) => x.name} getSub={(x) => x.client?.name} /></Field>
       <Field label="What is needed / pending?"><Input multiline value={d.description} onChangeText={(description) => setD({ ...d, description })} /></Field>
       {d.type === 'MATERIAL' && (
         <Card title="Materials" right={<Pressable onPress={() => setLines([...lines, { description: '', qty: '1', unit: 'Nos' }])}><Ionicons name="add-circle" size={24} color={C.brand} /></Pressable>}>

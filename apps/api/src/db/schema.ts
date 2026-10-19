@@ -346,6 +346,8 @@ export const quotations = pgTable('quotations', {
   ...totals(),
   createdById: text(),
   approvedById: text(),
+  /** raised from this requisition (site request) */
+  requisitionId: text(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -459,6 +461,8 @@ export const purchaseOrders = pgTable('purchase_orders', {
   ...totals(),
   createdById: text(),
   approvedById: text(),
+  /** raised from this requisition (site request) */
+  requisitionId: text(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -558,6 +562,8 @@ export const deliveryChallans = pgTable('delivery_challans', {
   notes: text(),
   sourceRef: text(), // imported from the old ERP (history — no stock or delivered qty was moved)
   createdById: text(),
+  /** raised from this requisition (site request) */
+  requisitionId: text(),
   createdAt: createdAt(),
 });
 
@@ -617,6 +623,8 @@ export const invoices = pgTable('invoices', {
   amountPaid: money().notNull().default(0),
   sourceRef: text(), // imported from the old ERP
   createdById: text(),
+  /** raised from this requisition (site request) */
+  requisitionId: text(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -782,7 +790,9 @@ export const requisitions = pgTable('requisitions', {
   number: text().notNull().unique(),
   type: text().notNull(), // MATERIAL, PENDING_WORK, REPAIR
   priority: text().notNull().default('MEDIUM'),
-  siteId: text().notNull().references(() => sites.id),
+  /** may be raised before the site is known — the office assigns the client / site */
+  clientId: text().references(() => clients.id),
+  siteId: text().references(() => sites.id),
   ticketId: text().references(() => tickets.id),
   raisedById: text().notNull().references(() => users.id),
   description: text().notNull(),
@@ -970,6 +980,7 @@ export const attendanceRel = relations(attendance, ({ one }) => ({
 }));
 export const requisitionsRel = relations(requisitions, ({ one, many }) => ({
   site: one(sites, { fields: [requisitions.siteId], references: [sites.id] }),
+  client: one(clients, { fields: [requisitions.clientId], references: [clients.id] }),
   ticket: one(tickets, { fields: [requisitions.ticketId], references: [tickets.id] }),
   raisedBy: one(users, { fields: [requisitions.raisedById], references: [users.id] }),
   items: many(requisitionItems),

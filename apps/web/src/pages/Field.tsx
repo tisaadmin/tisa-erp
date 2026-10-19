@@ -9,6 +9,7 @@ import { useAuth } from '../lib/auth';
 import { fmtDate, fmtDateTime, fmtTime, inr, label, qty, today } from '../lib/format';
 import { useAction, useGet, useItems, useSites, type Page } from '../lib/hooks';
 import { PhotoGrid } from './Service';
+import { PartyPicker } from './Sales';
 
 // ═══════════════════════ Attendance ═══════════════════════
 
@@ -145,11 +146,12 @@ export function RequisitionsPage() {
         <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
           <Select className="w-56" value={q.status} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} options={[{ value: 'PENDING,APPROVED,IN_PROGRESS', label: 'Open' }, ...['PENDING', 'APPROVED', 'IN_PROGRESS', 'FULFILLED', 'REJECTED'].map((s) => ({ value: s, label: label(s) }))]} placeholder="All" />
           <Select className="w-44" value={q.type ?? ''} onChange={(e) => setQ({ ...q, type: e.target.value, page: 1 })} options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} placeholder="All types" />
+          <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={q.unassigned === '1'} onChange={(e) => setQ({ ...q, unassigned: e.target.checked ? '1' : '', page: 1 })} /> Site not assigned</label>
         </div>
         <Table rows={list.data?.data} to={(r) => `/requisitions/${r.id}`} cols={[
           { key: 'number', label: 'Number', render: (r) => <>{r.number}<div className="text-xs font-normal text-slate-400">{fmtDateTime(r.createdAt)}</div></> },
           { key: 'type', label: 'Type', render: (r) => <Badge t={r.type === 'MATERIAL' ? 'blue' : r.type === 'REPAIR' ? 'red' : 'violet'}>{label(r.type)}</Badge> },
-          { key: 'site', label: 'Site', render: (r) => <>{r.site?.name}{r.ticket && <div className="text-xs text-slate-400">{r.ticket.number}</div>}</> },
+          { key: 'site', label: 'Client / site', render: (r) => <>{r.client?.name ?? <Badge t="amber">Not assigned</Badge>}<div className="text-xs text-slate-400">{r.site?.name ?? (r.client ? 'site not set' : '')}{r.ticket && ` · ${r.ticket.number}`}</div></> },
           { key: 'description', label: 'Request', render: (r) => <span className="line-clamp-2 max-w-sm">{r.description}{!!r.items.length && <span className="text-slate-400"> · {r.items.length} item(s)</span>}</span> },
           { key: 'by', label: 'Raised by', render: (r) => r.raisedBy?.name }, { key: 'priority', label: 'Priority', render: (r) => <Status s={r.priority} /> },
           { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
@@ -161,7 +163,7 @@ export function RequisitionsPage() {
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="Type"><Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} /></Field>
             <Field label="Priority"><Select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} options={['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']} /></Field>
-            <Field label="Site"><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={form.siteId} onChange={(v) => setForm({ ...form, siteId: v })} /></Field>
+            <Field label="Site" hint="Leave blank if not known — assign it later"><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={form.siteId} onChange={(v) => setForm({ ...form, siteId: v })} /></Field>
           </div>
           <Field label="Description"><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           {form.type === 'MATERIAL' && <div className="space-y-2">
@@ -185,22 +187,53 @@ export function RequisitionDetail() {
   const { can } = useAuth();
   const { data: r } = useGet<any>(`/requisitions/${id}`);
   const [note, setNote] = useState('');
+  const [assign, setAssign] = useState<{ clientId: string | null; siteId: string | null } | null>(null);
   const act = useAction((a: string) => api(`/requisitions/${id}/${a}`, { body: { note } }), { success: 'Updated — requester notified', invalidate: [['/requisitions']], onSuccess: () => setNote('') });
+  const doAssign = useAction(() => api(`/requisitions/${id}/assign`, { method: 'PATCH', body: assign }), { success: 'Client / site assigned', invalidate: [['/requisitions']], onSuccess: () => setAssign(null) });
   if (!r) return <Spinner />;
   const actions: [string, string, any][] = r.status === 'PENDING' ? [['approve', 'Approve', 'success'], ['reject', 'Reject', 'danger']] : r.status === 'APPROVED' ? [['start', 'Mark in progress', 'secondary'], ['fulfil', 'Mark fulfilled', 'success'], ['reject', 'Reject', 'danger']] : r.status === 'IN_PROGRESS' ? [['fulfil', 'Mark fulfilled', 'success']] : [];
+  const usable = ['APPROVED', 'IN_PROGRESS', 'FULFILLED'].includes(r.status);
+  const q = `?requisitionId=${r.id}`;
+  const convert: [string, string, string][] = [
+    ['quotations:create', 'Make quotation', `/quotations/new${q}`], ['purchase_orders:create', 'Raise PO', `/purchase-orders/new${q}`],
+    ['challans:create', 'Delivery challan', `/challans/new${q}`], ['invoices:create', 'Invoice', `/invoices/new${q}`],
+  ];
+  const canConvert = convert.filter(([p]) => can(p));
   return (
     <div className="space-y-4">
-      <PageHeader back="/requisitions" title={<>{r.number} <Status s={r.status} /></>} subtitle={`${label(r.type)} · ${r.site.client.name} · ${r.site.name}`}
+      <PageHeader back="/requisitions" title={<>{r.number} <Status s={r.status} /></>} subtitle={`${label(r.type)} · ${r.client?.name ?? 'client not assigned'}${r.site ? ` · ${r.site.name}` : ''}`}
         actions={can('requisitions:approve') && actions.length > 0 && <>
           <Input className="w-56" placeholder="Note to requester" value={note} onChange={(e) => setNote(e.target.value)} />
           {actions.map(([a, l, v]) => <Button key={a} variant={v} loading={act.isPending} onClick={() => act.mutate(a)}>{l}</Button>)}
         </>} />
+      {(!r.client || !r.site) && r.status !== 'REJECTED' && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          {r.client ? 'No site on this requisition yet.' : 'This requisition has no client or site yet.'} Assign it so it can be quoted, ordered, delivered or billed.
+          {can('requisitions:approve') && <Button size="sm" onClick={() => setAssign({ clientId: r.clientId, siteId: r.siteId })}>Assign client / site</Button>}
+        </div>
+      )}
+      {canConvert.length > 0 && r.status !== 'REJECTED' && (
+        <Card title="Convert this requisition">
+          {!usable ? <p className="text-sm text-slate-500">Approve the requisition first; then it can be turned into a quotation, PO, delivery challan or invoice.</p>
+            : !r.client ? <p className="text-sm text-slate-500">Assign the client first.</p>
+            : <div className="flex flex-wrap items-center gap-2">
+              {canConvert.map(([p, l, to]) => <Link key={p} to={to}><Button variant={p === 'quotations:create' ? 'primary' : undefined}>{l}</Button></Link>)}
+              <span className="text-sm text-slate-500">Client, site and items fill in; each document stays linked here.</span>
+            </div>}
+        </Card>
+      )}
       <Card><KV cols={4} items={[['Raised by', `${r.raisedBy.name}${r.raisedBy.phone ? ` · ${r.raisedBy.phone}` : ''}`], ['Raised at', fmtDateTime(r.createdAt)], ['Priority', <Status s={r.priority} />], ['Required by', fmtDate(r.requiredBy)],
+        ['Client', r.client?.name ?? '—'], ['Site', r.site?.name ?? '—'],
         ['Ticket', r.ticket ? <Link className="text-brand-700" to={`/tickets/${r.ticket.id}`}>{r.ticket.number}</Link> : null], ['Action note', r.actionNote], ['Actioned', fmtDateTime(r.actionAt)]]} />
-        <p className="mt-4 text-sm whitespace-pre-line">{r.description}</p></Card>
-      {!!r.items.length && <Card title="Materials" pad={false}><Table rows={r.items} cols={[{ key: 'description', label: 'Item' }, { key: 'qty', label: 'Qty', num: true, render: (i: any) => `${qty(i.qty)} ${i.unit}` }]} /></Card>}
+        <p className="mt-4 text-sm whitespace-pre-line">{r.description}</p>
+        {can('requisitions:approve') && r.client && r.site && r.status !== 'REJECTED' && <button className="mt-2 text-xs text-brand-700 underline" onClick={() => setAssign({ clientId: r.clientId, siteId: r.siteId })}>Change client / site</button>}
+      </Card>
+      {!!r.items.length && <Card title="Materials" pad={false}><Table rows={r.items} cols={[{ key: 'description', label: 'Item' }, { key: 'qty', label: 'Requested', num: true, render: (i: any) => `${qty(i.qty)} ${i.unit}` }, { key: 'issuedQty', label: 'Sent on challans', num: true, render: (i: any) => <span className={i.issuedQty >= i.qty ? 'text-emerald-700' : ''}>{qty(i.issuedQty)}</span> }]} /></Card>}
+      {!!r.docs?.length && <Card title="Documents raised from this requisition" pad={false}><Table rows={r.docs} to={(d: any) => d.link} cols={[{ key: 'kind', label: 'Document' }, { key: 'number', label: 'Number' }, { key: 'date', label: 'Date', render: (d: any) => fmtDate(d.date) }, { key: 'total', label: 'Value', num: true, render: (d: any) => (d.total != null ? inr(d.total) : '—') }, { key: 'status', label: 'Status', render: (d: any) => <Status s={d.status} /> }]} /></Card>}
       {!!r.photos.length && <Card title="Photos"><PhotoGrid photos={r.photos} /></Card>}
-      {can('purchase_orders:create') && r.type === 'MATERIAL' && r.status === 'APPROVED' && <p className="text-sm text-slate-500">Tip: issue from stock with a delivery challan to the site, or <Link className="text-brand-700" to="/purchase-orders/new">raise a PO</Link> if not in stock.</p>}
+      <Modal open={!!assign} onClose={() => setAssign(null)} title="Assign client / site" footer={<><Button onClick={() => setAssign(null)}>Cancel</Button><Button variant="primary" disabled={!assign?.clientId} loading={doAssign.isPending} onClick={() => doAssign.mutate(undefined)}>Save</Button></>}>
+        {assign && <div className="grid gap-3 sm:grid-cols-2"><PartyPicker clientId={assign.clientId} siteId={assign.siteId} onChange={(v) => setAssign({ clientId: v.clientId, siteId: v.siteId })} /></div>}
+      </Modal>
     </div>
   );
 }

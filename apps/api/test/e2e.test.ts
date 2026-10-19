@@ -935,3 +935,47 @@ test('accessories & consumables list is a required step between the order and it
   // the order value is untouched — the list is internal
   assert.equal((await ok('sales', 'GET', `/orders/${o.id}`)).total, o.total);
 });
+
+test('requisitions: raised without a site, assigned later, then converted into quotation / PO / challan / invoice, all linked', async () => {
+  const r0 = await ok('tech', 'POST', '/requisitions', { type: 'MATERIAL', priority: 'HIGH', description: 'Need cameras for extension at new block', items: [{ itemId: ctx.cam.id, description: '2MP IP Dome', qty: 3, unit: 'Nos' }] });
+  assert.equal(r0.siteId, null); assert.equal(r0.clientId, null);
+  const unassigned = await ok('svc', 'GET', '/requisitions?unassigned=1');
+  assert.ok(unassigned.data.some((x: any) => x.id === r0.id));
+  // not approved yet → cannot convert
+  assert.equal((await call('sales', 'POST', '/quotations', { clientId: ctx.client.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] })).status, 400);
+  // assign client first, then the site (site must belong to that client)
+  await ok('svc', 'PATCH', `/requisitions/${r0.id}/assign`, { clientId: ctx.client.id });
+  const other = (await ok('admin', 'GET', '/sites?pageSize=200')).data.find((s: any) => s.clientId !== ctx.client.id);
+  assert.equal((await call('svc', 'PATCH', `/requisitions/${r0.id}/assign`, { clientId: ctx.client.id, siteId: other.id })).status, 400);
+  await ok('svc', 'PATCH', `/requisitions/${r0.id}/assign`, { siteId: ctx.site.id });
+  await ok('svc', 'POST', `/requisitions/${r0.id}/approve`, { note: 'ok' });
+  // quotation from it
+  const q = await ok('sales', 'POST', '/quotations', { clientId: ctx.client.id, siteId: ctx.site.id, requisitionId: r0.id, subject: 'Extension cameras', lines: [{ itemId: ctx.cam.id, qty: 3 }] });
+  assert.equal(q.requisitionId, r0.id);
+  let r = await ok('svc', 'GET', `/requisitions/${r0.id}`);
+  assert.equal(r.status, 'IN_PROGRESS');
+  // wrong client on a converted document → refused
+  const otherClient = (await ok('admin', 'GET', '/clients?pageSize=200')).data.find((c: any) => c.id !== ctx.client.id);
+  assert.equal((await call('accounts', 'POST', '/invoices', { clientId: otherClient.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 400);
+  // PO and supply challan without an order: the approved requisition is the authority
+  const roles = await ok('admin', 'GET', '/roles');
+  const storesRole = roles.find((x: any) => x.name === 'Purchase & Stores');
+  await ok('admin', 'PATCH', `/roles/${storesRole.id}`, { permissions: storesRole.permissions.filter((p: string) => p !== 'purchase_orders:without_order') });
+  const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] })).status, 403);
+  const po = await ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] });
+  assert.equal(po.requisitionId, r0.id);
+  await ok('admin', 'PATCH', `/roles/${storesRole.id}`, { permissions: storesRole.permissions });
+  assert.equal((await call('stores', 'POST', '/challans', { clientId: ctx.client.id, siteId: ctx.site.id, type: 'SUPPLY', lines: [{ itemId: ctx.cam.id, description: 'cam', qty: 1 }] })).status, 403);
+  await ok('stores', 'POST', '/challans', { clientId: ctx.client.id, siteId: ctx.site.id, type: 'SUPPLY', requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, description: 'cam', qty: 2 }] });
+  r = await ok('svc', 'GET', `/requisitions/${r0.id}`);
+  assert.equal(r.items[0].issuedQty, 2); assert.equal(r.status, 'IN_PROGRESS');
+  await ok('stores', 'POST', '/challans', { clientId: ctx.client.id, siteId: ctx.site.id, type: 'SUPPLY', requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, description: 'cam', qty: 1 }] });
+  r = await ok('svc', 'GET', `/requisitions/${r0.id}`);
+  assert.equal(r.status, 'FULFILLED', 'everything sent → fulfilled');
+  // invoice from it (still allowed once fulfilled)
+  const inv = await ok('accounts', 'POST', '/invoices', { type: 'TAX_INVOICE', clientId: ctx.client.id, siteId: ctx.site.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] });
+  assert.equal(inv.requisitionId, r0.id);
+  r = await ok('svc', 'GET', `/requisitions/${r0.id}`);
+  assert.deepEqual(r.docs.map((d: any) => d.kind).sort(), ['Delivery challan', 'Delivery challan', 'Invoice', 'Purchase order', 'Quotation']);
+});

@@ -33,7 +33,7 @@ export default function Approvals() {
         <Card title="Requisitions">
           {(req.data?.data ?? []).map((r) => (
             <View key={r.id} style={{ gap: 6, paddingBottom: 10 }}>
-              <Text style={s.cardTitle}>{label(r.type)} · {r.site.name}</Text>
+              <Text style={s.cardTitle}>{label(r.type)} · {r.site?.name ?? 'site not set'}</Text>
               <Text style={s.muted}>{r.raisedBy.name}: {r.description}</Text>
               <View style={{ flexDirection: 'row', gap: 6 }}>
                 <Btn style={{ flex: 1 }} variant="success" title="Approve" busy={busy} onPress={() => act(`/requisitions/${r.id}/approve`, {}, req.reload)} />
