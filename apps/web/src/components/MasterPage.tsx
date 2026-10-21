@@ -121,7 +121,7 @@ export function EditorModal({ title, fields, ed }: { title: string; fields: Fiel
 /** Generic list + create/edit page for master data. */
 export function MasterPage<T extends { id: string }>({ title, singular, path, perm, cols, fields: rawFields, defaults: rawDefaults, filters, to, extraActions, subtitle, entity }: {
   title: string; singular: string; path: string; perm: string; cols: Col<T>[]; fields: FieldDef[]; defaults?: Record<string, any>;
-  filters?: (q: Record<string, any>, set: (k: string, v: any) => void) => ReactNode; to?: (r: T) => string; extraActions?: ReactNode; subtitle?: ReactNode;
+  filters?: (q: Record<string, any>, set: (k: string, v: any) => void) => ReactNode; to?: (r: T) => string; extraActions?: ReactNode | ((q: Record<string, any>) => ReactNode); subtitle?: ReactNode;
   /** Forms & Fields configuration key, e.g. "clients" */ entity?: string;
 }) {
   const { fields, defaults } = useConfiguredFields(entity, rawFields, rawDefaults);
@@ -136,7 +136,7 @@ export function MasterPage<T extends { id: string }>({ title, singular, path, pe
   return (
     <div>
       <PageHeader title={title} subtitle={subtitle}
-        actions={<>{extraActions}{can(`${perm}:create`) && <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => ed.open()}>New {singular.toLowerCase()}</Button>}</>} />
+        actions={<>{typeof extraActions === 'function' ? extraActions(q) : extraActions}{can(`${perm}:create`) && <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => ed.open()}>New {singular.toLowerCase()}</Button>}</>} />
       <Card pad={false}>
         <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3">
           <SearchBox value={q.search} onChange={(v) => set('search', v)} />

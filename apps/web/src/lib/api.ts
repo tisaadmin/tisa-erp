@@ -52,6 +52,18 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
   return data as T;
 }
 
+/** Downloads a server-generated file (e.g. an Excel export) with the signed-in user's token. */
+export async function downloadFile(path: string, query: Record<string, unknown> = {}) {
+  await api('/auth/me'); // make sure token is fresh
+  const qs = new URLSearchParams(Object.entries(query).filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => [k, String(v)])).toString();
+  const res = await fetch(`${BASE}/api${path}${qs ? `?${qs}` : ''}`, { headers: { Authorization: `Bearer ${session.get()?.accessToken ?? ''}` } });
+  if (!res.ok) throw new ApiError(res.status, (await res.json().catch(() => null))?.error ?? 'Download failed');
+  const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? 'export.xlsx';
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 /** Opens a server-rendered PDF in a new tab (adds the token as a query param). */
 export async function openPdf(path: string, download = false) {
   await api('/auth/me'); // make sure token is fresh

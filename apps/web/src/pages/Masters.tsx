@@ -1,10 +1,11 @@
-import { Calendar, MapPin, Phone, Plus, UserPlus } from 'lucide-react';
+import { Calendar, FileDown, MapPin, Phone, Plus, UserPlus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
 import { EditorModal, FormFields, MasterPage, useConfiguredFields, useEditor, type FieldDef } from '../components/MasterPage';
 import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Select, Spinner, Status, Table, Tabs, Textarea } from '../components/ui';
-import { api } from '../lib/api';
+import { api, downloadFile } from '../lib/api';
+import { toast } from 'sonner';
 import { useAuth } from '../lib/auth';
 import { fmtDate, fmtDateTime, inr, label, qty } from '../lib/format';
 import { useAction, useCategories, useClients, useGet, useSites, useUsers } from '../lib/hooks';
@@ -37,6 +38,7 @@ export function ClientsPage() {
   return (
     <MasterPage<any> entity="clients" title="Clients" singular="Client" path="/clients" perm="clients" fields={clientFields} defaults={{ type: 'CORPORATE', paymentTermsDays: 30, active: true }}
       to={(r) => `/clients/${r.id}`}
+      extraActions={(q) => <ExportButton path="/clients-export.xlsx" query={q} />}
       cols={[
         { key: 'name', label: 'Client', render: (r) => <>{r.name}<div className="text-xs font-normal text-slate-400">{r.code}</div></> },
         { key: 'type', label: 'Type', render: (r) => label(r.type) },
@@ -126,6 +128,7 @@ export function SitesPage() {
     <MasterPage<any> entity="sites" title="Sites" singular="Site" path="/sites" perm="sites" fields={fields} defaults={{ geofenceMeters: 300, active: true }}
       subtitle="Every client can have one or many sites — tickets, AMCs, deliveries and attendance are tracked per site."
       filters={(q, set) => <Combo className="w-64" options={clientOpts} value={q.clientId} onChange={(v) => set('clientId', v)} placeholder="All clients" />}
+      extraActions={(q) => <ExportButton path="/sites-export.xlsx" query={q} />}
       cols={[
         { key: 'name', label: 'Site', render: (r) => <>{r.name}<div className="text-xs text-slate-400">{r.code}</div></> },
         { key: 'client', label: 'Client', render: (r) => <Link className="text-brand-700 hover:underline" to={`/clients/${r.clientId}`} onClick={(e) => e.stopPropagation()}>{r.client?.name}</Link> },
@@ -542,3 +545,10 @@ function LoginPolicyCard({ domains, editable, onSaved }: { domains: string[]; ed
 }
 
 export { SYSTEMS };
+
+/** Excel export of the list as filtered on screen (search / status / client). */
+function ExportButton({ path, query }: { path: string; query: Record<string, any> }) {
+  const [busy, setBusy] = useState(false);
+  const { page: _p, pageSize: _s, ...filters } = query;
+  return <Button icon={<FileDown className="size-4" />} loading={busy} onClick={() => { setBusy(true); downloadFile(path, filters).catch((e) => toast.error(e.message)).finally(() => setBusy(false)); }}>Export to Excel</Button>;
+}

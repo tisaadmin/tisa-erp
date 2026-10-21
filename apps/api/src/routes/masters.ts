@@ -1,4 +1,5 @@
-import { Router } from 'express';
+import { Router, type Response } from 'express';
+import ExcelJS from 'exceljs';
 import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
@@ -6,6 +7,7 @@ import {
   amcContracts, clients, invoices, items, leadActivities, leads, salesOrders, sites, stockMovements, systemCategories, tickets, vendors,
 } from '../db/schema';
 import { audit } from '../lib/audit';
+import { resolvedFields } from '../lib/fields';
 import { crudRouter } from '../lib/crud';
 import { GSTIN_REGEX, INDIAN_STATES, stateFromGstin } from '../lib/gst';
 import { badRequest, notFound } from '../lib/http';
@@ -43,6 +45,71 @@ r.get('/clients/:id/overview', requirePerm('clients:view'), async (req, res) => 
   const billed = invs.filter((i) => i.status !== 'DRAFT').reduce((s, i) => s + i.total, 0);
   const received = invs.reduce((s, i) => s + i.amountPaid, 0);
   res.json({ client, orders, invoices: invs, tickets: openTickets, amcs, summary: { billed, received, outstanding: billed - received } });
+});
+
+/** Excel download of a master list (all records matching the list's filters, custom fields included). */
+async function sendXlsx(res: Response, name: string, cols: { header: string; width?: number }[], rows: unknown[][]) {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(name);
+  ws.columns = cols.map((c) => ({ header: c.header, width: c.width ?? 18 }));
+  ws.getRow(1).font = { bold: true };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
+  for (const r of rows) ws.addRow(r);
+  const buf = await wb.xlsx.writeBuffer();
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+  res.send(Buffer.from(buf as ArrayBuffer));
+}
+const like = (q: unknown) => (typeof q === 'string' && q.trim() ? `%${q.trim().toLowerCase()}%` : null);
+const activeFilter = (q: unknown) => (q === 'true' ? true : q === 'false' ? false : null);
+const customCols = async (entity: 'clients' | 'sites') => (await resolvedFields(entity)).filter((f) => f.isCustom && f.visible);
+
+r.get('/clients-export.xlsx', requirePerm('clients:view'), async (req, res) => {
+  const s = like(req.query.search), act = activeFilter(req.query.active);
+  const rows = await db.query.clients.findMany({
+    where: and(
+      s ? sql`(lower(${clients.name}) like ${s} or lower(${clients.code}) like ${s} or lower(coalesce(${clients.city}, '')) like ${s} or lower(coalesce(${clients.gstin}, '')) like ${s} or lower(coalesce(${clients.contactName}, '')) like ${s} or coalesce(${clients.phone}, '') like ${s})` : undefined,
+      act == null ? undefined : eq(clients.active, act), typeof req.query.type === 'string' && req.query.type ? eq(clients.type, req.query.type) : undefined,
+    ),
+    with: { sites: { columns: { name: true } } }, orderBy: [asc(clients.name)],
+  });
+  const extra = await customCols('clients');
+  await sendXlsx(res, 'clients', [
+    { header: 'Code', width: 10 }, { header: 'Client', width: 36 }, { header: 'Type', width: 16 }, { header: 'GSTIN', width: 18 }, { header: 'PAN', width: 12 },
+    { header: 'Billing address', width: 44 }, { header: 'City' }, { header: 'State' }, { header: 'State code', width: 10 }, { header: 'Pincode', width: 10 },
+    { header: 'Contact person', width: 22 }, { header: 'Phone', width: 16 }, { header: 'Email', width: 26 }, { header: 'Payment terms (days)', width: 12 },
+    { header: 'Credit limit', width: 12 }, { header: 'Sites', width: 10 }, { header: 'Site names', width: 40 }, { header: 'Status', width: 10 }, { header: 'Notes', width: 30 },
+    ...extra.map((f) => ({ header: f.label })),
+  ], rows.map((c) => [
+    c.code, c.name, c.type.replace(/_/g, ' ').toLowerCase().replace(/^./, (x) => x.toUpperCase()), c.gstin, c.pan, c.billingAddress, c.city, c.stateName, c.stateCode, c.pincode,
+    c.contactName, c.phone, c.email, c.paymentTermsDays, c.creditLimit, c.sites.length, c.sites.map((x) => x.name).join('; '), c.active ? 'Active' : 'Inactive', c.notes,
+    ...extra.map((f) => (c.customFields as Record<string, unknown>)?.[f.key] ?? null),
+  ]));
+});
+
+r.get('/sites-export.xlsx', requirePerm('sites:view'), async (req, res) => {
+  const s = like(req.query.search), act = activeFilter(req.query.active);
+  const rows = await db.query.sites.findMany({
+    where: and(
+      s ? sql`(lower(${sites.name}) like ${s} or lower(${sites.code}) like ${s} or lower(coalesce(${sites.city}, '')) like ${s} or lower(coalesce(${sites.address}, '')) like ${s})` : undefined,
+      act == null ? undefined : eq(sites.active, act), typeof req.query.clientId === 'string' && req.query.clientId ? eq(sites.clientId, req.query.clientId) : undefined,
+    ),
+    with: { client: { columns: { name: true, code: true } } }, orderBy: [asc(sites.name)],
+  });
+  rows.sort((a, b) => a.client.name.localeCompare(b.client.name) || a.name.localeCompare(b.name));
+  const extra = await customCols('sites');
+  await sendXlsx(res, 'sites', [
+    { header: 'Site code', width: 10 }, { header: 'Site', width: 36 }, { header: 'Client code', width: 10 }, { header: 'Client', width: 36 }, { header: 'Address', width: 44 },
+    { header: 'City' }, { header: 'State' }, { header: 'State code', width: 10 }, { header: 'Pincode', width: 10 }, { header: 'GSTIN', width: 18 },
+    { header: 'Contact person', width: 22 }, { header: 'Phone', width: 16 }, { header: 'Email', width: 26 }, { header: 'Latitude', width: 12 }, { header: 'Longitude', width: 12 },
+    { header: 'Geofence (m)', width: 10 }, { header: 'Status', width: 10 },
+    ...extra.map((f) => ({ header: f.label })),
+  ], rows.map((x) => [
+    x.code, x.name, x.client.code, x.client.name, x.address, x.city, x.stateName, x.stateCode, x.pincode, x.gstin, x.contactName, x.phone, x.email,
+    x.latitude, x.longitude, x.geofenceMeters, x.active ? 'Active' : 'Inactive',
+    ...extra.map((f) => (x.customFields as Record<string, unknown>)?.[f.key] ?? null),
+  ]));
 });
 
 r.use('/clients', crudRouter({
