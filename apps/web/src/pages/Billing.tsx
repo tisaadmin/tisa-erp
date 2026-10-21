@@ -1,4 +1,4 @@
-import { FileDown, Mail, Plus } from 'lucide-react';
+import { FileDown, Mail, Plus, Upload } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { emptyLine, LineItemsEditor, type Line } from '../components/LineItems';
@@ -25,7 +25,10 @@ export function InvoicesPage() {
   return (
     <div>
       <PageHeader title="Invoices & running bills" subtitle="Running (RA) bills are raised from an order form's milestone schedule — open the order and click “Running bill”."
-        actions={can('invoices:create') && <Link to="/invoices/new"><Button variant="primary" icon={<Plus className="size-4" />}>Service / AMC / one-off invoice</Button></Link>} />
+        actions={can('invoices:create') && <>
+          <Link to="/invoices/import-ra"><Button icon={<Upload className="size-4" />}>RA bill from client sheet</Button></Link>
+          <Link to="/invoices/new"><Button variant="primary" icon={<Plus className="size-4" />}>Service / AMC / one-off invoice</Button></Link>
+        </>} />
       <Card pad={false}>
         <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
           <SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} />

@@ -268,7 +268,7 @@ export function OrderEditor() {
   );
 }
 
-type Billing = { lines: { orderItemId: string; description: string; unit: string; qty: number; rate: number; deliveredQty: number; installedQty: number; stages: { stage: string; percent: number; eligibleQty: number; billedQty: number; billableQty: number; billedAmount: number }[] }[]; summary: { orderTaxable: number; billedTaxable: number; balanceTaxable: number; billedPct: number } };
+type Billing = { lines: { orderItemId: string; description: string; unit: string; qty: number; rate: number; deliveredQty: number; installedQty: number; stages: { stage: string; percent: number; eligibleQty: number; billedQty: number; billableQty: number; billedAmount: number; openingQty?: number }[] }[]; summary: { orderTaxable: number; billedTaxable: number; balanceTaxable: number; billedPct: number } };
 
 export function OrderDetail() {
   const { id } = useParams();
@@ -354,7 +354,7 @@ export function OrderDetail() {
                     const s = l.stages.find((x) => x.stage === st.stage);
                     if (!s) return <td key={st.stage} className="num text-slate-300">n/a</td>;
                     if (s.percent === 0) return <td key={st.stage} className="num text-slate-300">0% — not billed</td>;
-                    return <td key={st.stage} className={cx('num', s.billedQty >= l.qty ? 'text-emerald-700' : s.billableQty > 0 ? 'text-amber-700' : 'text-slate-500')}>{qty(s.billedQty)} / {qty(s.eligibleQty)}</td>;
+                    return <td key={st.stage} className={cx('num', s.billedQty >= l.qty ? 'text-emerald-700' : s.billableQty > 0 ? 'text-amber-700' : 'text-slate-500')}>{qty(s.billedQty)} / {qty(s.eligibleQty)}{(s.openingQty ?? 0) > 0 && <div className="text-[11px] font-normal text-slate-400" title="Billed in RA bills raised before the ERP">{qty(s.openingQty!)} billed earlier</div>}</td>;
                   })}
                 </tr>
               ))}

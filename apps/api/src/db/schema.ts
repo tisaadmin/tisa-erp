@@ -427,6 +427,8 @@ export const salesOrders = pgTable('sales_orders', {
   projectInchargeId: text().references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
   /** set when this order was merged into another order of the same project (status MERGED) */
   mergedIntoId: text(),
+  /** RA bills raised before the ERP (e.g. 19 when the first RA bill made here is RA 020) — continues the client's RA numbering */
+  raBillOffset: integer().notNull().default(0),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (t) => [index().on(t.sourceRef)]);
@@ -439,7 +441,26 @@ export const salesOrderItems = pgTable('sales_order_items', {
   paymentTerms: jsonb().$type<PaymentTerm[]>(),
   deliveredQty: qty().notNull().default(0),
   installedQty: qty().notNull().default(0),
+  /** line no. in the source document (BOQ / RA bill Sr. No.) — matches the line when the next RA bill is imported */
+  sourceKey: text(),
 });
+
+/**
+ * Quantities billed per milestone before the ERP (earlier RA bills from the client's running-bill sheet).
+ * They count as already billed for the order line, but are not invoices: no GST, receivables or numbering.
+ */
+export const billingOpenings = pgTable('billing_openings', {
+  id: id(),
+  orderId: text().notNull().references(() => salesOrders.id, { onDelete: 'cascade' }),
+  orderItemId: text().notNull().references(() => salesOrderItems.id, { onDelete: 'cascade' }),
+  milestone: text().notNull(),
+  qty: qty().notNull(),
+  taxable: money().notNull().default(0),
+  /** e.g. "RA Bill No. 020 sheet — previous quantities" */
+  source: text(),
+  createdById: text(),
+  createdAt: createdAt(),
+}, (t) => [index().on(t.orderItemId, t.milestone)]);
 
 // ───────────────────────────── Accessories / consumables ─────────────────────────────
 

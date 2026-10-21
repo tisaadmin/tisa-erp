@@ -1,3 +1,4 @@
+import { RaImportPage } from './pages/RaImport';
 import { CostingSettingsPage } from './components/QuoteCosting';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="challans/:id" element={<ChallanDetail />} />
         <Route path="invoices" element={<InvoicesPage />} />
         <Route path="invoices/new" element={<InvoiceEditor />} />
+        <Route path="invoices/import-ra" element={<RaImportPage />} />
         <Route path="invoices/:id" element={<InvoiceDetail />} />
         <Route path="receivables" element={<ReceivablesPage />} />
         <Route path="purchase-orders" element={<PurchaseOrdersPage />} />

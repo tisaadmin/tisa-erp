@@ -3,7 +3,7 @@ import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions
 import { randomBytes } from 'node:crypto';
 import { and, desc, eq, gt, ilike, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { db } from '../db';
+import { db, type Tx } from '../db';
 import { amcContracts, invoiceItems, invoices, paymentReceipts, salesOrders, type MilestoneStage } from '../db/schema';
 import { audit } from '../lib/audit';
 import { addDays } from '../lib/dates';
@@ -88,7 +88,7 @@ r.post('/invoices', requirePerm('invoices:create'), async (req, res) => {
 });
 
 // ── Running bill against an order's milestone schedule ──
-const raSchema = z.object({
+export const raSchema = z.object({
   orderId: z.string(), date: z.coerce.date().optional(), dueDate: z.coerce.date().nullish(), notes: opt,
   proforma: z.boolean().default(false),
   /** Shortcut: bill every eligible-but-unbilled qty for these stages */
@@ -98,52 +98,55 @@ const raSchema = z.object({
 
 r.post('/invoices/running-bill', requirePerm('invoices:create'), async (req, res) => {
   const d = raSchema.parse(req.body);
-  if (!d.lines?.length && !d.stages?.length) throw badRequest('Pick milestone stages or individual lines to bill');
-  const inv = await db.transaction(async (tx) => {
-    // lock the order row so two people can't bill the same milestone simultaneously
-    await tx.execute(sql`select id from ${salesOrders} where id = ${d.orderId} for update`);
-    const { order, lines } = await orderBillingStatus(tx, d.orderId);
-    if (['CANCELLED'].includes(order.status)) throw badRequest('Order is cancelled');
-    const ctx = await resolvePlaceOfSupply(tx, order.clientId, order.siteId);
-    const byId = new Map(lines.map((l) => [l.orderItemId, l]));
-
-    const wanted: { orderItemId: string; stage: MilestoneStage; qty: number }[] = d.lines?.length
-      ? d.lines
-      : lines.flatMap((l) => l.stages.filter((s) => d.stages!.includes(s.stage) && s.billableQty > 0).map((s) => ({ orderItemId: l.orderItemId, stage: s.stage, qty: s.billableQty })));
-    if (!wanted.length) throw badRequest('Nothing is billable for the selected milestones yet (check deliveries / installed quantities)');
-
-    const used = new Map<string, number>();
-    const rows = wanted.map((w, i) => {
-      const l = byId.get(w.orderItemId);
-      if (!l) throw badRequest(`Line ${i + 1} is not part of this order`);
-      const st = l.stages.find((s) => s.stage === w.stage);
-      if (!st) throw badRequest(`${l.description}: stage ${w.stage} is not in its payment schedule`);
-      if (st.percent === 0) throw badRequest(`${l.description}: ${STAGE_LABEL[w.stage]} is 0% on this order — nothing to bill`);
-      if (![0, 0.25, 3, 5, 12, 18, 28, 40].includes(Number(l.gstRate))) throw badRequest(`${l.description}: GST ${l.gstRate}% is an overall rate carried over from the old ERP (items with different GST rates) — import the detailed order (Order Forms → Import from file) before billing`);
-      const k = `${w.orderItemId}|${w.stage}`;
-      const already = used.get(k) ?? 0;
-      if (w.qty + already > st.billableQty + 1e-9) {
-        throw badRequest(`${l.description} — ${STAGE_LABEL[w.stage]}: only ${r3(st.billableQty - already)} ${l.unit} billable (eligible ${st.eligibleQty}, billed ${st.billedQty})`);
-      }
-      used.set(k, already + w.qty);
-      return {
-        orderItemId: l.orderItemId, itemId: l.itemId, description: `${l.description} — ${STAGE_LABEL[w.stage]} @ ${st.percent}%`, hsnSac: l.hsnSac, unit: l.unit,
-        milestone: w.stage, milestonePercent: st.percent, qty: w.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate, sortOrder: i,
-      };
-    });
-    const { lines: calcs, totals } = calcTotals(rows, ctx.isInterState);
-    const date = d.date ?? new Date();
-    const [inv] = await tx.insert(invoices).values({
-      number: draftNo(), type: d.proforma ? 'PROFORMA' : 'RUNNING_BILL', date, dueDate: d.dueDate ?? addDays(date, ctx.client.paymentTermsDays),
-      clientId: order.clientId, siteId: order.siteId, orderId: order.id, placeOfSupply: ctx.placeOfSupply, isInterState: ctx.isInterState,
-      billingGstin: ctx.billingGstin, notes: d.notes, ...totals, createdById: req.user.id,
-    }).returning();
-    await tx.insert(invoiceItems).values(rows.map((row, i) => ({ ...row, invoiceId: inv.id, taxable: calcs[i].taxable, taxAmount: calcs[i].taxAmount, amount: calcs[i].amount })));
-    return inv;
-  });
+  const inv = await db.transaction((tx) => createRunningBill(tx, d, req.user.id));
   audit(req, 'create', 'running_bill', inv.id);
   res.status(201).json(inv);
 });
+
+/** Draft running bill for milestone quantities of an order (shared with the RA-bill sheet import). */
+export async function createRunningBill(tx: Tx, d: z.infer<typeof raSchema>, userId: string) {
+  if (!d.lines?.length && !d.stages?.length) throw badRequest('Pick milestone stages or individual lines to bill');
+  // lock the order row so two people can't bill the same milestone simultaneously
+  await tx.execute(sql`select id from ${salesOrders} where id = ${d.orderId} for update`);
+  const { order, lines } = await orderBillingStatus(tx, d.orderId);
+  if (['CANCELLED'].includes(order.status)) throw badRequest('Order is cancelled');
+  const ctx = await resolvePlaceOfSupply(tx, order.clientId, order.siteId);
+  const byId = new Map(lines.map((l) => [l.orderItemId, l]));
+
+  const wanted: { orderItemId: string; stage: MilestoneStage; qty: number }[] = d.lines?.length
+    ? d.lines
+    : lines.flatMap((l) => l.stages.filter((s) => d.stages!.includes(s.stage) && s.billableQty > 0).map((s) => ({ orderItemId: l.orderItemId, stage: s.stage, qty: s.billableQty })));
+  if (!wanted.length) throw badRequest('Nothing is billable for the selected milestones yet (check deliveries / installed quantities)');
+
+  const used = new Map<string, number>();
+  const rows = wanted.map((w, i) => {
+    const l = byId.get(w.orderItemId);
+    if (!l) throw badRequest(`Line ${i + 1} is not part of this order`);
+    const st = l.stages.find((s) => s.stage === w.stage);
+    if (!st) throw badRequest(`${l.description}: stage ${w.stage} is not in its payment schedule`);
+    if (st.percent === 0) throw badRequest(`${l.description}: ${STAGE_LABEL[w.stage]} is 0% on this order — nothing to bill`);
+    if (![0, 0.25, 3, 5, 12, 18, 28, 40].includes(Number(l.gstRate))) throw badRequest(`${l.description}: GST ${l.gstRate}% is an overall rate carried over from the old ERP (items with different GST rates) — import the detailed order (Order Forms → Import from file) before billing`);
+    const k = `${w.orderItemId}|${w.stage}`;
+    const already = used.get(k) ?? 0;
+    if (w.qty + already > st.billableQty + 1e-9) {
+      throw badRequest(`${l.description} — ${STAGE_LABEL[w.stage]}: only ${r3(st.billableQty - already)} ${l.unit} billable (eligible ${st.eligibleQty}, billed ${st.billedQty})`);
+    }
+    used.set(k, already + w.qty);
+    return {
+      orderItemId: l.orderItemId, itemId: l.itemId, description: `${l.description} — ${STAGE_LABEL[w.stage]} @ ${st.percent}%`, hsnSac: l.hsnSac, unit: l.unit,
+      milestone: w.stage, milestonePercent: st.percent, qty: w.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate, sortOrder: i,
+    };
+  });
+  const { lines: calcs, totals } = calcTotals(rows, ctx.isInterState);
+  const date = d.date ?? new Date();
+  const [inv] = await tx.insert(invoices).values({
+    number: draftNo(), type: d.proforma ? 'PROFORMA' : 'RUNNING_BILL', date, dueDate: d.dueDate ?? addDays(date, ctx.client.paymentTermsDays),
+    clientId: order.clientId, siteId: order.siteId, orderId: order.id, placeOfSupply: ctx.placeOfSupply, isInterState: ctx.isInterState,
+    billingGstin: ctx.billingGstin, notes: d.notes, ...totals, createdById: userId,
+  }).returning();
+  await tx.insert(invoiceItems).values(rows.map((row, i) => ({ ...row, invoiceId: inv.id, taxable: calcs[i].taxable, taxAmount: calcs[i].taxAmount, amount: calcs[i].amount })));
+  return inv;
+}
 
 /** Draft → Issued: assigns the final GST-compliant consecutive number. */
 r.post('/invoices/:id/issue', requirePerm('invoices:create'), async (req, res) => {
@@ -153,7 +156,9 @@ r.post('/invoices/:id/issue', requirePerm('invoices:create'), async (req, res) =
     if (inv.status !== 'DRAFT') throw badRequest('Only drafts can be issued');
     let raBillNo: number | null = null;
     if (inv.type === 'RUNNING_BILL' && inv.orderId) {
-      raBillNo = (await tx.$count(invoices, and(eq(invoices.orderId, inv.orderId), eq(invoices.type, 'RUNNING_BILL'), inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID', 'PAID'])))) + 1;
+      // continues the client's RA numbering when earlier RA bills were raised before the ERP
+      const ord = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, inv.orderId), columns: { raBillOffset: true } });
+      raBillNo = (ord?.raBillOffset ?? 0) + (await tx.$count(invoices, and(eq(invoices.orderId, inv.orderId), eq(invoices.type, 'RUNNING_BILL'), inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID', 'PAID'])))) + 1;
     }
     const number = await nextNumber(tx, inv.type === 'PROFORMA' ? 'PROFORMA' : 'INVOICE', inv.date);
     const [row] = await tx.update(invoices).set({ number, status: 'ISSUED', raBillNo }).where(eq(invoices.id, inv.id)).returning();

@@ -1,6 +1,6 @@
 import { and, eq, ne, sql } from 'drizzle-orm';
 import type { DbOrTx } from '../db';
-import { invoiceItems, invoices, salesOrderItems, salesOrders, type MilestoneStage, type PaymentTerm } from '../db/schema';
+import { billingOpenings, invoiceItems, invoices, salesOrderItems, salesOrders, type MilestoneStage, type PaymentTerm } from '../db/schema';
 import { badRequest, notFound } from '../lib/http';
 import { r2, r3 } from '../lib/gst';
 
@@ -27,6 +27,8 @@ export type StageStatus = {
   billedQty: number;
   billableQty: number;
   billedAmount: number; // taxable
+  /** part of billedQty billed before the ERP (earlier RA bills) */
+  openingQty?: number;
 };
 
 export type OrderLineBilling = {
@@ -66,7 +68,19 @@ export async function orderBillingStatus(tx: DbOrTx, orderId: string) {
     .where(and(eq(invoices.orderId, orderId), ne(invoices.status, 'CANCELLED'), ne(invoices.type, 'PROFORMA')))
     .groupBy(invoiceItems.orderItemId, invoiceItems.milestone);
   const key = (id: string | null, m: string | null) => `${id}|${m ?? 'FULL'}`;
-  const billedMap = new Map(billed.map((b) => [key(b.orderItemId, b.milestone), b]));
+  const billedMap = new Map(billed.map((b) => [key(b.orderItemId, b.milestone), { qty: Number(b.qty), taxable: Number(b.taxable) }]));
+  // quantities billed before the ERP (earlier RA bills) count as billed
+  const openings = await tx.select({
+    orderItemId: billingOpenings.orderItemId, milestone: billingOpenings.milestone,
+    qty: sql<number>`sum(${billingOpenings.qty})::float`, taxable: sql<number>`sum(${billingOpenings.taxable})::float`,
+  }).from(billingOpenings).where(eq(billingOpenings.orderId, orderId)).groupBy(billingOpenings.orderItemId, billingOpenings.milestone);
+  const openingMap = new Map<string, { qty: number; taxable: number }>();
+  for (const o of openings) {
+    const k = key(o.orderItemId, o.milestone);
+    openingMap.set(k, { qty: Number(o.qty), taxable: Number(o.taxable) });
+    const cur = billedMap.get(k);
+    billedMap.set(k, { qty: (cur?.qty ?? 0) + Number(o.qty), taxable: (cur?.taxable ?? 0) + Number(o.taxable) });
+  }
 
   const lines: OrderLineBilling[] = order.items.map((it) => {
     const terms = it.paymentTerms ?? order.paymentTerms;
@@ -77,7 +91,10 @@ export async function orderBillingStatus(tx: DbOrTx, orderId: string) {
         const b = billedMap.get(key(it.id, t.stage));
         const eligibleQty = eligible(t.stage, it);
         const billedQty = b ? Number(b.qty) : 0;
-        return { stage: t.stage, percent: t.percent, eligibleQty, billedQty, billableQty: t.percent > 0 ? r3(Math.max(0, eligibleQty - billedQty)) : 0, billedAmount: b ? Number(b.taxable) : 0 };
+        return {
+          stage: t.stage, percent: t.percent, eligibleQty, billedQty, billableQty: t.percent > 0 ? r3(Math.max(0, eligibleQty - billedQty)) : 0, billedAmount: b ? Number(b.taxable) : 0,
+          openingQty: openingMap.get(key(it.id, t.stage))?.qty ?? 0,
+        };
       }),
     };
   });

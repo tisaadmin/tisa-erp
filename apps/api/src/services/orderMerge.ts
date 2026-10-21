@@ -6,7 +6,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Tx } from '../db';
 import {
-  accessorySheetLines, accessorySheets, deliveryChallans, invoices, projectMembers, purchaseOrders, requisitions, salesOrderItems, salesOrders, tickets, vendorBills,
+  accessorySheetLines, accessorySheets, deliveryChallans, invoices, projectMembers, purchaseOrders, requisitions, salesOrderItems, salesOrders, tickets, vendorBills, billingOpenings,
 } from '../db/schema';
 import { calcTotals } from '../lib/gst';
 import { badRequest, notFound } from '../lib/http';
@@ -43,6 +43,7 @@ export async function mergeOrders(tx: Tx, targetId: string, sourceIds: string[],
     await tx.update(purchaseOrders).set({ salesOrderId: target.id }).where(eq(purchaseOrders.salesOrderId, s.id));
     await tx.update(deliveryChallans).set({ orderId: target.id }).where(eq(deliveryChallans.orderId, s.id));
     await tx.update(invoices).set({ orderId: target.id }).where(eq(invoices.orderId, s.id));
+    await tx.update(billingOpenings).set({ orderId: target.id }).where(eq(billingOpenings.orderId, s.id));
     await tx.update(vendorBills).set({ orderId: target.id }).where(eq(vendorBills.orderId, s.id));
     await tx.update(tickets).set({ orderId: target.id }).where(eq(tickets.orderId, s.id));
     await tx.update(requisitions).set({ orderId: target.id }).where(eq(requisitions.orderId, s.id));

@@ -1376,3 +1376,70 @@ test('quotation from a final quote / BOQ sheet: sections, two sheets, payment te
   const p2 = await ok('sales', 'POST', '/order-imports/parse', undefined, file());
   assert.equal((await call('sales', 'POST', `/order-imports/${p2.id}/commit`, { ...body, paymentTerms: [{ stage: 'ADVANCE', percent: 40 }] })).status, 400);
 });
+
+test('RA bill from the client sheet: order from the BOQ, previous quantities as billed earlier, current quantities as the running bill', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const make = (prevCurr: [number, number][][]) => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('RA Bill No. 020');
+    ws.getCell('B2').value = 'COMAPNY NAME: RA TEST BUILDERS PRIVATE LIMITED\nPROJECT: GRAND TEST TOWER, DADAR\nBILL NO.: RA BILL NO.020\nBILL MONTH: 27.08.2026';
+    ws.getRow(8).values = [null, 'Sr. No.', 'Description', 'Unit', 'TOTAL', 'SITC RATE', 'AMOUNT', null, 'Previous', null, 'Current', null, 'Cumulative'];
+    ws.getRow(9).values = [null, null, null, null, 'Quantity', null, null, 'REMARKS', 'Quantity', 'Total Amount', 'Quantity', 'Total Amount', 'Quantity', 'Total Amount'];
+    let r = 11;
+    ws.getRow(r++).values = [null, 1, 'IP BASED CCTV'];
+    const items = [[1.1, 'SITC of Indoor Fixed Dome Camera', 'Nos', 10, 16200], [1.2, 'SITC of Outdoor Bullet camera', 'Nos', 6, 10000]] as const;
+    const split = [[65, 'Amount Agst Material Supply'], [20, 'Amount Agst Installation'], [10, 'Amount Agst Testing'], [5, 'Amount Agst Successful completion']] as const;
+    items.forEach((it, i) => {
+      ws.getRow(r++).values = [null, it[0], it[1], it[2], it[3], it[4], it[3] * it[4]];
+      split.forEach(([p, label], k) => {
+        const [prev, curr] = prevCurr[i][k]; const rate = (it[4] * p) / 100;
+        ws.getRow(r++).values = [null, null, `${p}% ${label}`, null, null, rate, null, null, prev, prev * rate, curr, curr * rate, prev + curr, (prev + curr) * rate];
+      });
+      r++;
+    });
+    ws.getRow(r++).values = [null, null, 'TOTAL'];
+    ws.getRow(r++).values = [null, null, 'CGST @ 9%'];
+    ws.getRow(r++).values = [null, null, 'GST NO : 27AAACS6994C1Z5'];
+    return wb.xlsx.writeBuffer().then((b) => { const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(b as ArrayBuffer)]), 'RA 020.xlsx'); return fd; });
+  };
+  // RA 020: camera 1.1 — 10 supplied & 6 installed earlier, 4 installed + 6 tested now; bullet 1.2 — 6 supplied earlier, nothing now
+  const p = await ok('accounts', 'POST', '/ra-imports/parse', undefined, await make([[[10, 0], [6, 4], [0, 6], [0, 0]], [[6, 0], [0, 0], [0, 0], [0, 0]]]));
+  assert.equal(p.doc.raNo, '020'); assert.equal(p.doc.project, 'GRAND TEST TOWER, DADAR'); assert.equal(p.doc.gstRate, 18);
+  assert.equal(p.doc.clientName, 'RA TEST BUILDERS PRIVATE LIMITED'); assert.equal(p.doc.clientGstin, '27AAACS6994C1Z5');
+  assert.deepEqual(p.doc.lines.map((l: any) => l.key), ['1.1', '1.2']);
+  assert.deepEqual(p.doc.lines[0].stages.map((s: any) => [s.stage, s.percent, s.prevQty, s.currQty]), [['DELIVERY', 65, 10, 0], ['INSTALLATION', 20, 6, 4], ['TESTING', 10, 0, 6], ['HANDOVER', 5, 0, 0]]);
+  const prevExpected = 10 * 10530 + 6 * 3240 + 6 * 6500;
+  assert.equal(p.doc.totals.prev, prevExpected); assert.equal(p.doc.totals.curr, 4 * 3240 + 6 * 1620);
+
+  const body = (doc: any, extra: any = {}) => ({
+    newClient: { name: doc.clientName, gstin: doc.clientGstin }, site: { mode: 'new', name: doc.project }, orderId: null, raNo: doc.raNo, gstRate: doc.gstRate,
+    lines: doc.lines.map((l: any) => ({ ...l, include: true })), ...extra,
+  });
+  assert.equal((await call('tech', 'POST', `/ra-imports/${p.id}/commit`, body(p.doc))).status, 403);
+  const done = await ok('admin', 'POST', `/ra-imports/${p.id}/commit`, body(p.doc));
+  assert.equal(done.orderCreated, true); assert.equal(done.openingTaxable, prevExpected);
+  const o = await ok('admin', 'GET', `/orders/${done.orderId}`);
+  assert.equal(o.taxable, 10 * 16200 + 6 * 10000); assert.equal(o.items[0].deliveredQty, 10); assert.equal(o.items[0].installedQty, 10);
+  const inv = await ok('admin', 'GET', `/invoices/${done.invoiceId}`);
+  assert.equal(inv.type, 'RUNNING_BILL'); assert.equal(inv.taxable, 4 * 3240 + 6 * 1620); assert.match(inv.notes, /RA Bill No\. 020/);
+  // billing status: earlier RA bills count as billed
+  const bs = await ok('admin', 'GET', `/orders/${done.orderId}/billing`);
+  const cam = bs.lines.find((l: any) => l.orderItemId === o.items[0].id);
+  assert.equal(cam.stages.find((s: any) => s.stage === 'INSTALLATION').billedQty, 10);
+  assert.equal(cam.stages.find((s: any) => s.stage === 'INSTALLATION').openingQty, 6);
+  assert.equal(cam.stages.find((s: any) => s.stage === 'DELIVERY').billableQty, 0, 'supply was billed earlier');
+  // issued, it continues the client's RA numbering
+  const issued = await ok('admin', 'POST', `/invoices/${done.invoiceId}/issue`, {});
+  assert.equal(issued.raBillNo, 20);
+
+  // next month: RA 021 sheet matches the same order by Sr. No. — previous now includes RA 020 (already in the ERP), current = handover
+  const p2 = await ok('accounts', 'POST', '/ra-imports/parse', undefined, await make([[[10, 0], [10, 0], [6, 0], [0, 10]], [[6, 0], [0, 0], [0, 0], [0, 0]]]));
+  assert.equal(p2.orderId, done.orderId, 'the project order is found by its lines');
+  const d2 = await ok('accounts', 'POST', `/ra-imports/${p2.id}/commit`, { ...body(p2.doc), newClient: null, clientId: o.client.id, site: { mode: 'existing', siteId: o.site.id }, orderId: done.orderId, raNo: '021' });
+  assert.equal(d2.orderCreated, false); assert.equal(d2.openings, 0, 'nothing new billed outside the ERP');
+  assert.equal((await ok('accounts', 'GET', `/invoices/${d2.invoiceId}`)).taxable, 10 * 810);
+  // a break-up that does not add up is refused
+  const p3 = await ok('accounts', 'POST', '/ra-imports/parse', undefined, await make([[[0, 0], [0, 0], [0, 0], [0, 0]], [[0, 0], [0, 0], [0, 0], [0, 0]]]));
+  const bad = body(p3.doc); bad.lines[0].stages[0].percent = 60;
+  assert.equal((await call('accounts', 'POST', `/ra-imports/${p3.id}/commit`, bad)).status, 400);
+});

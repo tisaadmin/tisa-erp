@@ -66,7 +66,7 @@ export type ParsedOrderDoc = {
 type Cell = { s: number; r: number; c: number; text: string };
 
 /** Milestone for a payment-terms phrase (most specific first). */
-function stageOf(t: string): string | null {
+export function stageOf(t: string): string | null {
   const x = t.toLowerCase();
   if (/commission|\bsat\b|go[- ]?live/.test(x)) return 'COMMISSIONING';
   if (/hand\s*over|completion|final\s*(bill|acceptance)|retention|after\s*\d+\s*(days|months)/.test(x)) return 'HANDOVER';
@@ -97,7 +97,7 @@ export function parsePaymentTerms(text: string): { stage: string; percent: numbe
   return terms.length && Math.abs(sum - 100) < 0.01 ? terms : null;
 }
 
-function cellText(v: ExcelJS.CellValue): string | null {
+export function cellText(v: ExcelJS.CellValue): string | null {
   if (v == null) return null;
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   if (typeof v === 'object') {
