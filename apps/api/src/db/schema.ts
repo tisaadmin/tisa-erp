@@ -401,6 +401,8 @@ export const salesOrders = pgTable('sales_orders', {
   createdById: text(),
   /** project in charge (usually from the Projects department) — reports to the Projects head */
   projectInchargeId: text().references((): AnyPgColumn => users.id, { onDelete: 'set null' }),
+  /** set when this order was merged into another order of the same project (status MERGED) */
+  mergedIntoId: text(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (t) => [index().on(t.sourceRef)]);

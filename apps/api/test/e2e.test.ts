@@ -1273,3 +1273,33 @@ test('project requisitions: order / accessories quantities shown; extra needs a 
   assert.equal(st.accessories.find((a: any) => a.itemId === ctx.cam.id).sent, 2);
   assert.equal((await call('stores', 'POST', '/challans', { ...base, lines: [{ itemId: ctx.nvr.id, description: 'NVR', unit: 'Nos', qty: 2 }] })).status, 400, 'only 1 NVR is on the order — the other waits for the quotation');
 });
+
+test('merge orders of a project: lines, deliveries, POs, accessories and team move to the order kept; totals recomputed', async () => {
+  const mk = (lines: any[]) => ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, clientPoNo: 'PO-M', paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines });
+  const a = await mk([{ itemId: ctx.cam.id, qty: 2 }]);
+  const b = await mk([{ itemId: ctx.nvr.id, qty: 1 }]);
+  const c = await mk([{ itemId: ctx.svcItem.id, qty: 4 }]);
+  // something already done on b: a delivery, a requisition, a team member
+  const bFull = await ok('sales', 'GET', `/orders/${b.id}`);
+  await ok('stores', 'POST', '/challans', { orderId: b.id, clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ orderItemId: bFull.items[0].id, qty: 1 }] });
+  const tech = (await ok('admin', 'GET', '/users?search=Imran')).data[0];
+  await ok('admin', 'PUT', `/projects/${b.id}/team`, { inchargeId: tech.id });
+  const cands = await ok('sales', 'GET', `/orders/${a.id}/merge-candidates`);
+  assert.ok(cands.some((x: any) => x.id === b.id) && cands.some((x: any) => x.id === c.id));
+  assert.equal((await call('accounts', 'POST', `/orders/${a.id}/merge`, { sourceIds: [b.id] })).status, 403);
+  const other = await ok('admin', 'POST', '/sites', { clientId: ctx.client.id, name: 'Merge other plant', stateCode: '27' });
+  const d = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: other.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
+  assert.equal((await call('sales', 'POST', `/orders/${a.id}/merge`, { sourceIds: [d.id] })).status, 400, 'different site');
+  const out = await ok('sales', 'POST', `/orders/${a.id}/merge`, { sourceIds: [b.id, c.id] });
+  assert.deepEqual(out.merged.sort(), [b.number, c.number].sort());
+  const m = await ok('sales', 'GET', `/orders/${a.id}`);
+  assert.equal(m.items.length, 3); assert.equal(m.total, a.total + b.total + c.total);
+  assert.equal(m.items.find((l: any) => l.itemId === ctx.nvr.id).deliveredQty, 1, 'delivered qty travels with the line');
+  assert.ok(m.challans.length >= 1); assert.equal(m.mergedFrom.length, 2);
+  assert.equal(m.projectInchargeId, tech.id, 'in-charge carried over');
+  const bAfter = await ok('sales', 'GET', `/orders/${b.id}`);
+  assert.equal(bAfter.status, 'MERGED'); assert.equal(bAfter.mergedInto.number, a.number); assert.equal(bAfter.items.length, 0);
+  assert.equal((await call('sales', 'POST', `/orders/${a.id}/merge`, { sourceIds: [b.id] })).status, 400, 'already merged');
+  const st = await ok('tech', 'GET', `/projects/${a.id}`);
+  assert.equal(st.orderItems.length, 3);
+});

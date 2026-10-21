@@ -19,6 +19,7 @@ import { getCompany, resolvePlaceOfSupply } from '../services/company';
 import { challanPdf, orderPdf, quotationPdf } from '../services/documents';
 import { lineSchema, priceLines } from '../services/lines';
 import { postStock } from '../services/stock';
+import { mergeOrders } from '../services/orderMerge';
 import { materialKey, projectMaterialStatus } from '../services/projectStatus';
 import { createSalesOrder, orderSchema } from '../services/orders';
 
@@ -234,7 +235,9 @@ r.get('/orders/:id', requirePerm('orders:view'), async (req, res) => {
   });
   if (!o) throw notFound('Order');
   const challans = await db.query.deliveryChallans.findMany({ where: eq(deliveryChallans.orderId, o.id), orderBy: [desc(deliveryChallans.date)] });
-  res.json({ ...o, challans });
+  const mergedInto = o.mergedIntoId ? await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, o.mergedIntoId), columns: { id: true, number: true } }) : null;
+  const mergedFrom = await db.query.salesOrders.findMany({ where: eq(salesOrders.mergedIntoId, o.id), columns: { id: true, number: true } });
+  res.json({ ...o, challans, mergedInto, mergedFrom });
 });
 
 r.post('/orders', requirePerm('orders:create'), async (req, res) => {
@@ -269,6 +272,26 @@ r.patch('/orders/:id', requirePerm('orders:edit'), async (req, res) => {
   if (!row) throw notFound('Order');
   audit(req, 'update', 'order', row.id, d);
   res.json(row);
+});
+
+/** Other open orders of the same client and site — candidates to merge into this one. */
+r.get('/orders/:id/merge-candidates', requirePerm('orders:view'), async (req, res) => {
+  const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id) });
+  if (!o) throw notFound('Order');
+  const rows = await db.query.salesOrders.findMany({
+    where: and(eq(salesOrders.clientId, o.clientId), inArray(salesOrders.status, ['OPEN', 'IN_PROGRESS', 'COMPLETED'])),
+    with: { site: { columns: { id: true, name: true } } }, orderBy: [desc(salesOrders.date)],
+  });
+  res.json(rows.filter((x) => x.id !== o.id && (!x.siteId || !o.siteId || x.siteId === o.siteId))
+    .map((x) => ({ id: x.id, number: x.number, date: x.date, status: x.status, total: x.total, clientPoNo: x.clientPoNo, site: x.site, sameTerms: JSON.stringify(x.paymentTerms) === JSON.stringify(o.paymentTerms), placeOk: x.placeOfSupply === o.placeOfSupply })));
+});
+
+/** Merge other orders of the same project into this one (lines and everything raised against them move over). */
+r.post('/orders/:id/merge', requirePerm('orders:edit'), async (req, res) => {
+  const { sourceIds } = z.object({ sourceIds: z.array(z.string()).min(1) }).parse(req.body);
+  const out = await db.transaction((tx) => mergeOrders(tx, req.params.id, sourceIds));
+  audit(req, 'merge', 'order', req.params.id, out);
+  res.json(out);
 });
 
 /** Site progress: record installed quantity per line (drives "Against Installation" billing). */

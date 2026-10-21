@@ -298,11 +298,14 @@ export function OrderDetail() {
           {can('challans:create') && <Link to={`/challans/new?orderId=${o.id}`}><Button icon={<Truck className="size-4" />}>Delivery challan</Button></Link>}
           {can('purchase_orders:create') && <Link to={`/purchase-orders/new?salesOrderId=${o.id}`}><Button>Raise PO</Button></Link>}
           {can('invoices:create') && <Button variant="primary" icon={<Receipt className="size-4" />} onClick={() => setRa({})}>Running bill</Button>}
+          {can('orders:edit') && !['MERGED', 'CLOSED', 'CANCELLED'].includes(o.status) && <MergeOrdersButton orderId={o.id} number={o.number} />}
           <DeleteOrderButton orderId={o.id} onDeleted={() => nav('/orders')} />
           {can('orders:edit') && o.status !== 'CLOSED' && <Select className="w-36" value="" onChange={(e) => e.target.value && setStatus.mutate(e.target.value)} options={['IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']} placeholder="Set status…" />}
         </>} />
+      {o.mergedInto && <div className="rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-800">This order was merged into <Link className="font-medium underline" to={`/orders/${o.mergedInto.id}`}>{o.mergedInto.number}</Link> — its lines, deliveries and documents are there now.</div>}
+      {!!o.mergedFrom?.length && <div className="rounded-md bg-sky-50 px-4 py-2 text-sm text-sky-800">Includes merged orders: {o.mergedFrom.map((m: any, n: number) => <span key={m.id}>{n ? ', ' : ''}<Link className="underline" to={`/orders/${m.id}`}>{m.number}</Link></span>)}</div>}
       {o.sourceData?.summaryOnly && (
-        <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <span>This order came from the FFH order list with <b>one summary line</b> ({inr(o.sourceData.basicValue ?? o.taxable)} basic). Import FFH SO {o.sourceData.soNumber} to bring in its items before delivering or billing item-wise.</span>
           {can('orders:create') && <Link to="/orders/import" className="ml-auto"><Button size="sm">Import items</Button></Link>}
         </div>
@@ -426,6 +429,36 @@ export function ChallansPage() {
         {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
       </Card>
     </div>
+  );
+}
+
+/** Merge other orders of the same project (client + site) into this one. */
+function MergeOrdersButton({ orderId, number }: { orderId: string; number: string }) {
+  const [open, setOpen] = useState(false);
+  const [sel, setSel] = useState<string[]>([]);
+  const cands = useGet<{ id: string; number: string; date: string; status: string; total: number; clientPoNo: string | null; site: { name: string } | null; sameTerms: boolean; placeOk: boolean }[]>(open ? `/orders/${orderId}/merge-candidates` : null);
+  const merge = useAction(() => api(`/orders/${orderId}/merge`, { body: { sourceIds: sel } }), { success: 'Orders merged', invalidate: [['/orders'], ['/projects']], onSuccess: () => { setOpen(false); setSel([]); } });
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>Merge orders</Button>
+      <Modal open={open} onClose={() => setOpen(false)} title={`Merge into ${number}`} wide
+        footer={<><Button onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" disabled={!sel.length} loading={merge.isPending} onClick={() => confirm(`Merge ${sel.length} order(s) into ${number}? They will be marked "Merged".`) && merge.mutate(undefined)}>Merge {sel.length || ''}</Button></>}>
+        <p className="mb-3 text-sm text-slate-500">Other open orders of the same client and site. Their lines move to {number} with what has been delivered, installed and billed, and their POs, delivery challans, invoices, accessories lists, tickets, requisitions and project team move too. A line keeps its own payment schedule if it differs.</p>
+        {!cands.data ? <Spinner /> : !cands.data.length ? <p className="text-sm text-slate-500">No other open orders for this project.</p> : (
+          <div className="space-y-1">
+            {cands.data.map((c) => (
+              <label key={c.id} className={cx('flex items-center gap-3 rounded-md border px-3 py-2 text-sm', !c.placeOk ? 'opacity-50' : sel.includes(c.id) ? 'border-brand-300 bg-brand-50' : 'border-slate-200')}>
+                <input type="checkbox" disabled={!c.placeOk} checked={sel.includes(c.id)} onChange={() => setSel(sel.includes(c.id) ? sel.filter((x) => x !== c.id) : [...sel, c.id])} />
+                <span className="flex-1"><b className="font-medium">{c.number}</b> · {fmtDate(c.date)}{c.clientPoNo ? ` · client PO ${c.clientPoNo}` : ''}{c.site ? ` · ${c.site.name}` : ''}
+                  {!c.sameTerms && <span className="ml-2 text-xs text-amber-700">different payment schedule (kept per line)</span>}
+                  {!c.placeOk && <span className="ml-2 text-xs text-red-600">different place of supply — cannot merge</span>}</span>
+                <Status s={c.status} /><span className="w-28 text-right tabular-nums">{inr(c.total)}</span>
+              </label>
+            ))}
+          </div>
+        )}
+      </Modal>
+    </>
   );
 }
 

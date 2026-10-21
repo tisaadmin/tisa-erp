@@ -1,0 +1,1 @@
+ALTER TABLE "sales_orders" ADD COLUMN "merged_into_id" text;
