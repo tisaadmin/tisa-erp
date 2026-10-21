@@ -441,25 +441,40 @@ export function ChallansPage() {
 function MergeOrdersButton({ orderId, number }: { orderId: string; number: string }) {
   const [open, setOpen] = useState(false);
   const [sel, setSel] = useState<string[]>([]);
-  const cands = useGet<{ id: string; number: string; date: string; status: string; total: number; clientPoNo: string | null; site: { name: string } | null; sameTerms: boolean; placeOk: boolean }[]>(open ? `/orders/${orderId}/merge-candidates` : null);
-  const merge = useAction(() => api(`/orders/${orderId}/merge`, { body: { sourceIds: sel } }), { success: 'Orders merged', invalidate: [['/orders'], ['/projects']], onSuccess: () => { setOpen(false); setSel([]); } });
+  type Cand = { id: string; number: string; date: string; status: string; total: number; clientPoNo: string | null; title: string | null; site: { name: string } | null; sameTerms: boolean; placeOk: boolean; sameSite: boolean; otherClient: { id: string; name: string } | null };
+  const cands = useGet<Cand[]>(open ? `/orders/${orderId}/merge-candidates` : null);
+  const picked = (cands.data ?? []).filter((c) => sel.includes(c.id));
+  const otherSites = picked.filter((c) => !c.sameSite);
+  const merge = useAction(() => api(`/orders/${orderId}/merge`, { body: { sourceIds: sel, allowOtherSites: otherSites.length > 0 } }), { success: 'Orders merged', invalidate: [['/orders'], ['/projects']], onSuccess: () => { setOpen(false); setSel([]); } });
+  const ask = () => confirm(`Merge ${sel.length} order(s) into ${number}? They will be marked "Merged".${otherSites.length ? `\n\n${otherSites.map((c) => c.number).join(', ')} ${otherSites.length > 1 ? 'are' : 'is'} at another site — ${otherSites.length > 1 ? 'they' : 'it'} will become part of this project.` : ''}`);
+  const same = (cands.data ?? []).filter((c) => !c.otherClient).sort((x, y) => Number(y.sameSite) - Number(x.sameSite)), dup = (cands.data ?? []).filter((c) => c.otherClient);
+  const row = (c: Cand) => {
+    const blocked = !c.placeOk || !!c.otherClient;
+    return (
+      <label key={c.id} className={cx('flex items-center gap-3 rounded-md border px-3 py-2 text-sm', blocked ? 'opacity-60' : sel.includes(c.id) ? 'border-brand-300 bg-brand-50' : 'border-slate-200')}>
+        <input type="checkbox" disabled={blocked} checked={sel.includes(c.id)} onChange={() => setSel(sel.includes(c.id) ? sel.filter((x) => x !== c.id) : [...sel, c.id])} />
+        <span className="flex-1"><b className="font-medium">{c.number}</b> · {fmtDate(c.date)}{c.clientPoNo ? ` · client PO ${c.clientPoNo}` : ''}{c.site ? ` · ${c.site.name}` : c.title ? ` · ${c.title}` : ''}
+          {c.otherClient && <span className="ml-2 text-xs text-red-600">filed under another client record “{c.otherClient.name}”</span>}
+          {!c.otherClient && !c.sameSite && <span className="ml-2 text-xs text-amber-700">different site — will join this project</span>}
+          {!c.sameTerms && <span className="ml-2 text-xs text-amber-700">different payment schedule (kept per line)</span>}
+          {!c.placeOk && <span className="ml-2 text-xs text-red-600">different place of supply — cannot merge</span>}</span>
+        <Status s={c.status} /><span className="w-28 text-right tabular-nums">{inr(c.total)}</span>
+      </label>
+    );
+  };
   return (
     <>
       <Button onClick={() => setOpen(true)}>Merge orders</Button>
       <Modal open={open} onClose={() => setOpen(false)} title={`Merge into ${number}`} wide
-        footer={<><Button onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" disabled={!sel.length} loading={merge.isPending} onClick={() => confirm(`Merge ${sel.length} order(s) into ${number}? They will be marked "Merged".`) && merge.mutate(undefined)}>Merge {sel.length || ''}</Button></>}>
-        <p className="mb-3 text-sm text-slate-500">Other open orders of the same client and site. Their lines move to {number} with what has been delivered, installed and billed, and their POs, delivery challans, invoices, accessories lists, tickets, requisitions and project team move too. A line keeps its own payment schedule if it differs.</p>
-        {!cands.data ? <Spinner /> : !cands.data.length ? <p className="text-sm text-slate-500">No other open orders for this project.</p> : (
+        footer={<><Button onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" disabled={!sel.length} loading={merge.isPending} onClick={() => ask() && merge.mutate(undefined)}>Merge {sel.length || ''}</Button></>}>
+        <p className="mb-3 text-sm text-slate-500">Other open orders of this client. Their lines move to {number} with what has been delivered, installed and billed, and their POs, delivery challans, invoices, accessories lists, tickets, requisitions and project team move too. A line keeps its own payment schedule if it differs.</p>
+        {!cands.data ? <Spinner /> : !cands.data.length ? <p className="text-sm text-slate-500">No other open orders for this client. Orders that are closed, cancelled or already merged are not listed.</p> : (
           <div className="space-y-1">
-            {cands.data.map((c) => (
-              <label key={c.id} className={cx('flex items-center gap-3 rounded-md border px-3 py-2 text-sm', !c.placeOk ? 'opacity-50' : sel.includes(c.id) ? 'border-brand-300 bg-brand-50' : 'border-slate-200')}>
-                <input type="checkbox" disabled={!c.placeOk} checked={sel.includes(c.id)} onChange={() => setSel(sel.includes(c.id) ? sel.filter((x) => x !== c.id) : [...sel, c.id])} />
-                <span className="flex-1"><b className="font-medium">{c.number}</b> · {fmtDate(c.date)}{c.clientPoNo ? ` · client PO ${c.clientPoNo}` : ''}{c.site ? ` · ${c.site.name}` : ''}
-                  {!c.sameTerms && <span className="ml-2 text-xs text-amber-700">different payment schedule (kept per line)</span>}
-                  {!c.placeOk && <span className="ml-2 text-xs text-red-600">different place of supply — cannot merge</span>}</span>
-                <Status s={c.status} /><span className="w-28 text-right tabular-nums">{inr(c.total)}</span>
-              </label>
-            ))}
+            {same.map(row)}
+            {dup.length > 0 && <>
+              <p className="pt-3 text-xs text-slate-500">These are for a client with the same name but a separate (duplicate) client record. Merge the two clients in <Link className="text-brand-700 underline" to="/settings/cleanup">Duplicates &amp; Clean-up</Link> first, then merge the orders here.</p>
+              {dup.map(row)}
+            </>}
           </div>
         )}
       </Modal>

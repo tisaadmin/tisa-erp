@@ -330,22 +330,31 @@ r.patch('/orders/:id', requirePerm('orders:edit'), async (req, res) => {
   res.json(row);
 });
 
-/** Other open orders of the same client and site — candidates to merge into this one. */
+/**
+ * Other open orders of the same client — candidates to merge into this one. Orders at another site of the client can be merged
+ * (they become part of this project); orders filed under a duplicate client record are listed but must have their clients merged first.
+ */
 r.get('/orders/:id/merge-candidates', requirePerm('orders:view'), async (req, res) => {
-  const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id) });
+  const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), with: { client: { columns: { id: true, name: true } } } });
   if (!o) throw notFound('Order');
+  const norm = (n: string) => n.toLowerCase().replace(/\b(pvt|private|ltd|limited|llp|the|m\/s)\b/g, '').replace(/[^a-z0-9]+/g, '');
+  const twins = (await db.select({ id: clients.id, name: clients.name }).from(clients)).filter((c) => c.id !== o.clientId && norm(c.name) === norm(o.client.name));
   const rows = await db.query.salesOrders.findMany({
-    where: and(eq(salesOrders.clientId, o.clientId), inArray(salesOrders.status, ['OPEN', 'IN_PROGRESS', 'COMPLETED'])),
-    with: { site: { columns: { id: true, name: true } } }, orderBy: [desc(salesOrders.date)],
+    where: and(inArray(salesOrders.clientId, [o.clientId, ...twins.map((c) => c.id)]), inArray(salesOrders.status, ['OPEN', 'IN_PROGRESS', 'COMPLETED'])),
+    with: { site: { columns: { id: true, name: true } }, client: { columns: { id: true, name: true } } }, orderBy: [desc(salesOrders.date)],
   });
-  res.json(rows.filter((x) => x.id !== o.id && (!x.siteId || !o.siteId || x.siteId === o.siteId))
-    .map((x) => ({ id: x.id, number: x.number, date: x.date, status: x.status, total: x.total, clientPoNo: x.clientPoNo, site: x.site, sameTerms: JSON.stringify(x.paymentTerms) === JSON.stringify(o.paymentTerms), placeOk: x.placeOfSupply === o.placeOfSupply })));
+  res.json(rows.filter((x) => x.id !== o.id).map((x) => ({
+    id: x.id, number: x.number, date: x.date, status: x.status, total: x.total, clientPoNo: x.clientPoNo, site: x.site, title: (x.sourceData as any)?.title ?? null,
+    sameTerms: JSON.stringify(x.paymentTerms) === JSON.stringify(o.paymentTerms), placeOk: x.placeOfSupply === o.placeOfSupply,
+    sameSite: !x.siteId || !o.siteId || x.siteId === o.siteId,
+    otherClient: x.clientId !== o.clientId ? x.client : null,
+  })));
 });
 
 /** Merge other orders of the same project into this one (lines and everything raised against them move over). */
 r.post('/orders/:id/merge', requirePerm('orders:edit'), async (req, res) => {
   const { sourceIds } = z.object({ sourceIds: z.array(z.string()).min(1) }).parse(req.body);
-  const out = await db.transaction((tx) => mergeOrders(tx, req.params.id, sourceIds));
+  const out = await db.transaction((tx) => mergeOrders(tx, req.params.id, sourceIds, !!req.body?.allowOtherSites));
   audit(req, 'merge', 'order', req.params.id, out);
   res.json(out);
 });

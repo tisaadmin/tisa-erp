@@ -1317,6 +1317,7 @@ test('merge orders of a project: lines, deliveries, POs, accessories and team mo
   const other = await ok('admin', 'POST', '/sites', { clientId: ctx.client.id, name: 'Merge other plant', stateCode: '27' });
   const d = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: other.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.svcItem.id, qty: 1 }] });
   assert.equal((await call('sales', 'POST', `/orders/${a.id}/merge`, { sourceIds: [d.id] })).status, 400, 'different site');
+  assert.equal((await ok('sales', 'GET', `/orders/${a.id}/merge-candidates`)).find((x: any) => x.id === d.id)?.sameSite, false, 'other sites are listed, flagged');
   const out = await ok('sales', 'POST', `/orders/${a.id}/merge`, { sourceIds: [b.id, c.id] });
   assert.deepEqual(out.merged.sort(), [b.number, c.number].sort());
   const m = await ok('sales', 'GET', `/orders/${a.id}`);

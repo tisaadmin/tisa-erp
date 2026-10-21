@@ -14,7 +14,7 @@ import { getCompany } from './company';
 
 const sameTerms = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-export async function mergeOrders(tx: Tx, targetId: string, sourceIds: string[]) {
+export async function mergeOrders(tx: Tx, targetId: string, sourceIds: string[], allowOtherSites = false) {
   const ids = [...new Set(sourceIds)].filter((x) => x !== targetId);
   if (!ids.length) throw badRequest('Choose the orders to merge into this one');
   const target = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, targetId) });
@@ -23,8 +23,8 @@ export async function mergeOrders(tx: Tx, targetId: string, sourceIds: string[])
   const sources = await tx.query.salesOrders.findMany({ where: inArray(salesOrders.id, ids) });
   if (sources.length !== ids.length) throw badRequest('Order not found');
   for (const s of sources) {
-    if (s.clientId !== target.clientId) throw badRequest(`${s.number} is for a different client`);
-    if (s.siteId && target.siteId && s.siteId !== target.siteId) throw badRequest(`${s.number} is for a different site — only orders of the same project (site) can be merged`);
+    if (s.clientId !== target.clientId) throw badRequest(`${s.number} is filed under a different client record — merge the clients in Duplicates & Clean-up first`);
+    if (!allowOtherSites && s.siteId && target.siteId && s.siteId !== target.siteId) throw badRequest(`${s.number} is for a different site — only orders of the same project (site) can be merged`);
     if (['CANCELLED', 'CLOSED', 'MERGED'].includes(s.status)) throw badRequest(`${s.number} is ${s.status.toLowerCase()}`);
     if (s.placeOfSupply !== target.placeOfSupply) throw badRequest(`${s.number} has a different place of supply (GST) — cannot merge`);
     // running bills follow the order's milestone schedule; lines keep their own schedule when it differs
