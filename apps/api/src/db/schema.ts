@@ -78,6 +78,8 @@ export const companySettings = pgTable('company_settings', {
   workflowRules: jsonb().$type<Record<string, boolean>>().notNull().default({}),
   /** official email domains that may sign in (sub-domains included); other addresses only if the Super Admin allows them per user */
   loginDomains: text().array().notNull().default(['tisa.in']),
+  /** rate card for quotation costing: manpower roles (₹/man-day), transport presets, service cost % of project value */
+  costingConfig: jsonb().$type<CostingConfig>().notNull().default({}),
   updatedAt: updatedAt(),
 });
 
@@ -360,6 +362,8 @@ export const quotations = pgTable('quotations', {
   approvedById: text(),
   /** raised from this requisition (site request) */
   requisitionId: text(),
+  /** internal costing (never printed): execution manpower, transport, service cost for the year, other costs */
+  costing: jsonb().$type<QuoteCosting>(),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
@@ -368,7 +372,27 @@ export const quotationItems = pgTable('quotation_items', {
   id: id(),
   quotationId: text().notNull().references(() => quotations.id, { onDelete: 'cascade' }),
   ...lineCols(),
+  /** internal costing (never printed): our purchase rate and who quoted it */
+  costRate: money(),
+  costVendorId: text(),
+  costVendor: text(),
 });
+
+export type CostingConfig = {
+  manpowerRoles?: { key: string; label: string; dayRate: number }[];
+  transportPresets?: { label: string; amount: number }[];
+  /** default service cost for the year as % of the quotation value */
+  servicePct?: number;
+  /** gross margin % below which the approver is warned */
+  minGpPct?: number;
+};
+export type QuoteCosting = {
+  manpower?: { role: string; label: string; dayRate: number; people: number; days: number }[];
+  transport?: { label: string; amount: number }[];
+  serviceCost?: number | null;
+  serviceNote?: string | null;
+  other?: { label: string; amount: number }[];
+};
 
 export type SourceData = {
   system: string; soNumber: string; title?: string | null; owner?: string | null; allocatedTo?: string | null;

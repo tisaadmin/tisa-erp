@@ -14,6 +14,7 @@ import { FIELD_ENTITIES, REGISTRY, resolvedFields, saveFieldConfig, type FieldEn
 
 import { WORKFLOW_RULES, workflowRules, type WorkflowRule } from '../services/workflow';
 import { isOfficialEmail, isSuperAdminPerms, loginDomains } from '../lib/loginPolicy';
+import { costingConfig } from '../services/quoteCosting';
 const r = Router();
 const publicUser = { passwordHash: false, pushToken: false } as const;
 
@@ -189,6 +190,22 @@ r.delete('/departments/:id', requirePerm('departments:edit'), async (req, res) =
   await db.delete(departments).where(eq(departments.id, req.params.id));
   audit(req, 'delete', 'department', req.params.id);
   res.status(204).end();
+});
+
+// ── Quotation costing rate card ──
+r.get('/settings/costing', requirePerm('settings:view'), async (_req, res) => { res.json(await costingConfig()); });
+r.put('/settings/costing', requirePerm('settings:edit'), async (req, res) => {
+  const d = z.object({
+    manpowerRoles: z.array(z.object({ key: z.string().trim().min(1), label: z.string().trim().min(1), dayRate: z.coerce.number().min(0) })).min(1, 'Add at least one manpower role'),
+    transportPresets: z.array(z.object({ label: z.string().trim().min(1), amount: z.coerce.number().min(0) })).default([]),
+    servicePct: z.coerce.number().min(0).max(100), minGpPct: z.coerce.number().min(0).max(100),
+  }).parse(req.body);
+  const keys = d.manpowerRoles.map((m) => m.key.toUpperCase());
+  if (new Set(keys).size !== keys.length) throw badRequest('Each manpower role needs a different name');
+  await db.update(companySettings).set({ costingConfig: { ...d, manpowerRoles: d.manpowerRoles.map((m) => ({ ...m, key: m.key.toUpperCase() })) } }).where(eq(companySettings.id, 1));
+  clearCompanyCache();
+  audit(req, 'update', 'settings', 'costing', d);
+  res.json(await costingConfig());
 });
 
 r.get('/settings/login', requirePerm('users:view'), async (_req, res) => {

@@ -1,3 +1,4 @@
+import { CostingSettingsPage } from './components/QuoteCosting';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
 import { Spinner } from './components/ui';
@@ -82,6 +83,7 @@ export default function App() {
         <Route path="settings/fields" element={<FieldsPage />} />
         <Route path="settings/import" element={<ImportPage />} />
         <Route path="settings/workflow" element={<WorkflowPage />} />
+        <Route path="settings/costing" element={<CostingSettingsPage />} />
         <Route path="settings/cleanup" element={<CleanupPage />} />
         <Route path="accessories" element={<AccessorySheetsPage />} />
         <Route path="accessories/templates" element={<AccessoryTemplatesPage />} />

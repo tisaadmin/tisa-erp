@@ -8,6 +8,16 @@ import { HttpError } from '../lib/http';
 import { getCompany } from './company';
 
 export const WORKFLOW_RULES = {
+  quoteRequiresApproval: {
+    label: 'Quotations go to the client only after approval',
+    help: 'A quotation must be approved (with its costing and gross profit) before it is marked as sent to the client.',
+    exception: 'quotations:approve', default: true,
+  },
+  quoteRequiresCosting: {
+    label: 'Quotations need a purchase rate on every product line before approval',
+    help: 'Every product / accessory line needs our purchase rate (and vendor) so the project cost and gross profit can be worked out. Service lines are costed through manpower.',
+    exception: 'quotations:approve', default: true,
+  },
   orderRequiresQuote: {
     label: 'Orders only from an approved quotation',
     help: 'New order forms are created with "Convert to order" on an approved quotation. Filling in orders imported from the old ERP is not affected.',

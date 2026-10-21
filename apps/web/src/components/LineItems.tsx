@@ -1,11 +1,15 @@
 import { Plus, Trash2 } from 'lucide-react';
-import { useMemo } from 'react';
+import { Fragment, useMemo, useRef } from 'react';
 import { useGet, useItems } from '../lib/hooks';
 import { inr, STAGE_LABEL, STAGES } from '../lib/format';
 import { ItemSuggest, type SuggestItem } from './ItemSuggest';
 import { Button, cx } from './ui';
+import { Combo } from './Combo';
+import { api } from '../lib/api';
 
-export type Line = { itemId?: string | null; description: string; hsnSac?: string | null; unit: string; qty: number; rate: number; discountPct: number; gstRate: number };
+export type Line = { itemId?: string | null; description: string; hsnSac?: string | null; unit: string; qty: number; rate: number; discountPct: number; gstRate: number;
+  /** quotation costing (internal): our purchase rate and the vendor quoting it */
+  costRate?: number | null; costVendorId?: string | null; costVendor?: string | null };
 export type Term = { stage: string; percent: number };
 export const emptyLine = (): Line => ({ itemId: null, description: '', hsnSac: '', unit: 'Nos', qty: 1, rate: 0, discountPct: 0, gstRate: 18 });
 
@@ -23,11 +27,14 @@ export function totalsOf(lines: Line[], interState: boolean) {
   return { gross: r2(gross), discount: r2(gross - taxable), taxable: r2(taxable), cgst: r2(cgst), sgst: r2(sgst), igst: interState ? r2(tax) : 0, roundOff: r2(total - raw), total };
 }
 
-export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds, limits }: {
+export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds, limits, costing }: {
   lines: Line[]; onChange: (l: Line[]) => void; interState: boolean; priceField?: 'salePrice' | 'purchasePrice';
   /** when set, only these inventory items may be picked (e.g. a PO against an order) */ onlyItemIds?: string[];
   /** per item: quantity on the order and how much is still left to order */ limits?: Record<string, { qty: number; ordered: number; remaining: number }>;
+  /** quotation: show our purchase rate + vendor per line (internal costing) */ costing?: boolean;
 }) {
+  const vendors = useGet<{ data: { id: string; name: string }[] }>(costing ? '/vendors' : null, { active: true, pageSize: 10000, all: 1 });
+  const vendorOpts = useMemo(() => (vendors.data?.data ?? []).map((v) => ({ value: v.id, label: v.name })), [vendors.data]);
   const items = useItems();
   const stock = useGet<any[]>('/items/stock');
   // inventory with live stock where the user may see it; plain item list otherwise
@@ -38,25 +45,38 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
   const used = new Map<string, number>();
   for (const l of lines) if (l.itemId) used.set(l.itemId, (used.get(l.itemId) ?? 0) + (Number(l.qty) || 0));
   const set = (i: number, patch: Partial<Line>) => onChange(lines.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  // async updates (purchase history) apply to the latest lines
+  const latest = useRef(lines); latest.current = lines;
+  const onChangeRef = useRef((f: (cur: Line[]) => Line[]) => onChange(f(latest.current)));
+  onChangeRef.current = (f) => onChange(f(latest.current));
   const t = totalsOf(lines, interState);
   return (
     <div>
       <div className="overflow-x-auto rounded-md border border-slate-200">
         <table className="tbl min-w-[1050px]">
           <thead>
-            <tr><th className="w-8">#</th><th className="min-w-96">Item / description</th><th className="w-28">HSN/SAC</th><th className="w-24 text-right">Qty</th><th className="w-20">Unit</th><th className="w-32 text-right">Rate</th><th className="w-20 text-right">Disc %</th><th className="w-24 text-right">GST %</th><th className="w-32 text-right">Taxable</th><th className="w-8" /></tr>
+            <tr><th className="w-8">#</th><th className="min-w-80">Item / description</th><th className="w-28 min-w-24">HSN/SAC</th><th className="w-24 min-w-20 text-right">Qty</th><th className="w-20 min-w-16">Unit</th><th className="w-32 min-w-28 text-right">Rate</th><th className="w-20 min-w-16 text-right">Disc %</th><th className="w-24 min-w-20 text-right">GST %</th><th className="w-32 text-right">Taxable</th><th className="w-8" /></tr>
           </thead>
           <tbody>
             {lines.map((l, i) => {
               const taxable = r2(l.qty * l.rate * (1 - (l.discountPct || 0) / 100));
               return (
-                <tr key={i}>
+                <Fragment key={i}>
+                <tr className={costing ? '[&>td]:border-b-0' : undefined}>
                   <td className="pt-3 text-slate-400">{i + 1}</td>
                   <td>
                     <ItemSuggest value={l.description} itemId={l.itemId} items={pickable} restricted={!!onlyItemIds} priceField={priceField}
                       onText={(description) => set(i, { description })}
                       onUnlink={() => set(i, { itemId: null })}
-                      onPick={(it) => set(i, { itemId: it.id, description: `${it.name}${it.brand && !it.name.toLowerCase().includes(it.brand.toLowerCase()) ? ` — ${it.brand}` : ''}${it.model && !it.name.toLowerCase().includes(it.model.toLowerCase()) ? ` ${it.model}` : ''}`, hsnSac: it.hsnSac ?? '', unit: it.unit, rate: it[priceField], gstRate: it.gstRate })} />
+                      onPick={(it) => {
+                        if (costing) {
+                          // our cost: last purchase rate (and vendor), else the item's purchase price
+                          api<Record<string, { lastRate: number | null; vendorId: string | null; vendor: string | null; masterRate: number }>>(`/quotations-costing/purchase-history?ids=${it.id}`)
+                            .then((h) => { const x = h[it.id]; if (x) onChangeRef.current((cur) => cur.map((l, j) => (j === i && l.itemId === it.id && l.costRate == null ? { ...l, costRate: x.lastRate ?? x.masterRate ?? null, costVendorId: x.vendorId, costVendor: x.vendor } : l))); })
+                            .catch(() => undefined);
+                        }
+                        set(i, { itemId: it.id, costRate: null, costVendorId: null, costVendor: null, description: `${it.name}${it.brand && !it.name.toLowerCase().includes(it.brand.toLowerCase()) ? ` — ${it.brand}` : ''}${it.model && !it.name.toLowerCase().includes(it.model.toLowerCase()) ? ` ${it.model}` : ''}`, hsnSac: it.hsnSac ?? '', unit: it.unit, rate: it[priceField], gstRate: it.gstRate });
+                      }} />
                   </td>
                   <td><input className="input" value={l.hsnSac ?? ''} onChange={(e) => set(i, { hsnSac: e.target.value })} /></td>
                   <td>
@@ -74,6 +94,22 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
                   <td className="num pt-3 font-medium">{inr(taxable)}</td>
                   <td className="pt-2"><button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" onClick={() => onChange(lines.filter((_, j) => j !== i))} aria-label="Remove line"><Trash2 className="size-4" /></button></td>
                 </tr>
+                {costing && (
+                  <tr className="bg-amber-50/60">
+                    <td />
+                    <td colSpan={9} className="!pt-0">
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-amber-900">
+                        <span className="font-semibold">Purchase rate</span>
+                        <input type="number" min={0} step="any" className={cx('input w-32 text-right', l.costRate == null && 'border-amber-400')} value={l.costRate ?? ''} placeholder="our cost / unit" onChange={(e) => set(i, { costRate: e.target.value === '' ? null : Number(e.target.value) })} />
+                        <span className="ml-2 font-semibold">Vendor</span>
+                        <div className="w-64"><Combo options={vendorOpts} value={l.costVendorId ?? null} placeholder={l.costVendor || 'Vendor quoting this rate…'} onChange={(v, o) => set(i, { costVendorId: v, costVendor: o?.label ?? null })} /></div>
+                        {l.costRate != null && l.qty > 0 && <span className="ml-2">Cost {inr(l.costRate * l.qty)}</span>}
+                        {l.costRate != null && l.rate > 0 && <span className={cx('ml-2 font-medium', l.costRate > l.rate * (1 - (l.discountPct || 0) / 100) ? 'text-red-600' : 'text-emerald-700')}>margin {Math.round((1 - l.costRate / (l.rate * (1 - (l.discountPct || 0) / 100))) * 100)}%</span>}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>

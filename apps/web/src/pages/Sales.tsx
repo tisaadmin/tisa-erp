@@ -14,6 +14,7 @@ import { OrderInstallationCard } from '../components/Installation';
 import { OrderProjectTeamCard } from './Projects';
 import { OrderVendorBillsCard } from './VendorBills';
 import { DeleteOrderButton } from './Cleanup';
+import { emptyCosting, QuoteCostingCard, QuoteCostingEditor, type QuoteCosting } from '../components/QuoteCosting';
 
 export function useCompanyState() {
   const s = useGet<{ company: { stateCode: string } | null }>('/settings');
@@ -39,7 +40,7 @@ export function PartyPicker({ clientId, siteId, onChange, siteRequired, lockClie
   );
 }
 
-const linesFrom = (items: any[]): Line[] => items.map((l) => ({ itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate }));
+const linesFrom = (items: any[]): Line[] => items.map((l) => ({ itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate, costRate: l.costRate, costVendorId: l.costVendorId, costVendor: l.costVendor }));
 
 // ═══════════════════════ Quotations ═══════════════════════
 
@@ -67,12 +68,14 @@ export function QuotationsPage() {
   );
 }
 
-type DocState = { clientId: string | null; siteId: string | null; leadId?: string | null; stateCode?: string | null; date: string; validUntil?: string; subject?: string; clientPoNo?: string; clientPoDate?: string; expectedCompletion?: string; terms?: string; notes?: string; lines: Line[]; paymentTerms: Term[]; useTerms?: boolean };
+type DocState = { clientId: string | null; siteId: string | null; leadId?: string | null; stateCode?: string | null; date: string; validUntil?: string; subject?: string; clientPoNo?: string; clientPoDate?: string; expectedCompletion?: string; terms?: string; notes?: string; lines: Line[]; paymentTerms: Term[]; useTerms?: boolean; costing?: QuoteCosting };
 
 export function QuotationEditor() {
   const { id } = useParams();
   const [sp] = useSearchParams();
   const nav = useNavigate();
+  const { can } = useAuth();
+  const canCost = can('quotations:costing');
   const companyState = useCompanyState();
   const existing = useGet<any>(id ? `/quotations/${id}` : null);
   const leads = useGet<Page<any>>('/leads', { pageSize: 500 });
@@ -81,7 +84,7 @@ export function QuotationEditor() {
   const [d, setD] = useState<DocState>({ clientId: sp.get('clientId'), siteId: null, leadId: sp.get('leadId'), date: toInputDate(new Date()), validUntil: toInputDate(new Date(Date.now() + 30 * 864e5)), lines: [emptyLine()], paymentTerms: [{ stage: 'ADVANCE', percent: 50 }, { stage: 'DELIVERY', percent: 40 }, { stage: 'COMMISSIONING', percent: 10 }], useTerms: true });
   useEffect(() => {
     const q = existing.data;
-    if (q) setD({ clientId: q.clientId, siteId: q.siteId, leadId: q.leadId, date: toInputDate(q.date), validUntil: toInputDate(q.validUntil), subject: q.subject ?? '', terms: q.terms ?? '', notes: q.notes ?? '', lines: linesFrom(q.items), paymentTerms: q.paymentTerms ?? [], useTerms: !!q.paymentTerms, stateCode: q.placeOfSupply });
+    if (q) setD({ clientId: q.clientId, siteId: q.siteId, leadId: q.leadId, date: toInputDate(q.date), validUntil: toInputDate(q.validUntil), subject: q.subject ?? '', terms: q.terms ?? '', notes: q.notes ?? '', lines: linesFrom(q.items), paymentTerms: q.paymentTerms ?? [], useTerms: !!q.paymentTerms, stateCode: q.placeOfSupply, costing: { ...emptyCosting(), ...(q.costing ?? {}) } });
   }, [existing.data]);
   useEffect(() => {
     if (!rq.ready || !rq.req) return;
@@ -91,7 +94,7 @@ export function QuotationEditor() {
   }, [rq.ready]);
   const inter = !!d.stateCode && d.stateCode !== companyState;
   const save = useAction((submit: boolean) => {
-    const body = { clientId: d.clientId, siteId: d.siteId, leadId: d.leadId, date: d.date, validUntil: d.validUntil || null, subject: d.subject, terms: d.terms || undefined, notes: d.notes, lines: d.lines, paymentTerms: d.useTerms ? d.paymentTerms : null, requisitionId };
+    const body = { clientId: d.clientId, siteId: d.siteId, leadId: d.leadId, date: d.date, validUntil: d.validUntil || null, subject: d.subject, terms: d.terms || undefined, notes: d.notes, lines: d.lines, paymentTerms: d.useTerms ? d.paymentTerms : null, requisitionId, ...(canCost ? { costing: d.costing ?? null } : {}) };
     return (id ? api(`/quotations/${id}`, { method: 'PUT', body }) : api('/quotations', { body })).then(async (q: any) => { if (submit) await api(`/quotations/${q.id}/status`, { body: { status: 'PENDING_APPROVAL' } }); return q; });
   }, { success: 'Quotation saved', invalidate: [['/quotations']], onSuccess: (q: any) => nav(`/quotations/${q.id}`) });
   if ((id && !existing.data) || rq.loading) return <Spinner />;
@@ -110,7 +113,8 @@ export function QuotationEditor() {
         </div>
         <div className="mt-2 text-xs text-slate-500">Tax: <b>{inter ? 'IGST (inter-state)' : 'CGST + SGST (intra-state)'}</b>{d.stateCode && ` · place of supply ${d.stateCode}`}</div>
       </Card>
-      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} /></Card>
+      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD((x) => ({ ...x, lines }))} interState={inter} costing={canCost} /></Card>
+      {canCost && <QuoteCostingEditor lines={d.lines} value={d.costing ?? emptyCosting()} onChange={(costing) => setD((x) => ({ ...x, costing }))} />}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title={<label className="flex items-center gap-2"><input type="checkbox" checked={d.useTerms} onChange={(e) => setD({ ...d, useTerms: e.target.checked })} /> Milestone payment schedule</label>}>
           {d.useTerms ? <PaymentTermsEditor terms={d.paymentTerms} onChange={(paymentTerms) => setD({ ...d, paymentTerms })} /> : <p className="text-sm text-slate-500">No schedule — set it when converting to an order.</p>}
@@ -157,6 +161,7 @@ export function QuotationDetail() {
         <KV cols={4} items={[['Client', q.client ? <Link className="text-brand-700" to={`/clients/${q.client.id}`}>{q.client.name}</Link> : null], ['Lead', q.lead?.companyName], ['Site', q.site?.name], ['Date', fmtDate(q.date)], ['Valid until', fmtDate(q.validUntil)], ['Place of supply', q.placeOfSupply], ['Revision', q.revision ? `R${q.revision}` : 'Original']]} />
       </Card>
       <DocLines doc={q} />
+      <QuoteCostingCard q={q} />
       {q.paymentTerms && <Card title="Payment schedule"><div className="flex flex-wrap gap-2">{q.paymentTerms.map((t: Term) => <Badge key={t.stage} t="blue">{t.percent}% {STAGE_LABEL[t.stage]}</Badge>)}</div></Card>}
       <Modal open={!!conv} onClose={() => setConv(null)} title="Convert to order form" wide
         footer={<><Button onClick={() => setConv(null)}>Cancel</Button><Button variant="primary" loading={convert.isPending} onClick={() => convert.mutate(undefined)}>Create order</Button></>}>

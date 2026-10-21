@@ -10,7 +10,7 @@ export const MODULES = {
   items: ['view', 'create', 'edit', 'delete'],
   vendors: ['view', 'create', 'edit', 'delete'],
   stock: ['view', 'adjust'],
-  quotations: ['view', 'create', 'edit', 'delete', 'approve'],
+  quotations: ['view', 'create', 'edit', 'delete', 'approve', 'costing'],
   orders: ['view', 'create', 'edit', 'delete', 'without_quote', 'assign_project'],
   accessories: ['view', 'create', 'edit', 'approve'],
   purchase_orders: ['view', 'create', 'edit', 'delete', 'approve', 'without_order', 'without_accessories', 'extra_items'],
@@ -64,7 +64,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: st
   {
     name: 'Sales', description: 'Leads, clients, quotations, order forms',
     permissions: ['dashboard:view', ...all('clients'), ...all('sites'), 'leads:view', 'leads:create', 'leads:edit',
-      ...view('items', 'stock', 'invoices', 'challans', 'amc', 'tickets'), 'quotations:view', 'quotations:create', 'quotations:edit',
+      ...view('items', 'stock', 'invoices', 'challans', 'amc', 'tickets'), 'quotations:view', 'quotations:create', 'quotations:edit', 'quotations:costing',
       'orders:view', 'orders:create', 'orders:edit', 'accessories:view', 'accessories:create', 'accessories:edit', 'amc:create', 'amc:edit', 'attendance:view', 'attendance:mark',
       'leaves:view', 'leaves:apply', 'expenses:view', 'expenses:create', 'reports:view'],
   },

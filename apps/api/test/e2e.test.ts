@@ -81,8 +81,35 @@ test('quotation → approve → convert to order with milestone terms', async ()
   assert.ok(q.cgst > 0 && q.igst === 0, 'intra-state (MH→MH)');
   const bad = await call('sales', 'POST', `/quotations/${q.id}/status`, { status: 'APPROVED' });
   assert.equal(bad.status, 400, 'sales cannot approve');
+  // costing: purchase rates are needed on product lines before approval; nor can it go to the client unapproved
+  const noCost = await call('sales', 'POST', `/quotations/${q.id}/status`, { status: 'PENDING_APPROVAL' });
+  assert.equal(noCost.status, 403); assert.match(noCost.data.error, /purchase rate/);
+  assert.equal((await call('sales', 'POST', `/quotations/${q.id}/status`, { status: 'SENT' })).status, 403, 'not sent before approval');
+  const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
+  const cfg = await ok('sales', 'GET', '/quotations-costing/config');
+  assert.ok(cfg.manpowerRoles.length > 0);
+  const tech = cfg.manpowerRoles.find((m: any) => m.key === 'TECHNICIAN');
+  await ok('sales', 'PUT', `/quotations/${q.id}`, {
+    clientId: ctx.client.id, siteId: ctx.site.id, subject: 'CCTV for Wagle plant', paymentTerms: q.paymentTerms,
+    lines: [{ itemId: ctx.cam.id, qty: 10, costRate: 2300, costVendorId: vendor.id }, { itemId: ctx.nvr.id, qty: 1, costRate: 5000, costVendor: 'Lamington Road dealer' }, { itemId: ctx.svcItem.id, qty: 10 }],
+    costing: { manpower: [{ role: 'TECHNICIAN', label: tech.label, dayRate: tech.dayRate, people: 2, days: 3 }], transport: [{ label: 'Local trip', amount: 1500 }], serviceCost: 2000, other: [] },
+  });
+  const full = await ok('sales', 'GET', `/quotations/${q.id}`);
+  const value = 10 * 3200 + 7200 + 10 * 650, cost = 23000 + 5000 + tech.dayRate * 6 + 1500 + 2000;
+  assert.equal(full.costingSummary.totalCost, cost); assert.equal(full.costingSummary.grossProfit, value - cost);
+  assert.equal(full.items[0].costVendor, vendor.name); assert.equal(full.items[1].costVendor, 'Lamington Road dealer');
+  assert.equal(full.costingSummary.manDays, 6);
+  // technicians / projects never see our costs
+  const asTech = await ok('tech', 'GET', `/quotations/${q.id}`).catch(() => null);
+  if (asTech) { assert.equal(asTech.costing, undefined); assert.equal(asTech.items[0].costRate, undefined); }
   await ok('sales', 'POST', `/quotations/${q.id}/status`, { status: 'PENDING_APPROVAL' });
+  const notes = await ok('director', 'GET', '/notifications');
+  const n = (notes.data ?? notes).find((x: any) => x.title.includes(q.number));
+  assert.ok(n && /gross profit/.test(n.body), 'management gets the costing summary with the approval request');
   await ok('director', 'POST', `/quotations/${q.id}/status`, { status: 'APPROVED' });
+  // the PDF for the client has no costs
+  const hist = await ok('sales', 'GET', `/quotations-costing/purchase-history?ids=${ctx.cam.id}`);
+  assert.equal(typeof hist[ctx.cam.id].masterRate, 'number');
   const rev = await ok('sales', 'POST', `/quotations/${q.id}/revise`);
   assert.match(rev.number, /-R1$/);
   const o = await ok('sales', 'POST', `/quotations/${rev.id}/convert`, { clientPoNo: 'APX/PO/889' });
@@ -595,7 +622,7 @@ test('bulk order import: many product-details files matched by SO number; ready 
 
 test('workflow rules: PO / challan need an order, orders need a quote; exceptions by permission; rules can be switched off', async () => {
   const rules = await ok('admin', 'GET', '/settings/workflow');
-  assert.deepEqual(rules.map((r: any) => [r.key, r.enabled]), [['orderRequiresQuote', true], ['poRequiresOrder', true], ['poRequiresAccessories', false], ['poOnlyOrderItems', true], ['dcRequiresOrder', true]]);
+  assert.deepEqual(rules.map((r: any) => [r.key, r.enabled]), [['quoteRequiresApproval', true], ['quoteRequiresCosting', true], ['orderRequiresQuote', true], ['poRequiresOrder', true], ['poRequiresAccessories', false], ['poOnlyOrderItems', true], ['dcRequiresOrder', true]]);
   const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
   // Purchase & Stores has the "PO without order" exception by default; Management (director) too; Sales has no PO rights at all
   const orderless = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] });

@@ -5,21 +5,22 @@ import { z } from 'zod';
 import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { db } from '../db';
 import {
-  clients, departments, deliveryChallanItems, requisitions, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
+  clients, departments, deliveryChallanItems, items, requisitions, vendors, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
 } from '../db/schema';
 import { audit } from '../lib/audit';
-import { notifyUsers } from '../lib/notify';
-import { badRequest, notFound, pageParams } from '../lib/http';
+import { notifyPermission, notifyUsers } from '../lib/notify';
+import { badRequest, forbidden, notFound, pageParams } from '../lib/http';
 import { r3 } from '../lib/gst';
 import { nextNumber } from '../lib/numbering';
 import { pdfToBuffer } from '../lib/pdf';
-import { requirePerm } from '../middleware/auth';
+import { can, requirePerm, type AuthUser } from '../middleware/auth';
 import { orderBillingStatus, validateTerms } from '../services/billing';
 import { getCompany, resolvePlaceOfSupply } from '../services/company';
 import { challanPdf, orderPdf, quotationPdf } from '../services/documents';
 import { lineSchema, priceLines } from '../services/lines';
 import { postStock } from '../services/stock';
 import { mergeOrders } from '../services/orderMerge';
+import { costingConfig, costingSummary, isServiceLine, purchaseHistory, serviceItemIds, summaryText } from '../services/quoteCosting';
 import { materialKey, projectMaterialStatus } from '../services/projectStatus';
 import { createSalesOrder, orderSchema } from '../services/orders';
 
@@ -46,8 +47,28 @@ const qs = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 const quoteSchema = z.object({
   clientId: opt, leadId: opt, siteId: opt, date: z.coerce.date().optional(), validUntil: z.coerce.date().nullish(),
   subject: opt, placeOfSupply: opt, paymentTerms: termsSchema.nullish(), terms: opt, notes: opt, requisitionId: opt,
-  lines: z.array(lineSchema).min(1, 'Add at least one line'),
+  lines: z.array(lineSchema.extend({ costRate: z.coerce.number().min(0).nullish(), costVendorId: opt, costVendor: opt })).min(1, 'Add at least one line'),
+  costing: z.object({
+    manpower: z.array(z.object({ role: z.string(), label: z.string(), dayRate: z.coerce.number().min(0), people: z.coerce.number().min(0), days: z.coerce.number().min(0) })).default([]),
+    transport: z.array(z.object({ label: z.string().min(1), amount: z.coerce.number().min(0) })).default([]),
+    serviceCost: z.coerce.number().min(0).nullish(), serviceNote: opt,
+    other: z.array(z.object({ label: z.string().min(1), amount: z.coerce.number().min(0) })).default([]),
+  }).nullish(),
 });
+
+/** Internal cost fields of a quotation's lines (same order as the priced rows). */
+async function costFields(lines: z.infer<typeof quoteSchema>['lines'], user: AuthUser, existing?: { items: { itemId: string | null; description: string; costRate: number | null; costVendorId: string | null; costVendor: string | null }[] } | null) {
+  if (can(user, 'quotations:costing')) {
+    const ids = [...new Set(lines.map((l) => l.costVendorId).filter((x): x is string => !!x))];
+    const names = ids.length ? new Map((await db.select({ id: vendors.id, name: vendors.name }).from(vendors).where(inArray(vendors.id, ids))).map((v) => [v.id, v.name])) : new Map<string, string>();
+    return lines.map((l) => ({ costRate: l.costRate ?? null, costVendorId: l.costVendorId ?? null, costVendor: (l.costVendorId ? names.get(l.costVendorId) : null) ?? l.costVendor ?? null }));
+  }
+  // someone without costing rights edited the quotation: keep the costs already entered
+  return lines.map((l) => {
+    const old = existing?.items.find((i) => i.itemId === (l.itemId ?? null) && (l.itemId || i.description === l.description));
+    return { costRate: old?.costRate ?? null, costVendorId: old?.costVendorId ?? null, costVendor: old?.costVendor ?? null };
+  });
+}
 
 async function quoteTaxContext(tx: Parameters<Parameters<typeof db.transaction>[0]>[0], d: z.infer<typeof quoteSchema>) {
   if (!d.clientId && !d.leadId) throw badRequest('Choose a client or a lead');
@@ -85,7 +106,21 @@ r.get('/quotations/:id', requirePerm('quotations:view'), async (req, res) => {
     with: { items: { orderBy: [quotationItems.sortOrder] }, client: true, lead: true, site: true },
   });
   if (!q) throw notFound('Quotation');
-  res.json(q);
+  if (!can(req.user, 'quotations:costing') && !can(req.user, 'quotations:approve')) {
+    // costs and margins are for Sales / management only
+    const { costing: _c, ...rest } = q;
+    return res.json({ ...rest, items: q.items.map(({ costRate: _r, costVendorId: _v, costVendor: _n, ...i }) => i) });
+  }
+  const cfg = await costingConfig();
+  res.json({ ...q, costingSummary: costingSummary(q, q.items, cfg.minGpPct, await serviceItemIds(db, q.items)) });
+});
+
+/** Rate card for costing a quotation (manpower day rates, transport presets, service %, GP target). */
+r.get('/quotations-costing/config', requirePerm('quotations:view'), async (_req, res) => { res.json(await costingConfig()); });
+r.get('/quotations-costing/purchase-history', async (req, res) => {
+  if (!can(req.user, 'quotations:costing') && !can(req.user, 'purchase_orders:view')) throw forbidden();
+  const ids = (qs(req.query.ids) ?? '').split(',').filter(Boolean).slice(0, 200);
+  res.json(await purchaseHistory(db, ids));
 });
 
 r.post('/quotations', requirePerm('quotations:create'), async (req, res) => {
@@ -96,13 +131,15 @@ r.post('/quotations', requirePerm('quotations:create'), async (req, res) => {
     const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId, d.siteId ?? null) : null;
     const { placeOfSupply, interState } = await quoteTaxContext(tx, d);
     const { rows, totals } = await priceLines(tx, d.lines, interState);
+    const costs = await costFields(d.lines, req.user);
     const [q] = await tx.insert(quotations).values({
       number: await nextNumber(tx, 'QUOTATION', d.date), date: d.date ?? new Date(), validUntil: d.validUntil, clientId: d.clientId,
       leadId: d.leadId, siteId: d.siteId, subject: d.subject, placeOfSupply, paymentTerms: d.paymentTerms ?? null,
       terms: d.terms ?? company.quoteTerms, notes: d.notes, ...totals, createdById: req.user.id, requisitionId: rq?.id ?? null,
+      costing: can(req.user, 'quotations:costing') ? d.costing ?? null : null,
     }).returning();
     if (rq) await markRequisitionUsed(tx, rq, { kind: 'Quotation', number: q.number }, req.user.id);
-    await tx.insert(quotationItems).values(rows.map(({ paymentTerms: _pt, ...l }) => ({ ...l, quotationId: q.id })));
+    await tx.insert(quotationItems).values(rows.map(({ paymentTerms: _pt, ...l }, i) => ({ ...l, ...costs[i], quotationId: q.id })));
     if (d.leadId) await tx.update(leads).set({ status: 'QUOTED' }).where(and(eq(leads.id, d.leadId), inArray(leads.status, ['NEW', 'CONTACTED', 'SITE_SURVEY'])));
     return q;
   });
@@ -114,18 +151,20 @@ r.put('/quotations/:id', requirePerm('quotations:edit'), async (req, res) => {
   const d = quoteSchema.parse(req.body);
   validateTerms(d.paymentTerms);
   const q = await db.transaction(async (tx) => {
-    const existing = await tx.query.quotations.findFirst({ where: eq(quotations.id, req.params.id) });
+    const existing = await tx.query.quotations.findFirst({ where: eq(quotations.id, req.params.id), with: { items: true } });
     if (!existing) throw notFound('Quotation');
     if (!['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(existing.status)) throw badRequest(`A ${existing.status.toLowerCase()} quotation cannot be edited — create a revision`);
     const { placeOfSupply, interState } = await quoteTaxContext(tx, d);
     const { rows, totals } = await priceLines(tx, d.lines, interState);
+    const costs = await costFields(d.lines, req.user, existing);
     const [q] = await tx.update(quotations).set({
       date: d.date ?? existing.date, validUntil: d.validUntil, clientId: d.clientId, leadId: d.leadId, siteId: d.siteId, subject: d.subject,
       placeOfSupply, paymentTerms: d.paymentTerms ?? null, terms: d.terms, notes: d.notes, ...totals,
+      costing: can(req.user, 'quotations:costing') ? d.costing ?? existing.costing ?? null : existing.costing,
       status: existing.status === 'APPROVED' ? 'DRAFT' : existing.status, // edits invalidate approval
     }).where(eq(quotations.id, existing.id)).returning();
     await tx.delete(quotationItems).where(eq(quotationItems.quotationId, existing.id));
-    await tx.insert(quotationItems).values(rows.map(({ paymentTerms: _pt, ...l }) => ({ ...l, quotationId: q.id })));
+    await tx.insert(quotationItems).values(rows.map(({ paymentTerms: _pt, ...l }, i) => ({ ...l, ...costs[i], quotationId: q.id })));
     return q;
   });
   audit(req, 'update', 'quotation', q.id);
@@ -148,9 +187,26 @@ r.post('/quotations/:id/status', requirePerm('quotations:edit'), async (req, res
   if (status === 'APPROVED' && !req.user.permissions.some((p) => p === '*' || p === 'quotations:approve' || p === 'quotations:*')) {
     throw badRequest('Only users with quotation approval rights can approve');
   }
+  if (status === 'SENT' && q.status === 'DRAFT') await enforceRule('quoteRequiresApproval', req.user, 'Get the quotation approved (with its costing) before sending it to the client — use "Submit for approval"');
+  const items0 = await db.query.quotationItems.findMany({ where: eq(quotationItems.quotationId, q.id) });
+  if (status === 'PENDING_APPROVAL' || status === 'APPROVED') {
+    // every product / accessory line needs our purchase rate; service lines are costed through manpower
+    const svc = await serviceItemIds(db, items0);
+    const missing = items0.filter((i) => i.costRate == null && !isServiceLine(i, svc));
+    if (missing.length) await enforceRule('quoteRequiresCosting', req.user, `Enter our purchase rate (and vendor) for: ${missing.slice(0, 5).map((i) => i.description.slice(0, 40)).join(', ')}${missing.length > 5 ? ` and ${missing.length - 5} more` : ''} — edit the quotation and fill the purchase rate under each item`);
+  }
   const [row] = await db.update(quotations).set({ status, approvedById: status === 'APPROVED' ? req.user.id : q.approvedById })
     .where(eq(quotations.id, q.id)).returning();
-  audit(req, 'status', 'quotation', q.id, { from: q.status, to: status });
+  const cfg = await costingConfig();
+  const summary = costingSummary(q, items0, cfg.minGpPct, await serviceItemIds(db, items0));
+  audit(req, 'status', 'quotation', q.id, { from: q.status, to: status, costing: ['PENDING_APPROVAL', 'APPROVED'].includes(status) ? summary : undefined });
+  if (status === 'PENDING_APPROVAL') {
+    // the costing summary goes to management with the approval request
+    await notifyPermission('quotations:approve', { title: `Quotation ${q.number} for approval${summary.belowTarget ? ' ⚠ low margin' : ''}`, body: summaryText(summary), type: 'APPROVAL', link: `/quotations/${q.id}`, entityType: 'QUOTATION', entityId: q.id }, req.user.id);
+  }
+  if (status === 'APPROVED' || (status === 'DRAFT' && q.status === 'PENDING_APPROVAL')) {
+    await notifyUsers([q.createdById], { title: `Quotation ${q.number} ${status === 'APPROVED' ? 'approved' : 'sent back'}`, body: status === 'APPROVED' ? 'You can send it to the client' : 'Check the costing / prices and resubmit', type: 'APPROVAL', link: `/quotations/${q.id}`, entityType: 'QUOTATION', entityId: q.id }, req.user.id);
+  }
   res.json(row);
 });
 
