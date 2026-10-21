@@ -33,7 +33,7 @@ export function AccessorySheetsPage() {
           <Select className="w-48" value={q.status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} placeholder="All statuses"
             options={[{ value: 'DRAFT', label: 'Draft' }, { value: 'SUBMITTED', label: 'Waiting for approval' }, { value: 'REJECTED', label: 'Sent back' }, { value: 'APPROVED', label: 'Approved' }]} />
         </div>
-        <Table rows={list.data?.data} to={(r) => `/accessories/${r.id}`} empty="No accessory sheets yet — open an order and choose “Accessories”" cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'accessory-sheets', path: '/accessory-sheets', query: q }} to={(r) => `/accessories/${r.id}`} empty="No accessory sheets yet — open an order and choose “Accessories”" cols={[
           { key: 'number', label: 'Sheet' }, { key: 'order', label: 'Order', render: (r) => <>{r.orderNumber}{r.sourceRef && <div className="text-xs text-slate-400">{r.sourceRef.replace('FFH:', 'FFH ')}</div>}</> },
           { key: 'client', label: 'Client', render: (r) => r.clientName }, { key: 'lines', label: 'Lines', num: true },
           { key: 'cost', label: 'Est. cost', num: true, render: (r) => inr(r.estimatedCost) }, { key: 'date', label: 'Created', render: (r) => fmtDate(r.createdAt) },

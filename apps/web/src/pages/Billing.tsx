@@ -41,7 +41,7 @@ export function InvoicesPage() {
             <button className="text-brand-700 underline" onClick={() => setSel(new Set())}>Clear</button>
           </div>
         )}
-        <Table rows={list.data?.data} to={(r) => `/invoices/${r.id}`} cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'invoices', path: '/invoices', query: q }} to={(r) => `/invoices/${r.id}`} cols={[
           ...(canPay ? [{ key: 'sel', label: '', render: (r: any) => ['ISSUED', 'PARTIALLY_PAID'].includes(r.status) ? <span onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={sel.has(r.id)} onChange={(e) => toggle(r.id, e.target.checked)} /></span> : null }] : []),
           { key: 'number', label: 'Number' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
           { key: 'type', label: 'Type', render: (r) => r.raBillNo ? <Badge t="blue">RA-{r.raBillNo}</Badge> : label(r.type) },
@@ -174,12 +174,12 @@ export function ReceivablesPage() {
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'ageing', label: 'Outstanding by client' }, { value: 'receipts', label: 'Receipts' }]} />
       <Card pad={false}>
         {tab === 'ageing' ? (
-          <Table rows={r.data?.clients.map((c) => ({ ...c, id: c.clientId }))} to={(c) => `/clients/${c.id}`} empty="No outstanding invoices" cols={[
+          <Table rows={r.data?.clients.map((c) => ({ ...c, id: c.clientId }))} exportAs={{ name: 'receivables' }} to={(c) => `/clients/${c.id}`} empty="No outstanding invoices" cols={[
             { key: 'name', label: 'Client' }, { key: 'outstanding', label: 'Outstanding', num: true, render: (c) => inr(c.outstanding) },
             { key: 'overdue', label: 'Overdue', num: true, render: (c) => <span className={c.overdue ? 'text-red-600' : ''}>{inr(c.overdue)}</span> },
           ]} />
         ) : (
-          <Table rows={pays.data?.data} to={(p) => `/invoices/${p.invoiceId}`} cols={[
+          <Table rows={pays.data?.data} exportAs={{ name: 'receipts', path: '/payments' }} to={(p) => `/invoices/${p.invoiceId}`} cols={[
             { key: 'number', label: 'Receipt' }, { key: 'date', label: 'Date', render: (p) => fmtDate(p.date) }, { key: 'client', label: 'Client', render: (p) => p.invoice?.client?.name },
             { key: 'invoice', label: 'Invoice', render: (p) => p.invoice?.number }, { key: 'mode', label: 'Mode' }, { key: 'amount', label: 'Amount', num: true, render: (p) => inr(p.amount) },
           ]} />

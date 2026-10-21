@@ -200,7 +200,7 @@ export function InventoryPage() {
       </div>
       <Card pad={false}>
         <div className="border-b border-slate-100 p-3"><Input className="max-w-xs" placeholder="Search items…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
-        <Table rows={stock.data ? rows : undefined} onRow={(r: any) => can('items:edit') && api(`/items/${r.id}`).then((full) => ed.open({ ...full, gstRate: String(full.gstRate) }))} cols={[
+        <Table rows={stock.data ? rows : undefined} exportAs={{ name: 'inventory' }} onRow={(r: any) => can('items:edit') && api(`/items/${r.id}`).then((full) => ed.open({ ...full, gstRate: String(full.gstRate) }))} cols={[
           { key: 'name', label: 'Item', render: (r: any) => <>{r.name}<div className="text-xs text-slate-400">{[r.sku, r.brand, r.model].filter(Boolean).join(' · ')}</div></> },
           { key: 'category', label: 'System', render: (r: any) => <>{r.category}{r.subCategory && <div className="text-xs text-slate-400">{r.subCategory}</div>}</> }, { key: 'type', label: 'Type', render: (r: any) => <Badge t={r.type === 'SERVICE' ? 'violet' : r.type === 'ACCESSORY' ? 'gray' : 'blue'}>{label(r.type)}</Badge> },
           { key: 'hsnSac', label: 'HSN/SAC' }, { key: 'gstRate', label: 'GST', num: true, render: (r: any) => `${r.gstRate}%` },

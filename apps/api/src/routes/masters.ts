@@ -48,10 +48,10 @@ r.get('/clients/:id/overview', requirePerm('clients:view'), async (req, res) => 
 });
 
 /** Excel download of a master list (all records matching the list's filters, custom fields included). */
-async function sendXlsx(res: Response, name: string, cols: { header: string; width?: number }[], rows: unknown[][]) {
+async function sendXlsx(res: Response, name: string, cols: { header: string; width?: number; num?: boolean }[], rows: unknown[][]) {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet(name);
-  ws.columns = cols.map((c) => ({ header: c.header, width: c.width ?? 18 }));
+  ws.columns = cols.map((c) => ({ header: c.header, width: c.width ?? 18, ...(c.num ? { style: { numFmt: '#,##0.##' } } : {}) }));
   ws.getRow(1).font = { bold: true };
   ws.views = [{ state: 'frozen', ySplit: 1 }];
   ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
@@ -64,6 +64,19 @@ async function sendXlsx(res: Response, name: string, cols: { header: string; wid
 const like = (q: unknown) => (typeof q === 'string' && q.trim() ? `%${q.trim().toLowerCase()}%` : null);
 const activeFilter = (q: unknown) => (q === 'true' ? true : q === 'false' ? false : null);
 const customCols = async (entity: 'clients' | 'sites') => (await resolvedFields(entity)).filter((f) => f.isCustom && f.visible);
+
+/** Any list on screen → Excel: the browser sends the rows it fetched (with the user's own rights) and gets a workbook back. */
+r.post('/export/xlsx', async (req, res) => {
+  const d = z.object({
+    name: z.string().trim().min(1).max(60),
+    columns: z.array(z.object({ header: z.string().max(120), num: z.boolean().optional() })).min(1).max(80),
+    rows: z.array(z.array(z.union([z.string(), z.number(), z.null()]))).max(20000),
+  }).parse(req.body);
+  const name = d.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'export';
+  const width = (i: number) => Math.min(50, Math.max(10, d.columns[i].header.length + 2, ...d.rows.slice(0, 200).map((r) => String(r[i] ?? '').length + 2)));
+  await sendXlsx(res, name, d.columns.map((c, i) => ({ header: c.header, width: width(i), num: c.num })), d.rows);
+  audit(req, 'export', 'list', name, { rows: d.rows.length });
+});
 
 r.get('/clients-export.xlsx', requirePerm('clients:view'), async (req, res) => {
   const s = like(req.query.search), act = activeFilter(req.query.active);

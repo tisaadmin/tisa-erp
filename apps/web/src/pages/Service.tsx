@@ -31,7 +31,7 @@ export function TicketsPage() {
           <Select className="w-48" value={q.type ?? ''} onChange={(e) => set('type', e.target.value)} options={TYPES} placeholder="Any type" />
           {can('tickets:view_all') && <Combo className="w-48" options={(users.data ?? []).filter((u) => u.isFieldStaff).map((u) => ({ value: u.id, label: u.name }))} value={q.assignedToId} onChange={(v) => set('assignedToId', v)} placeholder="Any technician" />}
         </div>
-        <Table rows={list.data?.data} to={(r) => `/tickets/${r.id}`} cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'tickets', path: '/tickets', query: q }} to={(r) => `/tickets/${r.id}`} cols={[
           { key: 'number', label: 'Ticket', render: (r) => <>{r.number}<div className="text-xs font-normal text-slate-400">{fmtDateTime(r.createdAt)}</div></> },
           { key: 'title', label: 'Issue', render: (r) => <>{r.title}<div className="text-xs text-slate-400">{label(r.type)}{r.category && ` · ${r.category.name}`}{r.amcId ? ' · AMC' : r.isBillable ? ' · chargeable' : ''}</div></> },
           { key: 'site', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="text-xs text-slate-400">{r.site?.name}</div></> },
@@ -169,7 +169,7 @@ export function ServiceReportsPage() {
       <PageHeader title="Service reports" subtitle="Submitted from the mobile app with client signature; a PDF copy is emailed to the client and the office automatically" />
       <Card pad={false}>
         <div className="border-b border-slate-100 p-3"><SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} /></div>
-        <Table rows={list.data?.data} to={(r) => `/service-reports/${r.id}`} cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'service-reports', path: '/service-reports', query: q }} to={(r) => `/service-reports/${r.id}`} cols={[
           { key: 'number', label: 'Report' }, { key: 'visitDate', label: 'Visit', render: (r) => fmtDateTime(r.visitDate) },
           { key: 'site', label: 'Client / site', render: (r) => <>{r.site?.client?.name}<div className="text-xs text-slate-400">{r.site?.name}</div></> },
           { key: 'ticket', label: 'Ticket', render: (r) => r.ticket?.number ?? '—' }, { key: 'tech', label: 'Engineer', render: (r) => r.technician?.name },

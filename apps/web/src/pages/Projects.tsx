@@ -90,7 +90,7 @@ export function ProjectsPage() {
           <Select className="w-56" value={incharge} onChange={(e) => setIncharge(e.target.value)} placeholder="Anyone in charge"
             options={[{ value: 'me', label: 'In charge: me' }, { value: 'none', label: 'No one in charge yet' }, ...(users.data ?? []).map((u) => ({ value: u.id, label: `In charge: ${u.name}` }))]} />
         </div>
-        {!list.data ? <Spinner /> : <Table rows={list.data} empty="No projects" cols={[
+        {!list.data ? <Spinner /> : <Table rows={list.data} exportAs={{ name: 'projects' }} empty="No projects" cols={[
           { key: 'site', label: 'Project', render: (p) => <Link to={`/orders/${p.id}`} className="font-medium text-brand-700 hover:underline">{p.site?.name ?? 'Site not set'}<div className="text-xs font-normal text-slate-400">{p.number} · {p.client.name}</div></Link> },
           { key: 'incharge', label: 'In charge', render: (p) => p.team.incharge ? <span className="font-medium">{p.team.incharge.name}</span> : <span className="text-amber-700">not assigned</span> },
           { key: 'team', label: 'Team', render: (p) => <div className="flex max-w-56 flex-wrap gap-1">{p.team.members.map((m) => <Badge key={m.id}>{m.name}</Badge>)}</div> },

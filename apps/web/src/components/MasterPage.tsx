@@ -130,6 +130,7 @@ export function MasterPage<T extends { id: string }>({ title, singular, path, pe
   const list = useGet<Page<T>>(path, q);
   const ed = useEditor(path, fields, defaults);
   const set = (k: string, v: any) => setQ({ ...q, [k]: v, page: 1 });
+  const hasOwnExport = typeof extraActions === 'function';
   const allCols: Col<T>[] = can(`${perm}:edit`)
     ? [...cols, { key: '_edit', label: '', render: (r) => <button onClick={(e) => { e.stopPropagation(); ed.open(r as any); }} className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label="Edit"><Pencil className="size-3.5" /></button> }]
     : cols;
@@ -142,7 +143,7 @@ export function MasterPage<T extends { id: string }>({ title, singular, path, pe
           <SearchBox value={q.search} onChange={(v) => set('search', v)} />
           {filters?.(q, set)}
         </div>
-        <Table rows={list.data?.data} cols={allCols} to={to} onRow={to ? undefined : (r) => can(`${perm}:edit`) && ed.open(r as any)} />
+        <Table rows={list.data?.data} cols={allCols} exportAs={hasOwnExport ? undefined : { name: title.toLowerCase().replace(/[^a-z0-9]+/g, '-'), path, query: q }} to={to} onRow={to ? undefined : (r) => can(`${perm}:edit`) && ed.open(r as any)} />
         {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
       </Card>
       <EditorModal title={singular} fields={fields} ed={ed} />

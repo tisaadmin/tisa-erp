@@ -56,7 +56,7 @@ export function QuotationsPage() {
           <SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} />
           <Select className="w-48" value={q.status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} placeholder="All statuses" options={['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT', 'ACCEPTED', 'REJECTED', 'REVISED', 'CONVERTED']} />
         </div>
-        <Table rows={list.data?.data} to={(r) => `/quotations/${r.id}`} cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'quotations', path: '/quotations', query: q }} to={(r) => `/quotations/${r.id}`} cols={[
           { key: 'number', label: 'Number' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
           { key: 'party', label: 'Client / lead', render: (r) => <>{r.client?.name ?? r.lead?.companyName}{!r.client && <Badge t="violet">lead</Badge>}<div className="text-xs text-slate-400">{r.site?.name}</div></> },
           { key: 'subject', label: 'Subject', render: (r) => r.subject ?? '—' }, { key: 'total', label: 'Total', num: true, render: (r) => inr(r.total) },
@@ -220,7 +220,7 @@ export function OrdersPage() {
           <SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} placeholder="Order no., FFH SO no., PO or title…" />
           <Select className="w-44" value={q.status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} placeholder="All statuses" options={['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']} />
         </div>
-        <Table rows={list.data?.data} to={(r) => `/orders/${r.id}`} cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'orders', path: '/orders', query: q }} to={(r) => `/orders/${r.id}`} cols={[
           { key: 'number', label: 'Order', render: (r) => <>{r.number}{r.sourceData?.soNumber && <div className="text-xs text-slate-400">FFH {r.sourceData.soNumber}{r.sourceData.summaryOnly && <span className="ml-1 text-amber-600" title="Items not imported yet">· summary</span>}</div>}</> },
           { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
           { key: 'client', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="max-w-xs truncate text-xs text-slate-400">{r.site?.name ?? r.sourceData?.title}</div></> },
@@ -425,7 +425,7 @@ export function ChallansPage() {
       <PageHeader title="Delivery challans" actions={can('challans:create') && <Link to="/challans/new"><Button variant="primary" icon={<Plus className="size-4" />}>New challan</Button></Link>} />
       <Card pad={false}>
         <div className="border-b border-slate-100 p-3"><SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} /></div>
-        <Table rows={list.data?.data} to={(r) => `/challans/${r.id}`} cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'delivery-challans', path: '/challans', query: q }} to={(r) => `/challans/${r.id}`} cols={[
           { key: 'number', label: 'Challan' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) }, { key: 'type', label: 'Type', render: (r) => label(r.type) },
           { key: 'client', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="text-xs text-slate-400">{r.site?.name}</div></> },
           { key: 'order', label: 'Order', render: (r) => r.order?.number ?? '—' }, { key: 'vehicleNo', label: 'Vehicle', render: (r) => r.vehicleNo ?? '—' },

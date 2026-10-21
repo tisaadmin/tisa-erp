@@ -6,9 +6,18 @@ import { emptyLine, LineItemsEditor, totalsOf, type Line } from '../components/L
 import { Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Select, Spinner, Stat, Status, Table, Tabs, Textarea, cx } from '../components/ui';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { fmtDate, inr, inrShort, toInputDate } from '../lib/format';
+import { fmtDate, inr, inrShort, label, toInputDate } from '../lib/format';
 import { useAction, useGet, useVendors, type Page } from '../lib/hooks';
 import { DocLines, useCompanyState } from './Sales';
+import { ExportListButton, type ExportCol } from '../components/ExportList';
+
+const BILL_EXPORT_COLS: ExportCol<any>[] = [
+  { key: 'billNo', label: 'Bill no.' }, { key: 'number', label: 'ERP no.' }, { key: 'billDate', label: 'Bill date', render: (r) => fmtDate(r.billDate) },
+  { key: 'vendor', label: 'Vendor', render: (r) => r.vendor?.name }, { key: 'order', label: 'Order', render: (r) => r.order?.number }, { key: 'po', label: 'PO', render: (r) => r.po?.number },
+  { key: 'total', label: 'Total', num: true, render: (r) => r.total }, { key: 'paid', label: 'Paid', num: true, render: (r) => r.amountPaid },
+  { key: 'balance', label: 'Balance', num: true, render: (r) => (r.status === 'CANCELLED' ? 0 : Math.round((r.total - r.amountPaid) * 100) / 100) },
+  { key: 'due', label: 'Due date', render: (r) => fmtDate(r.dueDate) }, { key: 'status', label: 'Status', render: (r) => label(r.status) },
+];
 
 const MODES = ['NEFT', 'RTGS', 'IMPS', 'CHEQUE', 'UPI', 'CASH'];
 const STATUS_OPTS = [{ value: 'OPEN', label: 'Unpaid & part-paid' }, { value: 'UNPAID', label: 'Unpaid' }, { value: 'PARTIALLY_PAID', label: 'Part-paid' }, { value: 'PAID', label: 'Paid' }, { value: 'CANCELLED', label: 'Cancelled' }];
@@ -56,6 +65,7 @@ export function VendorBillsPage() {
             <Select className="w-48" value={q.status ?? ''} onChange={(e) => setF('status', e.target.value)} options={STATUS_OPTS} placeholder="All bills" />
             <Combo className="w-64" options={(vendors.data?.data ?? []).map((v) => ({ value: v.id, label: v.name }))} value={q.vendorId || null} onChange={(v) => setF('vendorId', v ?? '')} placeholder="All vendors" />
             <Select className="w-36" value={q.due ?? ''} onChange={(e) => setF('due', e.target.value)} options={[{ value: 'overdue', label: 'Overdue only' }]} placeholder="Any due date" />
+            <ExportListButton spec={{ name: 'vendor-bills', path: '/vendor-bills', query: q }} cols={BILL_EXPORT_COLS} />
             {list.data && <span className="ml-auto text-sm text-slate-500">{list.data.total} bills · outstanding <b className="text-slate-800">{inr(list.data.summary.outstanding)}</b></span>}
           </div>
           {sel.size > 0 && (
@@ -99,7 +109,7 @@ export function VendorBillsPage() {
       )}
       {tab === 'ageing' && (
         <Card pad={false}>
-          <Table rows={ageing.data?.vendors.map((v) => ({ ...v, id: v.vendorId }))} onRow={(v) => { setTab('bills'); setQ({ page: 1, pageSize: 50, status: 'OPEN', vendorId: v.id }); }} empty="Nothing outstanding" cols={[
+          <Table rows={ageing.data?.vendors.map((v) => ({ ...v, id: v.vendorId }))} exportAs={{ name: 'vendor-outstanding' }} onRow={(v) => { setTab('bills'); setQ({ page: 1, pageSize: 50, status: 'OPEN', vendorId: v.id }); }} empty="Nothing outstanding" cols={[
             { key: 'name', label: 'Vendor' }, { key: 'bills', label: 'Open bills', num: true },
             { key: 'outstanding', label: 'Outstanding', num: true, render: (v) => inr(v.outstanding) },
             { key: 'overdue', label: 'Overdue', num: true, render: (v) => <span className={v.overdue ? 'text-red-600' : ''}>{inr(v.overdue)}</span> },
@@ -108,7 +118,7 @@ export function VendorBillsPage() {
       )}
       {tab === 'payments' && (
         <Card pad={false}>
-          <Table rows={pays.data?.data} to={(p) => `/vendor-bills/${p.billId}`} empty="No payments recorded yet" cols={[
+          <Table rows={pays.data?.data} exportAs={{ name: 'vendor-payments', path: '/vendor-payments' }} to={(p) => `/vendor-bills/${p.billId}`} empty="No payments recorded yet" cols={[
             { key: 'number', label: 'Payment' }, { key: 'date', label: 'Date', render: (p) => fmtDate(p.date) }, { key: 'vendor', label: 'Vendor', render: (p) => p.bill?.vendor?.name },
             { key: 'bill', label: 'Bill', render: (p) => p.bill?.billNo }, { key: 'mode', label: 'Mode' }, { key: 'reference', label: 'Reference', render: (p) => p.reference ?? '—' },
             { key: 'amount', label: 'Amount', num: true, render: (p) => inr(p.amount) },

@@ -57,7 +57,7 @@ export function AttendancePage() {
       {(tab === 'today' || tab === 'log') && (
         <Card pad={false}>
           {tab === 'log' && <div className="flex gap-2 border-b border-slate-100 p-3"><Input type="date" className="w-40" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /><Input type="date" className="w-40" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} /></div>}
-          <Table rows={log.data} empty="No attendance marked" cols={[
+          <Table rows={log.data} exportAs={{ name: 'attendance' }} empty="No attendance marked" cols={[
             { key: 'user', label: 'Employee', render: (r: any) => <>{r.user.name}<div className="text-xs text-slate-400">{r.user.employeeCode}</div></> },
             ...(tab === 'log' ? [{ key: 'date', label: 'Date', render: (r: any) => fmtDate(r.date) }] : []),
             { key: 'in', label: 'In', render: (r: any) => r.checkInAt ? <>{fmtTime(r.checkInAt)} {r.checkInPhoto && <a href={pathUrl(r.checkInPhoto)} target="_blank" rel="noreferrer" className="text-xs text-brand-700">photo</a>}</> : '—' },
@@ -151,7 +151,7 @@ export function RequisitionsPage() {
           <Select className="w-44" value={q.type ?? ''} onChange={(e) => setQ({ ...q, type: e.target.value, page: 1 })} options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} placeholder="All types" />
           <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={q.unassigned === '1'} onChange={(e) => setQ({ ...q, unassigned: e.target.checked ? '1' : '', page: 1 })} /> Site not assigned</label>
         </div>
-        <Table rows={list.data?.data} to={(r) => `/requisitions/${r.id}`} cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'requisitions', path: '/requisitions', query: q }} to={(r) => `/requisitions/${r.id}`} cols={[
           { key: 'number', label: 'Number', render: (r) => <>{r.number}<div className="text-xs font-normal text-slate-400">{fmtDateTime(r.createdAt)}</div></> },
           { key: 'type', label: 'Type', render: (r) => <Badge t={r.type === 'MATERIAL' ? 'blue' : r.type === 'REPAIR' ? 'red' : 'violet'}>{label(r.type)}</Badge> },
           { key: 'site', label: 'Client / site', render: (r) => <>{r.client?.name ?? <Badge t="amber">Not assigned</Badge>}<div className="text-xs text-slate-400">{r.site?.name ?? (r.client ? 'site not set' : '')}{r.ticket && ` · ${r.ticket.number}`}</div></> },
@@ -302,7 +302,7 @@ export function ExpensesPage() {
         actions={can('expenses:create') && <Link to="/expenses/new"><Button variant="primary" icon={<Plus className="size-4" />}>New claim</Button></Link>} />
       <Tabs value={tab} onChange={setTab} tabs={tabs} />
       <Card pad={false}>
-        <Table rows={list.data?.data} to={(r) => `/expenses/${r.id}`} empty={tab === 'approvals' ? 'Nothing waiting for you' : 'No claims'} cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'expenses', path: '/expenses', query: { scope: tab } }} to={(r) => `/expenses/${r.id}`} empty={tab === 'approvals' ? 'Nothing waiting for you' : 'No claims'} cols={[
           { key: 'number', label: 'Claim' }, ...(tab !== 'mine' ? [{ key: 'user', label: 'Employee', render: (r: any) => r.user?.name }] : []),
           { key: 'title', label: 'Title' }, { key: 'period', label: 'Period', render: (r: any) => `${fmtDate(r.periodFrom)} → ${fmtDate(r.periodTo)}` },
           { key: 'lines', label: 'Lines', num: true, render: (r: any) => r.lines.length }, { key: 'total', label: 'Claimed', num: true, render: (r: any) => inr(r.total) },

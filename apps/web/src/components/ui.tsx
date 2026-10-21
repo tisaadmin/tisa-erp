@@ -1,4 +1,5 @@
 import { clsx } from 'clsx';
+import { ExportListButton, type ExportSpec } from './ExportList';
 import { Loader2, Search, X } from 'lucide-react';
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
@@ -179,12 +180,14 @@ export function Pager({ page, pageSize, total, onPage }: { page: number; pageSiz
 
 /** Table with column config; rows clickable via `to`. */
 export type Col<T> = { key: string; label: string; render?: (r: T) => ReactNode; className?: string; num?: boolean };
-export function Table<T extends { id: string }>({ rows, cols, to, onRow, empty = 'Nothing here yet' }: { rows: T[] | undefined; cols: Col<T>[]; to?: (r: T) => string; onRow?: (r: T) => void; empty?: string }) {
+export function Table<T extends { id: string }>({ rows, cols, to, onRow, empty = 'Nothing here yet', exportAs }: { rows: T[] | undefined; cols: Col<T>[]; to?: (r: T) => string; onRow?: (r: T) => void; empty?: string;
+  /** adds "Export to Excel": with `path` every row matching `query` is exported, otherwise the rows given */ exportAs?: ExportSpec }) {
   const nav = useNavigate();
   if (!rows) return <Spinner />;
   if (!rows.length) return <Empty>{empty}</Empty>;
   return (
     <div className="overflow-x-auto">
+      {exportAs && <div className="flex justify-end border-b border-slate-100 px-3 py-1.5"><ExportListButton spec={exportAs} cols={cols} rows={exportAs.path ? undefined : rows} /></div>}
       <table className="tbl">
         <thead><tr>{cols.map((c) => <th key={c.key} className={cx(c.num && 'text-right', c.className)}>{c.label}</th>)}</tr></thead>
         <tbody>

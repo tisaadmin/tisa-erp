@@ -24,7 +24,7 @@ export function PurchaseOrdersPage() {
           <Select className="w-48" value={q.status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} placeholder="All statuses"
             options={['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CLOSED', 'CANCELLED']} />
         </div>
-        <Table rows={list.data?.data} to={(r) => `/purchase-orders/${r.id}`} cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'purchase-orders', path: '/purchase-orders', query: q }} to={(r) => `/purchase-orders/${r.id}`} cols={[
           { key: 'number', label: 'PO' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) }, { key: 'vendor', label: 'Vendor', render: (r) => r.vendor?.name },
           { key: 'so', label: 'Against order', render: (r) => r.salesOrder?.number ?? '—' }, { key: 'to', label: 'Deliver to', render: (r) => r.deliverToSite?.name ?? 'Store' },
           { key: 'total', label: 'Total', num: true, render: (r) => inr(r.total) }, { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
@@ -220,7 +220,7 @@ export function GrnsPage() {
       <PageHeader title="Goods receipt notes" subtitle="Create a GRN from an approved purchase order" />
       <Card pad={false}>
         <div className="border-b border-slate-100 p-3"><SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} /></div>
-        <Table rows={list.data?.data} to={(r) => `/grns/${r.id}`} cols={[
+        <Table rows={list.data?.data} exportAs={{ name: 'goods-receipts', path: '/grns', query: q }} to={(r) => `/grns/${r.id}`} cols={[
           { key: 'number', label: 'GRN' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) }, { key: 'vendor', label: 'Vendor', render: (r) => r.vendor?.name },
           { key: 'po', label: 'PO', render: (r) => r.po?.number }, { key: 'vendorInvoiceNo', label: 'Vendor invoice', render: (r) => r.vendorInvoiceNo ?? '—' },
         ]} />

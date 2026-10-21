@@ -32,6 +32,7 @@ export function createApp() {
   app.set('trust proxy', 1);
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' }, contentSecurityPolicy: false }));
   app.use(cors({ origin: env.CORS_ORIGINS.includes('*') ? true : env.CORS_ORIGINS, credentials: true }));
+  app.use('/api/export', express.json({ limit: '25mb' })); // list exports post the rows to turn into a workbook
   app.use(express.json({ limit: '5mb' }));
   if (env.NODE_ENV !== 'test') app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
