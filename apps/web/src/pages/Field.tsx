@@ -136,6 +136,9 @@ export function RequisitionsPage() {
   const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50, status: 'PENDING,APPROVED,IN_PROGRESS' });
   const list = useGet<Page<any>>('/requisitions', q, { refetchInterval: 60_000 });
   const [form, setForm] = useState<any>(null);
+  const projects = useGet<{ id: string; number: string; site: { name: string } | null; client: { name: string } }[]>(form ? '/projects' : null, { all: can('orders:view') ? 1 : undefined });
+  const avail = useGet<{ lines: { key: string; itemId: string | null; description: string; unit: string; orderQty: number; accessoryQty: number; sent: number; openRequested: number; available: number }[] }>(form?.orderId ? `/projects/${form.orderId}/requestable` : null);
+  const availOf = (itemId?: string | null) => (itemId ? avail.data?.lines.find((l) => l.itemId === itemId) : undefined);
   useEffect(() => { if (sp.get('new')) { setForm({ type: 'MATERIAL', priority: 'MEDIUM', siteId: sp.get('siteId'), ticketId: sp.get('ticketId'), description: '', items: [{ itemId: null, description: '', qty: 1, unit: 'Nos' }] }); setSp({}); } }, [sp, setSp]);
   const save = useAction(() => api('/requisitions', { body: { ...form, items: form.type === 'MATERIAL' ? form.items.filter((i: any) => i.description) : [] } }), { success: 'Requisition raised — approvers notified', invalidate: [['/requisitions']], onSuccess: () => setForm(null) });
   return (
@@ -163,8 +166,11 @@ export function RequisitionsPage() {
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="Type"><Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} /></Field>
             <Field label="Priority"><Select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} options={['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']} /></Field>
-            <Field label="Site" hint="Leave blank if not known — assign it later"><Combo options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={form.siteId} onChange={(v) => setForm({ ...form, siteId: v })} /></Field>
+            <Field label="Site" hint={form.orderId ? 'From the project' : 'Leave blank if not known — assign it later'}><Combo disabled={!!form.orderId} options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={form.siteId} onChange={(v) => setForm({ ...form, siteId: v })} /></Field>
           </div>
+          <Field label="Project (order)" hint="Pick the project — its order and accessories quantities are shown and checked">
+            <Combo options={(projects.data ?? []).map((p) => ({ value: p.id, label: p.site?.name ?? p.number, sub: `${p.number} · ${p.client.name}` }))} value={form.orderId ?? null} onChange={(v) => setForm({ ...form, orderId: v, siteId: v ? null : form.siteId })} placeholder="Not for a project" />
+          </Field>
           <Field label="Description"><Textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
           {form.type === 'MATERIAL' && <div className="space-y-2">
             {form.items.map((it: any, i: number) => (
@@ -172,6 +178,17 @@ export function RequisitionsPage() {
                 <Combo className="w-64" options={(items.data?.data ?? []).map((x) => ({ value: x.id, label: x.name, sub: x.sku }))} value={it.itemId} onChange={(v, o) => setForm({ ...form, items: form.items.map((x: any, j: number) => (j === i ? { ...x, itemId: v, description: o?.label ?? x.description } : x)) })} />
                 <Input placeholder="Description" value={it.description} onChange={(e) => setForm({ ...form, items: form.items.map((x: any, j: number) => (j === i ? { ...x, description: e.target.value } : x)) })} />
                 <Input type="number" className="w-24" value={it.qty} onChange={(e) => setForm({ ...form, items: form.items.map((x: any, j: number) => (j === i ? { ...x, qty: Number(e.target.value) } : x)) })} />
+                {form.orderId && (() => {
+                  const a = availOf(it.itemId);
+                  const free = a?.available ?? 0;
+                  const extra = Math.max(0, Number(it.qty) - free);
+                  return <div className="w-72 shrink-0 text-xs leading-tight">
+                    {a ? <span className="text-slate-500">Order {a.orderQty}{a.accessoryQty ? ` · accessories ${a.accessoryQty}` : ''} · at site {a.sent}{a.openRequested ? ` · asked ${a.openRequested}` : ''} · <b className={free > 0 ? 'text-emerald-700' : 'text-red-600'}>{free} available</b></span> : <span className="text-amber-700">Not on this project's order or accessories</span>}
+                    {extra > 0 && <select className="input mt-1 h-7 py-0 text-xs" value={it.excessAction ?? ''} onChange={(e) => setForm({ ...form, items: form.items.map((x: any, j: number) => (j === i ? { ...x, excessAction: e.target.value || null } : x)) })}>
+                      <option value="">{extra} extra — choose…</option><option value="QUOTE">Client pays (quotation)</option><option value="ACCESSORY">Internal (add to accessories)</option>
+                    </select>}
+                  </div>;
+                })()}
               </div>
             ))}
             <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setForm({ ...form, items: [...form.items, { itemId: null, description: '', qty: 1, unit: 'Nos' }] })}>Add item</Button>
@@ -228,7 +245,16 @@ export function RequisitionDetail() {
         <p className="mt-4 text-sm whitespace-pre-line">{r.description}</p>
         {r.canAct && r.client && r.site && r.status !== 'REJECTED' && <button className="mt-2 text-xs text-brand-700 underline" onClick={() => setAssign({ clientId: r.clientId, siteId: r.siteId })}>Change client / site</button>}
       </Card>
-      {!!r.items.length && <Card title="Materials" pad={false}><Table rows={r.items} cols={[{ key: 'description', label: 'Item' }, { key: 'qty', label: 'Requested', num: true, render: (i: any) => `${qty(i.qty)} ${i.unit}` }, { key: 'issuedQty', label: 'Sent on challans', num: true, render: (i: any) => <span className={i.issuedQty >= i.qty ? 'text-emerald-700' : ''}>{qty(i.issuedQty)}</span> }]} /></Card>}
+      {!!r.items.length && <Card title={r.order ? <>Materials — project <Link className="text-brand-700" to={`/orders/${r.order.id}`}>{r.order.number}</Link></> : 'Materials'} pad={false}><Table rows={r.items} cols={[
+        { key: 'description', label: 'Item' }, { key: 'qty', label: 'Requested', num: true, render: (i: any) => `${qty(i.qty)} ${i.unit}` },
+        ...(r.orderId ? [
+          { key: 'coveredQty', label: 'Within project', num: true, render: (i: any) => qty(i.coveredQty) },
+          { key: 'excessQty', label: 'Extra', num: true, render: (i: any) => (i.excessQty > 0 ? <span className="text-amber-700">{qty(i.excessQty)}</span> : '—') },
+          { key: 'excessStatus', label: 'Extra goes', render: (i: any) => (i.excessQty > 0 ? <span className="text-xs">{i.excessAction === 'QUOTE' ? 'Client pays (quotation)' : 'Internal (accessories)'} · <Status s={i.excessStatus} />{i.quotationId && <> · <Link className="text-brand-700" to={`/quotations/${i.quotationId}`}>quotation</Link></>}</span> : '') },
+        ] : []),
+        { key: 'issuedQty', label: 'Sent on challans', num: true, render: (i: any) => <span className={i.issuedQty >= (r.orderId ? i.coveredQty : i.qty) ? 'text-emerald-700' : ''}>{qty(i.issuedQty)}</span> },
+      ]} /></Card>}
+      {r.canDecideExcess && <ExcessCard r={r} />}
       {!!r.history?.length && <Card title="History"><ol className="space-y-2 text-sm">{r.history.map((h: any, k: number) => <li key={k} className="flex gap-3"><span className="w-36 shrink-0 text-slate-400">{fmtDateTime(h.at)}</span><span><b className="font-medium">{h.label}</b>{h.by ? ` — ${h.by}` : ''}{h.note && <span className="block text-slate-500">{h.note}</span>}</span></li>)}</ol></Card>}
       {!!r.docs?.length && <Card title="Documents raised from this requisition" pad={false}><Table rows={r.docs} to={(d: any) => d.link} cols={[{ key: 'kind', label: 'Document' }, { key: 'number', label: 'Number' }, { key: 'date', label: 'Date', render: (d: any) => fmtDate(d.date) }, { key: 'total', label: 'Value', num: true, render: (d: any) => (d.total != null ? inr(d.total) : '—') }, { key: 'status', label: 'Status', render: (d: any) => <Status s={d.status} /> }]} /></Card>}
       {!!r.photos.length && <Card title="Photos"><PhotoGrid photos={r.photos} /></Card>}
@@ -236,6 +262,28 @@ export function RequisitionDetail() {
         {assign && <div className="grid gap-3 sm:grid-cols-2"><PartyPicker clientId={assign.clientId} siteId={assign.siteId} onChange={(v) => setAssign({ clientId: v.clientId, siteId: v.siteId })} /></div>}
       </Modal>
     </div>
+  );
+}
+
+/** Quantities beyond the project: approve into the accessories list / a draft quotation, or reject. */
+function ExcessCard({ r }: { r: any }) {
+  const pending = r.items.filter((i: any) => i.excessStatus === 'PENDING');
+  const [dec, setDec] = useState<Record<string, { decision: 'APPROVE' | 'REJECT'; action: string }>>(() => Object.fromEntries(pending.map((i: any) => [i.id, { decision: 'APPROVE', action: i.excessAction }])));
+  const save = useAction(() => api(`/requisitions/${r.id}/excess`, { body: { lines: Object.entries(dec).map(([id, v]) => ({ id, decision: v.decision, action: v.action })) } }),
+    { success: 'Decided — requester notified', invalidate: [['/requisitions'], ['/quotations']] });
+  return (
+    <Card title="Extra quantities — decision needed" actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Save decisions</Button>}>
+      <p className="mb-3 text-sm text-slate-500">These are beyond the project's order and accessories list. Internal extras are added to the accessories list (and can then be ordered and sent); client-paid extras become a draft quotation — once approved and accepted it becomes an order, then PO / delivery follow.</p>
+      <div className="space-y-2">
+        {pending.map((i: any) => (
+          <div key={i.id} className="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 px-3 py-2 text-sm">
+            <span className="min-w-56 flex-1"><b className="font-medium">{i.description}</b> — {qty(i.excessQty)} {i.unit} extra</span>
+            <Select className="w-56" value={dec[i.id].action ?? ''} onChange={(e) => setDec({ ...dec, [i.id]: { ...dec[i.id], action: e.target.value } })} options={[{ value: 'QUOTE', label: 'Client pays — quotation' }, { value: 'ACCESSORY', label: 'Internal — accessories list' }]} />
+            <Select className="w-36" value={dec[i.id].decision} onChange={(e) => setDec({ ...dec, [i.id]: { ...dec[i.id], decision: e.target.value as 'APPROVE' | 'REJECT' } })} options={[{ value: 'APPROVE', label: 'Approve' }, { value: 'REJECT', label: 'Reject' }]} />
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 

@@ -1229,3 +1229,47 @@ test('projects: the Projects head puts someone in charge of a project and adds a
   const cleared = await ok('phead', 'PUT', `/projects/${o.id}/team`, { inchargeId: null, memberIds: [] });
   assert.equal(cleared.incharge, null); assert.equal(cleared.members.length, 0);
 });
+
+test('project requisitions: order / accessories quantities shown; extra needs a decision (accessories list or quotation) before it can be dispatched', async () => {
+  const o = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 3 }, { itemId: ctx.nvr.id, qty: 1 }] });
+  const tech = (await ok('admin', 'GET', '/users?search=Imran')).data[0];
+  await ok('admin', 'PUT', `/projects/${o.id}/team`, { inchargeId: tech.id });
+  const rq0 = await ok('tech', 'GET', `/projects/${o.id}/requestable`);
+  const camAvail = rq0.lines.find((l: any) => l.itemId === ctx.cam.id);
+  assert.equal(camAvail.orderQty, 3); assert.equal(camAvail.available, 3);
+  // asking for more than the project has needs a choice
+  const body = { type: 'MATERIAL', priority: 'MEDIUM', orderId: o.id, description: 'Extra cameras for lobby' };
+  assert.equal((await call('tech', 'POST', '/requisitions', { ...body, items: [{ itemId: ctx.cam.id, description: 'Camera', qty: 5, unit: 'Nos' }] })).status, 400);
+  const r = await ok('tech', 'POST', '/requisitions', { ...body, items: [
+    { itemId: ctx.cam.id, description: 'Camera', qty: 5, unit: 'Nos', excessAction: 'ACCESSORY' },
+    { itemId: ctx.nvr.id, description: 'NVR', qty: 2, unit: 'Nos', excessAction: 'QUOTE' },
+  ] });
+  assert.equal(r.siteId, ctx.site.id, 'site from the project'); assert.equal(r.orderId, o.id);
+  let d = await ok('tech', 'GET', `/requisitions/${r.id}`);
+  const cam = d.items.find((i: any) => i.itemId === ctx.cam.id), nvr = d.items.find((i: any) => i.itemId === ctx.nvr.id);
+  assert.equal(cam.coveredQty, 3); assert.equal(cam.excessQty, 2); assert.equal(cam.excessStatus, 'PENDING');
+  assert.equal(nvr.coveredQty, 1); assert.equal(nvr.excessQty, 1);
+  assert.equal((await ok('tech', 'GET', `/projects/${o.id}/requestable`)).lines.find((l: any) => l.itemId === ctx.cam.id).available, 0, 'open requisition counts');
+  await ok('svc', 'POST', `/requisitions/${r.id}/approve`, {});
+  // only the covered part can go to site so far
+  const base = { clientId: ctx.client.id, siteId: ctx.site.id, requisitionId: r.id };
+  assert.equal((await call('stores', 'POST', '/challans', { ...base, lines: [{ itemId: ctx.cam.id, description: 'Camera', unit: 'Nos', qty: 5 }] })).status, 400, 'the extra 2 are not approved yet');
+  const dc1 = await ok('stores', 'POST', '/challans', { ...base, lines: [{ itemId: ctx.cam.id, description: 'Camera', unit: 'Nos', qty: 3 }] });
+  assert.equal(dc1.orderId, o.id, 'dispatched against the project order');
+  assert.equal((await ok('sales', 'GET', `/orders/${o.id}`)).items.find((l: any) => l.itemId === ctx.cam.id).deliveredQty, 3);
+  // the requester cannot approve their own extra; the approver decides
+  assert.equal((await call('tech', 'POST', `/requisitions/${r.id}/excess`, { lines: [{ id: cam.id, decision: 'APPROVE' }] })).status, 403);
+  const dec = await ok('svc', 'POST', `/requisitions/${r.id}/excess`, { lines: [{ id: cam.id, decision: 'APPROVE' }, { id: nvr.id, decision: 'APPROVE' }] });
+  assert.ok(dec.accessorySheet); assert.ok(dec.quotation?.number);
+  d = await ok('tech', 'GET', `/requisitions/${r.id}`);
+  assert.equal(d.items.find((i: any) => i.id === cam.id).excessStatus, 'APPROVED');
+  assert.equal(d.items.find((i: any) => i.id === cam.id).coveredQty, 5);
+  assert.equal(d.items.find((i: any) => i.id === nvr.id).excessStatus, 'QUOTED');
+  const q = await ok('sales', 'GET', `/quotations/${dec.quotation.id}`);
+  assert.equal(q.status, 'DRAFT'); assert.equal(q.items.length, 1); assert.equal(q.items[0].qty, 1); assert.equal(q.requisitionId, r.id);
+  // the 2 approved extra cameras now go as accessories; the quoted NVR does not
+  await ok('stores', 'POST', '/challans', { ...base, lines: [{ itemId: ctx.cam.id, description: 'Camera', unit: 'Nos', qty: 2 }] });
+  const st = await ok('tech', 'GET', `/projects/${o.id}`);
+  assert.equal(st.accessories.find((a: any) => a.itemId === ctx.cam.id).sent, 2);
+  assert.equal((await call('stores', 'POST', '/challans', { ...base, lines: [{ itemId: ctx.nvr.id, description: 'NVR', unit: 'Nos', qty: 2 }] })).status, 400, 'only 1 NVR is on the order — the other waits for the quotation');
+});

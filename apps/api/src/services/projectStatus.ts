@@ -5,7 +5,7 @@
  *    on the order's challans or on requisition challans to the same site),
  *  - the deliveries (challans) and the requisitions raised for the site.
  */
-import { and, desc, eq, inArray, isNotNull, isNull, ne, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, ne, or } from 'drizzle-orm';
 import type { DbOrTx } from '../db';
 import { accessorySheets, deliveryChallans, projectMembers, requisitions, salesOrderItems, salesOrders, tickets } from '../db/schema';
 import { notFound } from '../lib/http';
@@ -27,10 +27,8 @@ export async function projectMaterialStatus(db: DbOrTx, orderId: string) {
 
   // challans that carried material to this project
   const dcs = await db.query.deliveryChallans.findMany({
-    where: and(ne(deliveryChallans.status, 'CANCELLED'), or(
-      eq(deliveryChallans.orderId, orderId),
-      order.siteId ? and(eq(deliveryChallans.siteId, order.siteId), isNull(deliveryChallans.orderId), isNotNull(deliveryChallans.requisitionId)) : undefined,
-    )),
+    // project requisitions dispatch against the order, so the order's challans are the whole picture
+    where: and(ne(deliveryChallans.status, 'CANCELLED'), eq(deliveryChallans.orderId, orderId)),
     with: { items: true }, orderBy: [desc(deliveryChallans.date)],
   });
 
@@ -101,8 +99,6 @@ export async function projectSummaries(db: DbOrTx, ids: string[]) {
   const sheets = await db.query.accessorySheets.findMany({ where: inArray(accessorySheets.orderId, ids), with: { lines: true }, orderBy: [desc(accessorySheets.createdAt)] });
   const dcs = await db.query.deliveryChallans.findMany({ where: and(inArray(deliveryChallans.orderId, ids), ne(deliveryChallans.status, 'CANCELLED')), with: { items: true } });
   const siteIds = orders.map((o) => o.siteId).filter((x): x is string => !!x);
-  // requisition challans to the same sites also carry accessories
-  const reqDcs = siteIds.length ? await db.query.deliveryChallans.findMany({ where: and(inArray(deliveryChallans.siteId, siteIds), isNull(deliveryChallans.orderId), isNotNull(deliveryChallans.requisitionId), ne(deliveryChallans.status, 'CANCELLED')), with: { items: true } }) : [];
   const reqs = siteIds.length ? await db.select({ siteId: requisitions.siteId, status: requisitions.status }).from(requisitions).where(inArray(requisitions.siteId, siteIds)) : [];
   const pct = (a: number, b: number) => (a ? Math.round((b / a) * 100) : null);
   return orders.map((o) => {
@@ -111,7 +107,7 @@ export async function projectSummaries(db: DbOrTx, ids: string[]) {
     const need = new Map<string, number>();
     for (const l of sheet?.lines ?? []) need.set(materialKey(l), (need.get(materialKey(l)) ?? 0) + Number(l.qty));
     const sent = new Map<string, number>();
-    for (const dc of [...dcs.filter((x) => x.orderId === o.id), ...reqDcs.filter((x) => o.siteId && x.siteId === o.siteId)]) for (const i of dc.items) if (!i.orderItemId) sent.set(materialKey(i), (sent.get(materialKey(i)) ?? 0) + Number(i.qty));
+    for (const dc of dcs.filter((x) => x.orderId === o.id)) for (const i of dc.items) if (!i.orderItemId) sent.set(materialKey(i), (sent.get(materialKey(i)) ?? 0) + Number(i.qty));
     const accReq = [...need.values()].reduce((s, v) => s + v, 0);
     const accSent = [...need.entries()].reduce((s, [k, v]) => s + Math.min(v, sent.get(k) ?? 0), 0);
     const q = o.items.reduce((s, l) => s + l.qty, 0);

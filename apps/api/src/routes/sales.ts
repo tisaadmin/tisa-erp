@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { db } from '../db';
 import {
-  clients, departments, deliveryChallanItems, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
+  clients, departments, deliveryChallanItems, requisitions, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
 } from '../db/schema';
 import { audit } from '../lib/audit';
 import { notifyUsers } from '../lib/notify';
@@ -327,6 +327,11 @@ r.get('/challans/:id', requirePerm('challans:view'), async (req, res) => {
 
 r.post('/challans', requirePerm('challans:create'), async (req, res) => {
   const d = dcSchema.parse(req.body);
+  // a requisition for a project dispatches against that project's order (its quantities apply)
+  if (d.requisitionId && !d.orderId) {
+    const rq0 = await db.query.requisitions.findFirst({ where: eq(requisitions.id, d.requisitionId), columns: { orderId: true } });
+    if (rq0?.orderId) d.orderId = rq0.orderId;
+  }
   // an approved requisition is authority enough for a supply challan, like an order form
   if (d.type === 'SUPPLY' && !d.orderId && !d.requisitionId) await enforceRule('dcRequiresOrder', req.user, 'A supply delivery challan must be raised against an order form or an approved requisition — open the order (or requisition) and use "Delivery challan" (returnable, job-work and site-transfer challans are allowed without one)');
   const dc = await db.transaction(async (tx) => {
@@ -348,6 +353,11 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
     }
     const byId = new Map(orderLines.map((l) => [l.id, l]));
     const lines = d.lines.map((l, i) => {
+      // an item that is an order line counts against that line (delivered qty), e.g. when sent against a requisition
+      if (!l.orderItemId && l.itemId && d.orderId) {
+        const match = orderLines.find((ol) => ol.itemId === l.itemId && r3(ol.qty - ol.deliveredQty) > 0);
+        if (match) l.orderItemId = match.id;
+      }
       const ol = l.orderItemId ? byId.get(l.orderItemId) : undefined;
       if (l.orderItemId && !ol) throw badRequest(`Line ${i + 1}: not part of the order`);
       if (ol) {

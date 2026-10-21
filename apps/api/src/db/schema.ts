@@ -811,6 +811,8 @@ export const requisitions = pgTable('requisitions', {
   clientId: text().references(() => clients.id),
   siteId: text().references(() => sites.id),
   ticketId: text().references(() => tickets.id),
+  /** the project (order) the material is for — its order / accessories quantities apply */
+  orderId: text().references((): AnyPgColumn => salesOrders.id),
   raisedById: text().notNull().references(() => users.id),
   description: text().notNull(),
   requiredBy: ts(),
@@ -830,6 +832,12 @@ export const requisitionItems = pgTable('requisition_items', {
   qty: qty().notNull(),
   unit: text().notNull().default('Nos'),
   issuedQty: qty().notNull().default(0),
+  /** project requisitions: part within the order / accessories quantity, and any excess */
+  coveredQty: qty().notNull().default(0),
+  excessQty: qty().notNull().default(0),
+  excessAction: text(), // QUOTE (client pays) | ACCESSORY (internal, add to the accessories list)
+  excessStatus: text(), // PENDING, APPROVED (added to accessories), QUOTED (draft quotation made), REJECTED
+  quotationId: text(),
 });
 
 export const expenseClaims = pgTable('expense_claims', {
@@ -1017,6 +1025,7 @@ export const requisitionsRel = relations(requisitions, ({ one, many }) => ({
   site: one(sites, { fields: [requisitions.siteId], references: [sites.id] }),
   client: one(clients, { fields: [requisitions.clientId], references: [clients.id] }),
   ticket: one(tickets, { fields: [requisitions.ticketId], references: [tickets.id] }),
+  order: one(salesOrders, { fields: [requisitions.orderId], references: [salesOrders.id] }),
   raisedBy: one(users, { fields: [requisitions.raisedById], references: [users.id] }),
   items: many(requisitionItems),
 }));

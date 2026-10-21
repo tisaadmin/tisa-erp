@@ -3,7 +3,7 @@ import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions
 import { and, desc, eq, ilike, inArray, notInArray, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
-import { accessorySheets, goodsReceiptItems, goodsReceipts, items, purchaseOrderItems, purchaseOrders, salesOrders, stockMovements, vendors } from '../db/schema';
+import { accessorySheets, goodsReceiptItems, goodsReceipts, items, purchaseOrderItems, purchaseOrders, requisitions, salesOrders, stockMovements, vendors } from '../db/schema';
 import { audit } from '../lib/audit';
 import { r3 } from '../lib/gst';
 import { badRequest, notFound, pageParams } from '../lib/http';
@@ -141,6 +141,11 @@ r.get('/purchase-orders/:id', requirePerm('purchase_orders:view'), async (req, r
 
 r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, res) => {
   const d = poSchema.parse(req.body);
+  // a PO from a project requisition is against that project's order (its items / quantities apply)
+  if (d.requisitionId && !d.salesOrderId) {
+    const rq0 = await db.query.requisitions.findFirst({ where: eq(requisitions.id, d.requisitionId), columns: { orderId: true } });
+    if (rq0?.orderId) d.salesOrderId = rq0.orderId;
+  }
   await checkPoParties(d);
   // an approved requisition is authority enough for a PO, like an order form
   if (!d.salesOrderId && !d.requisitionId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be raised against an order form or an approved requisition — choose the sales order (or ask for the "PO without order" permission for stock purchases)');

@@ -1,7 +1,7 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
-import { Badge, C, Card, Chips, Screen, s, useFetch } from '../../src/components/ui';
+import { Badge, Btn, C, Card, Chips, Screen, s, useFetch } from '../../src/components/ui';
 import { useAuth } from '../../src/lib/auth';
 import { fmtDate, fmtDateTime, label } from '../../src/lib/format';
 import { Bar } from '../../src/components/Bar';
@@ -41,6 +41,7 @@ export default function ProjectScreen() {
         <Bar label="Accessories" pct={p.summary.accessoriesPct} />
         <Bar label="Installed" pct={p.summary.installedPct} />
       </Card>
+      <Btn icon="cube" title="Request material for this project" onPress={() => router.push({ pathname: '/requisition/new', params: { orderId: p.order.id } })} />
       <Chips options={TABS} value={tab} onChange={setTab} />
 
       {tab === 'Material' && <>

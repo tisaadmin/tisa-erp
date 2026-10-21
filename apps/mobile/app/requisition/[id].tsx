@@ -47,6 +47,7 @@ export default function RequisitionScreen() {
         <KV k="Client" v={r.client?.name ?? 'Not assigned yet'} />
         <KV k="Site" v={r.site?.name ?? 'Not assigned yet'} />
         {r.ticket && <Pressable onPress={() => router.push(`/ticket/${r.ticket.id}`)}><KV k="Ticket" v={`${r.ticket.number} ›`} link /></Pressable>}
+        {r.order && <KV k="Project" v={r.order.number} />}
         <KV k="Raised by" v={r.raisedBy?.name} />
         <Text style={{ color: C.text, marginTop: 6 }}>{r.description}</Text>
       </Card>
@@ -57,10 +58,13 @@ export default function RequisitionScreen() {
             <Text style={[s.muted, { flex: 1 }]}>Item</Text><Text style={[s.muted, { width: 70, textAlign: 'right' }]}>Asked</Text><Text style={[s.muted, { width: 70, textAlign: 'right' }]}>Sent</Text>
           </View>
           {r.items.map((i: any) => (
-            <View key={i.id} style={{ flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
+            <View key={i.id}>
+            <View style={{ flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' }}>
               <Text style={{ flex: 1, color: C.text }}>{i.description}</Text>
               <Text style={{ width: 70, textAlign: 'right', color: C.text }}>{i.qty} {i.unit}</Text>
               <Text style={{ width: 70, textAlign: 'right', fontWeight: '700', color: i.issuedQty >= i.qty ? '#047857' : i.issuedQty > 0 ? '#b45309' : '#94a3b8' }}>{i.issuedQty ?? 0}</Text>
+            </View>
+            {Number(i.excessQty) > 0 && <Text style={[s.muted, { color: '#92400e' }]}>Extra {i.excessQty} {i.unit} ({i.excessAction === 'QUOTE' ? 'client pays — quotation' : 'internal — accessories'}): {i.excessStatus === 'PENDING' ? 'waiting for approval' : i.excessStatus === 'APPROVED' ? 'approved, added to accessories' : i.excessStatus === 'QUOTED' ? 'quotation made for the client' : 'rejected'}</Text>}
             </View>
           ))}
         </Card>

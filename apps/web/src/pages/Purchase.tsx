@@ -58,7 +58,7 @@ export function PoEditor() {
   const [d, setD] = useState({ vendorId: null as string | null, salesOrderId: sp.get('salesOrderId'), deliverToSiteId: null as string | null, date: toInputDate(new Date()), expectedDate: '', terms: '', notes: '', lines: [emptyLine()] as Line[] });
   type Allowed = { itemIds: string[]; restricted: boolean; lines: { key: string; itemId: string | null; qty: number; ordered: number; remaining: number }[] };
   // a PO raised from an order (or an existing order-linked PO) keeps that order; it delivers to the order's site or the store
-  const orderLocked = !!(sp.get('salesOrderId') || sheetId || (id && existing.data?.salesOrderId));
+  const orderLocked = !!(sp.get('salesOrderId') || sheetId || (id && existing.data?.salesOrderId) || rq.req?.orderId);
   const selOrder = useGet<any>(d.salesOrderId ? `/orders/${d.salesOrderId}` : null);
   const allowed = useGet<Allowed>(d.salesOrderId ? '/purchase-orders/allowed-items' : null, { salesOrderId: d.salesOrderId, poId: id });
   const limits = useMemo(() => (allowed.data?.restricted ? Object.fromEntries(allowed.data.lines.filter((l) => l.itemId).map((l) => [l.itemId!, l])) as Record<string, Allowed['lines'][number]> : undefined), [allowed.data]);
@@ -93,7 +93,7 @@ export function PoEditor() {
   useEffect(() => {
     if (!rq.ready || !rq.req) return;
     const lines = rq.lines('purchasePrice', true);
-    setD((x) => ({ ...x, deliverToSiteId: rq.req!.siteId, notes: x.notes || `For requisition ${rq.req!.number}${rq.req!.client ? ` (${rq.req!.client.name})` : ''}`, lines: lines.length ? lines : x.lines }));
+    setD((x) => ({ ...x, salesOrderId: rq.req!.orderId ?? x.salesOrderId, deliverToSiteId: rq.req!.siteId, notes: x.notes || `For requisition ${rq.req!.number}${rq.req!.client ? ` (${rq.req!.client.name})` : ''}`, lines: lines.length ? lines : x.lines }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rq.ready]);
   /** prefilled lines never exceed what is still left to order on the order (earlier POs counted) */

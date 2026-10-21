@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { approverFor, manages, teamIds } from '../lib/team';
 import { myProjectOrderIds, projectMaterialStatus, projectSummaries } from '../services/projectStatus';
+import { classifyProjectLines, decideExcess, projectRequestable } from '../services/projectRequisitions';
 import { attachments, attendance, auditLogs, departments, projectMembers, salesOrders, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { istDate, istTime } from '../lib/dates';
@@ -299,8 +300,12 @@ r.get('/files-by-path', async (req, res) => {
 
 const reqSchema = z.object({
   type: z.enum(['MATERIAL', 'PENDING_WORK', 'REPAIR']), priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).default('MEDIUM'),
-  clientId: opt, siteId: opt, ticketId: opt, description: z.string().trim().min(3), requiredBy: z.coerce.date().nullish(),
-  items: z.array(z.object({ itemId: opt, description: z.string().min(1), qty: z.coerce.number().positive(), unit: z.string().default('Nos') })).default([]),
+  clientId: opt, siteId: opt, ticketId: opt, orderId: opt, description: z.string().trim().min(3), requiredBy: z.coerce.date().nullish(),
+  items: z.array(z.object({
+    itemId: opt, description: z.string().min(1), qty: z.coerce.number().positive(), unit: z.string().default('Nos'),
+    /** for a project: what to do with a quantity beyond the order / accessories — QUOTE (client pays) or ACCESSORY (internal) */
+    excessAction: z.enum(['QUOTE', 'ACCESSORY']).nullish(),
+  })).default([]),
   photoIds: z.array(z.string()).default([]),
 });
 
@@ -328,7 +333,7 @@ r.get('/requisitions', requirePerm('requisitions:view'), async (req, res) => {
 r.get('/requisitions/:id', requirePerm('requisitions:view'), async (req, res) => {
   const row = await db.query.requisitions.findFirst({
     where: eq(requisitions.id, req.params.id),
-    with: { site: { columns: { id: true, name: true, clientId: true } }, client: { columns: { id: true, name: true } }, raisedBy: { columns: { id: true, name: true, phone: true } }, ticket: { columns: { id: true, number: true, title: true } }, items: true },
+    with: { site: { columns: { id: true, name: true, clientId: true } }, client: { columns: { id: true, name: true } }, raisedBy: { columns: { id: true, name: true, phone: true } }, ticket: { columns: { id: true, number: true, title: true } }, items: true, order: { columns: { id: true, number: true } } },
   });
   if (!row) throw notFound('Requisition');
   if (!can(req.user, 'requisitions:view_all') && row.raisedById !== req.user.id && !(await manages(req.user.id, row.raisedById))) throw forbidden();
@@ -349,18 +354,29 @@ r.get('/requisitions/:id', requirePerm('requisitions:view'), async (req, res) =>
     .where(and(eq(auditLogs.entity, 'requisition'), eq(auditLogs.entityId, row.id))).orderBy(asc(auditLogs.createdAt));
   const who = [...new Set([...logs.map((l) => l.userId), row.actionById].filter((x): x is string => !!x))];
   const names = new Map((who.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, who)) : []).map((u) => [u.id, u.name]));
-  const LABEL: Record<string, string> = { create: 'Raised', approve: 'Approved', reject: 'Rejected', start: 'Work started', fulfil: 'Marked fulfilled', assign: 'Client / site assigned' };
+  const LABEL: Record<string, string> = { create: 'Raised', approve: 'Approved', reject: 'Rejected', start: 'Work started', fulfil: 'Marked fulfilled', assign: 'Client / site assigned', excess: 'Extra quantities decided' };
   const history = [
     ...(logs.some((l) => l.action === 'create') ? [] : [{ at: row.createdAt, label: 'Raised', by: row.raisedBy.name, note: null as string | null }]),
     ...logs.filter((l) => LABEL[l.action]).map((l) => ({ at: l.at, label: LABEL[l.action], by: l.userId ? names.get(l.userId) ?? null : null, note: ((l.data ?? {}) as { note?: string | null }).note ?? null })),
     ...docs.map((d) => ({ at: d.date, label: `${d.kind} ${d.number}${d.kind === 'Delivery challan' ? ` — ${String(d.status).toLowerCase()}` : ''}`, by: null, note: null })),
   ].sort((a, b) => +new Date(a.at) - +new Date(b.at));
-  res.json({ ...row, photos, docs, canAct, history, actionBy: row.actionById ? { id: row.actionById, name: names.get(row.actionById) ?? null } : null });
+  const canDecideExcess = !!row.orderId && row.items.some((i) => i.excessStatus === 'PENDING') && (can(req.user, 'accessories:approve') || can(req.user, 'quotations:create') || canAct);
+  res.json({ ...row, photos, docs, canAct, canDecideExcess, history, actionBy: row.actionById ? { id: row.actionById, name: names.get(row.actionById) ?? null } : null });
 });
 
 r.post('/requisitions', requirePerm('requisitions:create'), async (req, res) => {
   const d = reqSchema.parse(req.body);
   if (d.type === 'MATERIAL' && !d.items.length) throw badRequest('Add at least one material line');
+  // for a project: client and site come from the order; lines are split into covered / excess
+  let lines = d.items.map((i) => ({ ...i, excessAction: null as 'QUOTE' | 'ACCESSORY' | null, coveredQty: i.qty, excessQty: 0, excessStatus: null as string | null }));
+  if (d.orderId) {
+    const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, d.orderId), columns: { id: true, number: true, status: true, siteId: true, clientId: true } });
+    if (!o) throw badRequest('Project (order) not found');
+    if (['CANCELLED', 'CLOSED'].includes(o.status)) throw badRequest(`Order ${o.number} is ${o.status.toLowerCase()}`);
+    if (d.siteId && o.siteId && d.siteId !== o.siteId) throw badRequest(`The site comes from order ${o.number}`);
+    d.siteId = o.siteId ?? d.siteId; d.clientId = o.clientId;
+    if (d.type === 'MATERIAL') lines = (await classifyProjectLines(db, o.id, d.items.map((i) => ({ ...i, excessAction: i.excessAction ?? null })))).lines;
+  }
   const site = d.siteId ? await db.query.sites.findFirst({ where: eq(sites.id, d.siteId) }) : null;
   if (d.siteId && !site) throw badRequest('Site not found');
   const clientId = site?.clientId ?? d.clientId ?? null;
@@ -368,16 +384,19 @@ r.post('/requisitions', requirePerm('requisitions:create'), async (req, res) => 
   const row = await db.transaction(async (tx) => {
     const [row] = await tx.insert(requisitions).values({
       number: await nextNumber(tx, 'REQUISITION'), type: d.type, priority: d.priority, siteId: d.siteId ?? null, clientId, ticketId: d.ticketId, raisedById: req.user.id,
-      description: d.description, requiredBy: d.requiredBy,
+      description: d.description, requiredBy: d.requiredBy, orderId: d.orderId ?? null,
     }).returning();
-    if (d.items.length) await tx.insert(requisitionItems).values(d.items.map((i) => ({ ...i, requisitionId: row.id })));
+    if (lines.length) await tx.insert(requisitionItems).values(lines.map((i) => ({
+      itemId: i.itemId ?? null, description: i.description, qty: i.qty, unit: i.unit, requisitionId: row.id,
+      coveredQty: i.coveredQty, excessQty: i.excessQty, excessAction: i.excessAction, excessStatus: i.excessStatus,
+    })));
     if (d.photoIds.length) await tx.update(attachments).set({ entityType: 'REQUISITION', entityId: row.id }).where(and(inArray(attachments.id, d.photoIds), eq(attachments.uploadedById, req.user.id)));
     if (d.ticketId) await tx.insert(ticketUpdates).values({ ticketId: d.ticketId, userId: req.user.id, note: `Requisition ${row.number} raised (${d.type.replace('_', ' ').toLowerCase()})` });
     return row;
   });
   const reqNote = {
     title: `${d.priority === 'CRITICAL' || d.priority === 'HIGH' ? '⚠ ' : ''}${d.type.replace('_', ' ')} requisition — ${site?.name ?? 'site not set'}`,
-    body: `${req.user.name}: ${d.description.slice(0, 120)}`, type: 'REQUISITION' as const, link: `/requisitions/${row.id}`, entityType: 'REQUISITION', entityId: row.id,
+    body: `${req.user.name}: ${d.description.slice(0, 120)}${lines.some((l) => l.excessQty > 0) ? ' — includes quantities beyond the order (needs a decision)' : ''}`, type: 'REQUISITION' as const, link: `/requisitions/${row.id}`, entityType: 'REQUISITION', entityId: row.id,
   };
   await notifyPermission('requisitions:approve', reqNote, req.user.id);
   const head = await approverFor(req.user.id);
@@ -407,6 +426,32 @@ const REQ_FLOW: Record<string, { from: string[]; to: string }> = {
   approve: { from: ['PENDING'], to: 'APPROVED' }, reject: { from: ['PENDING', 'APPROVED'], to: 'REJECTED' },
   start: { from: ['APPROVED'], to: 'IN_PROGRESS' }, fulfil: { from: ['APPROVED', 'IN_PROGRESS'], to: 'FULFILLED' },
 };
+
+/** For a project: what can be requested — order and accessories quantities, already at site, asked for, still available. */
+r.get('/projects/:orderId/requestable', requirePerm('requisitions:view'), async (req, res) => {
+  res.json(await projectRequestable(db, req.params.orderId));
+});
+
+/** Decide quantities beyond the project: add to the accessories list, make a draft quotation, or reject. */
+r.post('/requisitions/:id/excess', async (req, res) => {
+  const d = z.object({ lines: z.array(z.object({ id: z.string(), decision: z.enum(['APPROVE', 'REJECT']), action: z.enum(['QUOTE', 'ACCESSORY']).nullish() })).min(1) }).parse(req.body);
+  const r0 = await db.query.requisitions.findFirst({ where: eq(requisitions.id, req.params.id), with: { items: true } });
+  if (!r0) throw notFound('Requisition');
+  for (const l of d.lines) {
+    const it = r0.items.find((i) => i.id === l.id);
+    const action = l.action ?? it?.excessAction;
+    if (l.decision === 'APPROVE' && action === 'ACCESSORY' && !can(req.user, 'accessories:approve')) throw forbidden('Adding to the accessories list needs the accessories approval right (Projects head / service manager)');
+    if (l.decision === 'APPROVE' && action === 'QUOTE' && !(can(req.user, 'quotations:create') || can(req.user, 'accessories:approve'))) throw forbidden('Making a quotation needs the quotation or accessories approval right');
+    if (l.decision === 'REJECT' && !(can(req.user, 'accessories:approve') || can(req.user, 'requisitions:approve'))) throw forbidden();
+  }
+  if (r0.raisedById === req.user.id && !can(req.user, 'requisitions:approve')) throw forbidden('You cannot approve your own extra quantities');
+  const out = await db.transaction((tx) => decideExcess(tx, req.params.id, d.lines, req.user.id));
+  const bits = [out.accessorySheet && `added to accessories list ${out.accessorySheet}`, out.quotation && `quotation ${out.quotation.number} drafted`].filter(Boolean);
+  await notifyUsers([r0.raisedById], { title: `Requisition ${r0.number}: extra quantities decided`, body: bits.join('; ') || 'Rejected', type: 'REQUISITION', link: `/requisitions/${r0.id}`, entityType: 'REQUISITION', entityId: r0.id }, req.user.id);
+  if (out.quotation) await notifyPermission('quotations:create', { title: `Quotation ${out.quotation.number} drafted from requisition ${r0.number}`, body: 'Extra material beyond the order — review and send for approval', type: 'APPROVAL', link: `/quotations/${out.quotation.id}`, entityType: 'QUOTATION', entityId: out.quotation.id }, req.user.id);
+  audit(req, 'excess', 'requisition', r0.id, { lines: d.lines, quotation: out.quotation?.number, accessorySheet: out.accessorySheet });
+  res.json({ ok: true, accessorySheet: out.accessorySheet ?? null, quotation: out.quotation ?? null });
+});
 
 /** Company-wide approvers (requisitions:approve), or the head / manager of the person who raised it. Never your own. */
 async function mayActOnRequisition(user: Request['user'], raisedById: string) {
