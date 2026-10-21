@@ -137,7 +137,7 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
     !included.length && 'Include at least one line',
     ...included.filter((l) => l.action === 'match' && !l.itemId).map((l) => `Line ${l.key}: pick the inventory item`),
     ...included.filter((l) => l.action === 'new' && !l.newItem.categoryId).map((l) => `Line ${l.key}: choose a system for the new item`),
-    ...included.filter((l) => !(l.qty > 0)).map((l) => `Line ${l.key}: quantity must be more than 0`),
+    ...included.filter((l) => !(l.qty >= 0)).map((l) => `Line ${l.key}: quantity cannot be negative`),
     !asQuote && p?.duplicate && !p.duplicate.summaryOnly && !allowDuplicate && `Already imported as ${p.duplicate.number}`,
     Math.abs(terms.reduce((a, x) => a + Number(x.percent || 0), 0) - 100) > 0.01 && 'Payment terms must add up to 100%',
   ].filter(Boolean) as string[];

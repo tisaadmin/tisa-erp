@@ -12,6 +12,7 @@ import { useAction, useClients, useGet, useSites, type Page } from '../lib/hooks
 import { OrderAccessoriesCard } from './Accessories';
 import { OrderInstallationCard } from '../components/Installation';
 import { OrderProjectTeamCard } from './Projects';
+import { OrderQtyCard } from '../components/OrderQty';
 import { OrderVendorBillsCard } from './VendorBills';
 import { DeleteOrderButton } from './Cleanup';
 import { emptyCosting, QuoteCostingCard, QuoteCostingEditor, type QuoteCosting } from '../components/QuoteCosting';
@@ -190,7 +191,7 @@ export function DocLines({ doc, extraCols }: { doc: any; extraCols?: { label: st
           <tbody>
             {doc.items.map((l: any, i: number) => (
               <tr key={l.id}><td>{i + 1}</td><td className="max-w-md">{l.milestone ? l.description.replace(/ — [^—]+ @ [\d.]+%$/, '') : l.description}{l.milestone && <div><Badge t="blue">{STAGE_LABEL[l.milestone]} @ {l.milestonePercent}%</Badge></div>}</td><td>{l.hsnSac}</td>
-                <td className="num">{qty(l.qty)} {l.unit}</td><td className="num">{inr(l.rate)}</td><td className="num">{l.discountPct ? `${l.discountPct}%` : ''}</td><td className="num">{l.gstRate}%</td><td className="num font-medium">{inr(l.taxable)}</td>
+                <td className="num">{Number(l.qty) === 0 ? <Badge t="violet">Rate only</Badge> : <>{qty(l.qty)} {l.unit}</>}</td><td className="num">{inr(l.rate)}</td><td className="num">{l.discountPct ? `${l.discountPct}%` : ''}</td><td className="num">{l.gstRate}%</td><td className="num font-medium">{Number(l.qty) === 0 ? '—' : inr(l.taxable)}</td>
                 {extraCols?.map((c) => <td key={c.label} className="num">{c.render(l)}</td>)}</tr>
             ))}
           </tbody>
@@ -321,7 +322,7 @@ export function OrderDetail() {
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Order details" className="lg:col-span-2">
           <KV cols={3} items={[['Date', fmtDate(o.date)], ['Client PO', o.clientPoNo ? `${o.clientPoNo}${o.clientPoDate ? ` · ${fmtDate(o.clientPoDate)}` : ''}` : null], ['Target completion', fmtDate(o.expectedCompletion)], ['Place of supply', o.placeOfSupply], ...(o.sourceRef ? [['Imported from', o.sourceRef.replace(/^FFH:/, 'FFH SO ')] as [string, string]] : []),
-            ...(o.sourceData ? [['FFH title', o.sourceData.title ?? '—'], ['FFH status', [o.sourceData.deliveryStatus, o.sourceData.billingStatus, o.sourceData.installedStatus].filter(Boolean).join(' · ') || '—'], ['FFH owner', o.sourceData.owner ?? '—']] as [string, string][] : []), ['Order value', inr(o.total)], ['Payment terms', stages.map((t) => `${t.percent}% ${STAGE_LABEL[t.stage]}`).join(', ')]]} />
+            ...(o.sourceData?.system === 'FFH' ? [['FFH title', o.sourceData.title ?? '—'], ['FFH status', [o.sourceData.deliveryStatus, o.sourceData.billingStatus, o.sourceData.installedStatus].filter(Boolean).join(' · ') || '—'], ['FFH owner', o.sourceData.owner ?? '—']] as [string, string][] : o.sourceData?.title ? [['Project', o.sourceData.title]] as [string, string][] : []), ['Order value', inr(o.total)], ['Payment terms', stages.map((t) => `${t.percent}% ${STAGE_LABEL[t.stage]}`).join(', ')]]} />
         </Card>
         {billing.data && (
           <Card title="Billing progress">
@@ -331,6 +332,7 @@ export function OrderDetail() {
         )}
       </div>
 
+      <OrderQtyCard orderId={o.id} items={o.items} closed={['CLOSED', 'CANCELLED', 'MERGED'].includes(o.status)} />
       <OrderAccessoriesCard orderId={o.id} />
       <OrderProjectTeamCard orderId={o.id} />
       <OrderInstallationCard orderId={o.id} />

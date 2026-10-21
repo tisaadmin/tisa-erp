@@ -60,7 +60,7 @@ r.get('/invoices/:id', requirePerm('invoices:view'), async (req, res) => {
 const manualSchema = z.object({
   type: z.enum(['TAX_INVOICE', 'SERVICE', 'AMC', 'PROFORMA']).default('TAX_INVOICE'),
   clientId: z.string(), siteId: opt, amcId: opt, ticketId: opt, date: z.coerce.date().optional(), dueDate: z.coerce.date().nullish(),
-  notes: opt, terms: opt, requisitionId: opt, lines: z.array(lineSchema).min(1),
+  notes: opt, terms: opt, requisitionId: opt, lines: z.array(lineSchema.extend({ qty: z.coerce.number().positive() })).min(1),
 });
 
 r.post('/invoices', requirePerm('invoices:create'), async (req, res) => {

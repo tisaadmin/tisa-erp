@@ -278,7 +278,7 @@ function ExcessCard({ r }: { r: any }) {
         {pending.map((i: any) => (
           <div key={i.id} className="flex flex-wrap items-center gap-3 rounded-md border border-slate-200 px-3 py-2 text-sm">
             <span className="min-w-56 flex-1"><b className="font-medium">{i.description}</b> — {qty(i.excessQty)} {i.unit} extra</span>
-            <Select className="w-56" value={dec[i.id].action ?? ''} onChange={(e) => setDec({ ...dec, [i.id]: { ...dec[i.id], action: e.target.value } })} options={[{ value: 'QUOTE', label: 'Client pays — quotation' }, { value: 'ACCESSORY', label: 'Internal — accessories list' }]} />
+            <Select className="w-80" value={dec[i.id].action ?? ''} onChange={(e) => setDec({ ...dec, [i.id]: { ...dec[i.id], action: e.target.value } })} options={[{ value: 'QUOTE', label: 'Client pays — quotation' }, { value: 'ORDER_QTY', label: 'On the order at its agreed rate (rate-only item) — add quantity' }, { value: 'ACCESSORY', label: 'Internal — accessories list' }]} />
             <Select className="w-36" value={dec[i.id].decision} onChange={(e) => setDec({ ...dec, [i.id]: { ...dec[i.id], decision: e.target.value as 'APPROVE' | 'REJECT' } })} options={[{ value: 'APPROVE', label: 'Approve' }, { value: 'REJECT', label: 'Reject' }]} />
           </div>
         ))}

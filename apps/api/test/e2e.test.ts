@@ -557,7 +557,8 @@ test('order import: FFH product-details export (ProductDetails_Id-<SO>) fills th
   assert.equal(p.doc.sourceNo, '261099600', 'SO number from the file name, not from "Sonology NAS"');
   assert.equal(p.doc.source, 'FFH ERP');
   assert.equal(p.duplicate.summaryOnly, true); assert.ok(p.clientId);
-  assert.equal(p.lines.length, 2); assert.ok(p.doc.warnings.some((w: string) => /no quantity/.test(w)));
+  assert.equal(p.lines.length, 3, 'a priced line without quantity is kept as a rate-only item'); assert.ok(p.doc.warnings.some((w: string) => /rate-only/.test(w)));
+  assert.equal(p.lines[2].qty, 0); assert.equal(p.lines[2].rate, 76.38);
   assert.equal(p.lines[0].action, 'match'); assert.equal(p.lines[0].deliveredQty, 2); assert.equal(p.lines[0].rate, 1000);
   assert.equal(p.lines[1].model, 'DS925'); assert.equal(p.lines[1].description, 'Sonology NAS DS925 storage — with 4 bays');
   const lines = p.lines.map((l: any) => ({ ...l, newItem: { ...l.newItem, categoryId: l.newItem.categoryId ?? ctx.cam.categoryId } }));
@@ -569,6 +570,7 @@ test('order import: FFH product-details export (ProductDetails_Id-<SO>) fills th
   assert.equal(done.filledIn, true);
   const o = await ok('sales', 'GET', `/orders/${done.orderId}`);
   assert.equal(o.taxable, 5000); assert.equal(o.total, 5900);
+  assert.equal(o.items.length, 3); assert.equal(o.items.find((l: any) => l.description.startsWith('RG-6')).qty, 0);
   assert.equal(o.items.find((l: any) => l.itemId === ctx.cam.id).deliveredQty, 2, 'opening delivered qty from the old ERP');
 });
 
@@ -1442,4 +1444,36 @@ test('RA bill from the client sheet: order from the BOQ, previous quantities as 
   const p3 = await ok('accounts', 'POST', '/ra-imports/parse', undefined, await make([[[0, 0], [0, 0], [0, 0], [0, 0]], [[0, 0], [0, 0], [0, 0], [0, 0]]]));
   const bad = body(p3.doc); bad.lines[0].stages[0].percent = 60;
   assert.equal((await call('accounts', 'POST', `/ra-imports/${p3.id}/commit`, bad)).status, 400);
+});
+
+test('rate-only items: order lines with quantity 0 at an agreed rate; quantity added later with approval', async () => {
+  const o = await ok('admin', 'POST', '/orders', {
+    clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }],
+    lines: [{ itemId: ctx.cam.id, qty: 2, rate: 3000 }, { description: 'PTZ camera — rate only', unit: 'Nos', qty: 0, rate: 50000, gstRate: 18 }],
+  });
+  assert.equal(o.taxable, 6000, 'rate-only line adds nothing to the value');
+  const full = await ok('admin', 'GET', `/orders/${o.id}`);
+  const ptz = full.items.find((i: any) => i.description.startsWith('PTZ'));
+  assert.equal(ptz.qty, 0); assert.equal(ptz.rate, 50000);
+  // nothing billable on it yet
+  const bs = await ok('admin', 'GET', `/orders/${o.id}/billing`);
+  assert.equal(bs.lines.find((l: any) => l.orderItemId === ptz.id).stages[0].billableQty, 0);
+  // quotation lines may be rate-only too
+  const q = await ok('sales', 'POST', '/quotations', { clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ itemId: ctx.cam.id, qty: 1 }, { description: 'Rate-only cable', unit: 'Mtr', qty: 0, rate: 90, gstRate: 18 }] });
+  assert.equal(q.items?.length ?? (await ok('sales', 'GET', `/quotations/${q.id}`)).items.length, 2);
+  // the site needs 3 PTZs: ask → Management approves
+  const r = await ok('sales', 'POST', `/orders/${o.id}/qty-requests`, { orderItemId: ptz.id, addQty: 3, reason: 'Parking ramp coverage asked by client', clientRef: 'Mail 12-Oct' });
+  assert.equal((await call('sales', 'POST', `/orders/${o.id}/qty-requests/${r.id}/decide`, { decision: 'APPROVE' })).status, 403, 'Sales cannot approve');
+  const list = await ok('admin', 'GET', `/orders/${o.id}/qty-requests`);
+  assert.equal(list[0].status, 'PENDING'); assert.equal(list[0].lineQty, 0);
+  await ok('director', 'POST', `/orders/${o.id}/qty-requests/${r.id}/decide`, { decision: 'APPROVE', note: 'OK as per client mail' });
+  const after = await ok('admin', 'GET', `/orders/${o.id}`);
+  assert.equal(after.items.find((i: any) => i.id === ptz.id).qty, 3);
+  assert.equal(after.taxable, 6000 + 150000, 'order value includes the approved quantity');
+  assert.equal((await call('director', 'POST', `/orders/${o.id}/qty-requests/${r.id}/decide`, { decision: 'REJECT' })).status, 400, 'already decided');
+  // an approver cannot approve their own request
+  const own = await ok('director', 'POST', `/orders/${o.id}/qty-requests`, { orderItemId: ptz.id, addQty: 1, reason: 'one more' });
+  assert.equal((await call('director', 'POST', `/orders/${o.id}/qty-requests/${own.id}/decide`, { decision: 'APPROVE' })).status, 400);
+  // invoices / POs still need a real quantity
+  assert.equal((await call('admin', 'POST', '/invoices', { clientId: ctx.client.id, type: 'TAX_INVOICE', lines: [{ description: 'x', unit: 'Nos', qty: 0, rate: 10, gstRate: 18 }] })).status, 400);
 });

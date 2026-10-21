@@ -139,7 +139,7 @@ const commitSchema = z.object({
   subject: z.string().trim().nullish(), validUntil: z.coerce.date().nullish(),
   lines: z.array(z.object({
     key: z.string(), include: z.boolean(), action: z.enum(['match', 'new', 'text']),
-    itemId: z.string().nullish(), description: z.string().trim().min(1), unit: z.string().trim().min(1), qty: z.coerce.number().positive(),
+    itemId: z.string().nullish(), description: z.string().trim().min(1), unit: z.string().trim().min(1), qty: z.coerce.number().min(0),
     rate: z.coerce.number().min(0), discountPct: z.coerce.number().min(0).max(100).default(0), gstRate: z.coerce.number().min(0).max(40),
     hsnSac: z.string().trim().nullish(),
     deliveredQty: z.coerce.number().min(0).nullish(),

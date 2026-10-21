@@ -26,7 +26,7 @@ const billSchema = z.object({
   vendorId: z.string(), billNo: z.string().trim().min(1, 'Enter the supplier’s bill number'),
   billDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
   poId: opt, orderId: opt, notes: opt,
-  lines: z.array(lineSchema.extend({ poItemId: opt })).min(1),
+  lines: z.array(lineSchema.extend({ poItemId: opt, qty: z.coerce.number().positive() })).min(1),
   /** the supplier's grand total, when it differs from the calculated one by rounding (max ₹10) */
   totalAsPerBill: z.coerce.number().positive().nullish(),
 });

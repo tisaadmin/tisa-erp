@@ -93,7 +93,7 @@ const all = (c: (SQL | undefined)[]) => { const x = c.filter((s): s is SQL => !!
 
 const poSchema = z.object({
   vendorId: z.string(), salesOrderId: opt, deliverToSiteId: opt, date: z.coerce.date().optional(), expectedDate: z.coerce.date().nullish(),
-  terms: opt, notes: opt, requisitionId: opt, lines: z.array(lineSchema).min(1), submit: z.boolean().default(false),
+  terms: opt, notes: opt, requisitionId: opt, lines: z.array(lineSchema.extend({ qty: z.coerce.number().positive() })).min(1), submit: z.boolean().default(false),
 });
 
 async function poContext(vendorId: string) {

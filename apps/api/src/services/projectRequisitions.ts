@@ -8,7 +8,8 @@
  */
 import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { DbOrTx } from '../db';
-import { accessorySheetLines, accessorySheets, items, quotationItems, quotations, requisitionItems, requisitions, salesOrders } from '../db/schema';
+import { accessorySheetLines, accessorySheets, items, orderQtyRequests, quotationItems, quotations, requisitionItems, requisitions, salesOrderItems, salesOrders } from '../db/schema';
+import { recalcOrder } from './orders';
 import { badRequest, notFound } from '../lib/http';
 import { nextNumber } from '../lib/numbering';
 import { getCompany, resolvePlaceOfSupply } from './company';
@@ -47,7 +48,7 @@ export async function projectRequestable(db: DbOrTx, orderId: string, excludeReq
   return { order: st.order, team: st.team, lines: [...map.values()] };
 }
 
-type LineIn = { itemId?: string | null; description: string; qty: number; unit: string; excessAction?: 'QUOTE' | 'ACCESSORY' | null };
+type LineIn = { itemId?: string | null; description: string; qty: number; unit: string; excessAction?: 'QUOTE' | 'ACCESSORY' | 'ORDER_QTY' | null };
 
 /** Split each requested line into the part the project covers and the excess (which needs a decision). */
 export async function classifyProjectLines(db: DbOrTx, orderId: string, lines: LineIn[]) {
@@ -73,24 +74,38 @@ export async function classifyProjectLines(db: DbOrTx, orderId: string, lines: L
  *  QUOTE → a draft quotation for the client (Sales sends it for approval; once accepted it becomes an order);
  *  REJECT → not supplied.
  */
-export async function decideExcess(tx: DbOrTx, requisitionId: string, decisions: { id: string; decision: 'APPROVE' | 'REJECT'; action?: 'QUOTE' | 'ACCESSORY' | null }[], userId: string) {
+export async function decideExcess(tx: DbOrTx, requisitionId: string, decisions: { id: string; decision: 'APPROVE' | 'REJECT'; action?: 'QUOTE' | 'ACCESSORY' | 'ORDER_QTY' | null }[], userId: string) {
   const r = await tx.query.requisitions.findFirst({ where: eq(requisitions.id, requisitionId), with: { items: true } });
   if (!r) throw notFound('Requisition');
   if (!r.orderId) throw badRequest('This requisition is not for a project');
   if (r.status === 'REJECTED') throw badRequest('This requisition was rejected');
   const byId = new Map(r.items.map((i) => [i.id, i]));
-  const toAccessory: typeof r.items = [], toQuote: typeof r.items = [];
+  const toAccessory: typeof r.items = [], toQuote: typeof r.items = [], toOrder: typeof r.items = [];
   for (const d of decisions) {
     const it = byId.get(d.id);
     if (!it || Number(it.excessQty) <= 0) throw badRequest('Line has no excess to decide');
     if (it.excessStatus !== 'PENDING') throw badRequest(`${it.description}: already decided`);
     if (d.decision === 'REJECT') { await tx.update(requisitionItems).set({ excessStatus: 'REJECTED' }).where(eq(requisitionItems.id, it.id)); continue; }
     const action = d.action ?? it.excessAction;
-    if (action === 'ACCESSORY') toAccessory.push(it); else if (action === 'QUOTE') toQuote.push(it); else throw badRequest(`${it.description}: choose quotation or accessories list`);
+    if (action === 'ACCESSORY') toAccessory.push(it); else if (action === 'QUOTE') toQuote.push(it); else if (action === 'ORDER_QTY') toOrder.push(it); else throw badRequest(`${it.description}: choose quotation, accessories list or add to the order`);
   }
   const order = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, r.orderId) });
   if (!order) throw notFound('Order');
-  const result: { accessorySheet?: string; quotation?: { id: string; number: string } } = {};
+  const result: { accessorySheet?: string; quotation?: { id: string; number: string }; orderQty?: string } = {};
+  if (toOrder.length) {
+    // rate-only (or BOQ) item of the order: its quantity goes up by the extra at the agreed rate — approved here by the decider
+    const lines = await tx.query.salesOrderItems.findMany({ where: eq(salesOrderItems.orderId, order.id) });
+    for (const i of toOrder) {
+      const ol = lines.find((l) => materialKey(l) === materialKey(i));
+      if (!ol) throw badRequest(`${i.description}: not on order ${order.number} — use quotation or accessories list`);
+      await tx.update(salesOrderItems).set({ qty: r3(Number(ol.qty) + Number(i.excessQty)) }).where(eq(salesOrderItems.id, ol.id));
+      ol.qty = r3(Number(ol.qty) + Number(i.excessQty));
+      await tx.insert(orderQtyRequests).values({ orderId: order.id, orderItemId: ol.id, addQty: i.excessQty, reason: `Requisition ${r.number}`, status: 'APPROVED', requestedById: r.raisedById, decidedById: userId, decidedAt: new Date() });
+      await tx.update(requisitionItems).set({ excessStatus: 'APPROVED', coveredQty: r3(Number(i.coveredQty) + Number(i.excessQty)) }).where(eq(requisitionItems.id, i.id));
+    }
+    await recalcOrder(tx, order.id);
+    result.orderQty = order.number;
+  }
   if (toAccessory.length) {
     let sheet = (await tx.query.accessorySheets.findMany({ where: eq(accessorySheets.orderId, order.id), orderBy: [desc(accessorySheets.createdAt)] }))
       .sort((a, b) => Number(b.status === 'APPROVED') - Number(a.status === 'APPROVED')).find((s) => s.status !== 'REJECTED');

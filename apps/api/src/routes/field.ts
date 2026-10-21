@@ -304,7 +304,7 @@ const reqSchema = z.object({
   items: z.array(z.object({
     itemId: opt, description: z.string().min(1), qty: z.coerce.number().positive(), unit: z.string().default('Nos'),
     /** for a project: what to do with a quantity beyond the order / accessories — QUOTE (client pays) or ACCESSORY (internal) */
-    excessAction: z.enum(['QUOTE', 'ACCESSORY']).nullish(),
+    excessAction: z.enum(['QUOTE', 'ACCESSORY', 'ORDER_QTY']).nullish(),
   })).default([]),
   photoIds: z.array(z.string()).default([]),
 });
@@ -368,7 +368,7 @@ r.post('/requisitions', requirePerm('requisitions:create'), async (req, res) => 
   const d = reqSchema.parse(req.body);
   if (d.type === 'MATERIAL' && !d.items.length) throw badRequest('Add at least one material line');
   // for a project: client and site come from the order; lines are split into covered / excess
-  let lines = d.items.map((i) => ({ ...i, excessAction: null as 'QUOTE' | 'ACCESSORY' | null, coveredQty: i.qty, excessQty: 0, excessStatus: null as string | null }));
+  let lines = d.items.map((i) => ({ ...i, excessAction: null as 'QUOTE' | 'ACCESSORY' | 'ORDER_QTY' | null, coveredQty: i.qty, excessQty: 0, excessStatus: null as string | null }));
   if (d.orderId) {
     const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, d.orderId), columns: { id: true, number: true, status: true, siteId: true, clientId: true } });
     if (!o) throw badRequest('Project (order) not found');
@@ -434,7 +434,7 @@ r.get('/projects/:orderId/requestable', requirePerm('requisitions:view'), async 
 
 /** Decide quantities beyond the project: add to the accessories list, make a draft quotation, or reject. */
 r.post('/requisitions/:id/excess', async (req, res) => {
-  const d = z.object({ lines: z.array(z.object({ id: z.string(), decision: z.enum(['APPROVE', 'REJECT']), action: z.enum(['QUOTE', 'ACCESSORY']).nullish() })).min(1) }).parse(req.body);
+  const d = z.object({ lines: z.array(z.object({ id: z.string(), decision: z.enum(['APPROVE', 'REJECT']), action: z.enum(['QUOTE', 'ACCESSORY', 'ORDER_QTY']).nullish() })).min(1) }).parse(req.body);
   const r0 = await db.query.requisitions.findFirst({ where: eq(requisitions.id, req.params.id), with: { items: true } });
   if (!r0) throw notFound('Requisition');
   for (const l of d.lines) {
@@ -442,11 +442,12 @@ r.post('/requisitions/:id/excess', async (req, res) => {
     const action = l.action ?? it?.excessAction;
     if (l.decision === 'APPROVE' && action === 'ACCESSORY' && !can(req.user, 'accessories:approve')) throw forbidden('Adding to the accessories list needs the accessories approval right (Projects head / service manager)');
     if (l.decision === 'APPROVE' && action === 'QUOTE' && !(can(req.user, 'quotations:create') || can(req.user, 'accessories:approve'))) throw forbidden('Making a quotation needs the quotation or accessories approval right');
+    if (l.decision === 'APPROVE' && action === 'ORDER_QTY' && !can(req.user, 'orders:approve')) throw forbidden('Adding quantity to the order needs the order quantity approval right (Management)');
     if (l.decision === 'REJECT' && !(can(req.user, 'accessories:approve') || can(req.user, 'requisitions:approve'))) throw forbidden();
   }
   if (r0.raisedById === req.user.id && !can(req.user, 'requisitions:approve')) throw forbidden('You cannot approve your own extra quantities');
   const out = await db.transaction((tx) => decideExcess(tx, req.params.id, d.lines, req.user.id));
-  const bits = [out.accessorySheet && `added to accessories list ${out.accessorySheet}`, out.quotation && `quotation ${out.quotation.number} drafted`].filter(Boolean);
+  const bits = [out.orderQty && `quantity added to order ${out.orderQty}`, out.accessorySheet && `added to accessories list ${out.accessorySheet}`, out.quotation && `quotation ${out.quotation.number} drafted`].filter(Boolean);
   await notifyUsers([r0.raisedById], { title: `Requisition ${r0.number}: extra quantities decided`, body: bits.join('; ') || 'Rejected', type: 'REQUISITION', link: `/requisitions/${r0.id}`, entityType: 'REQUISITION', entityId: r0.id }, req.user.id);
   if (out.quotation) await notifyPermission('quotations:create', { title: `Quotation ${out.quotation.number} drafted from requisition ${r0.number}`, body: 'Extra material beyond the order — review and send for approval', type: 'APPROVAL', link: `/quotations/${out.quotation.id}`, entityType: 'QUOTATION', entityId: out.quotation.id }, req.user.id);
   audit(req, 'excess', 'requisition', r0.id, { lines: d.lines, quotation: out.quotation?.number, accessorySheet: out.accessorySheet });

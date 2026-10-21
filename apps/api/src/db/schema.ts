@@ -446,6 +446,26 @@ export const salesOrderItems = pgTable('sales_order_items', {
 });
 
 /**
+ * Request to add quantity to an order line — typically a rate-only item (rate agreed with the client, qty 0) once the site needs it,
+ * or extra quantity beyond the BOQ. The line's quantity changes only when an approver (orders:approve) accepts it.
+ */
+export const orderQtyRequests = pgTable('order_qty_requests', {
+  id: id(),
+  orderId: text().notNull().references(() => salesOrders.id, { onDelete: 'cascade' }),
+  orderItemId: text().notNull().references(() => salesOrderItems.id, { onDelete: 'cascade' }),
+  addQty: qty().notNull(),
+  reason: text().notNull(),
+  status: text().notNull().default('PENDING'), // PENDING, APPROVED, REJECTED
+  requestedById: text().notNull(),
+  decidedById: text(),
+  decidedAt: ts(),
+  decisionNote: text(),
+  /** e.g. client's approval reference (mail / letter / MB sheet) */
+  clientRef: text(),
+  createdAt: createdAt(),
+}, (t) => [index().on(t.orderId), index().on(t.status)]);
+
+/**
  * Quantities billed per milestone before the ERP (earlier RA bills from the client's running-bill sheet).
  * They count as already billed for the order line, but are not invoices: no GST, receivables or numbering.
  */

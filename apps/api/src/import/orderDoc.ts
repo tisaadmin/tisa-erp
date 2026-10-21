@@ -246,6 +246,7 @@ export async function parseOrderDocument(buf: Buffer, fileName: string): Promise
   const sheetNames = await sheetNamesOf(buf);
   const lines: DocLine[] = [];
   const skippedNoQty: string[] = [];
+  const rateOnlyRows: string[] = [];
   const multi = headers.length > 1;
   for (const descHeader of headers) {
   const sheet = multi ? sheetNames[descHeader.s] ?? `Sheet ${descHeader.s + 1}` : null;
@@ -289,7 +290,10 @@ export async function parseOrderDocument(buf: Buffer, fileName: string): Promise
     blanks = 0;
     const sr = oneLine(val(row, cols.sr));
     const descRaw = val(row, cols.desc);
-    const qtyV = num(val(row, cols.qty));
+    // a priced row without a quantity is a rate-only item (rate agreed, quantity added later on approval)
+    const rateOnly = !!descRaw && num(val(row, cols.qty)) == null && (num(val(row, cols.rate)) ?? 0) > 0;
+    const qtyV = rateOnly ? 0 : num(val(row, cols.qty));
+    if (rateOnly) rateOnlyRows.push(oneLine(descRaw)!.slice(0, 50));
     if (descRaw && /^(total|sub\s*total|grand\s*total|amount\s*in\s*words|terms|payment\s*terms)/i.test(descRaw)) { if (/^sub\s*total/i.test(descRaw)) continue; break; }
     if (!descRaw || qtyV == null) {
       // a heading row (text but no quantity, rate or amount) starts a BOQ section
@@ -333,6 +337,7 @@ export async function parseOrderDocument(buf: Buffer, fileName: string): Promise
   if (cols.gst == null && lines.length > first && lines.slice(first).some((l) => l.rate != null) && !warnings.some((w) => w.startsWith('The file has no GST'))) warnings.push('The file has no GST column — GST % comes from the item master (18% for new items); check the GST on each line');
   }
   if (!lines.length) throw badRequest('No item lines were found under the Description / Quantity headings');
+  if (rateOnlyRows.length) warnings.push(`${rateOnlyRows.length} line${rateOnlyRows.length > 1 ? 's have' : ' has'} a rate but no quantity — kept as rate-only item${rateOnlyRows.length > 1 ? 's' : ''} (quantity 0; add the quantity later with approval): ${rateOnlyRows.slice(0, 5).join('; ')}${rateOnlyRows.length > 5 ? '…' : ''}`);
   if (skippedNoQty.length) warnings.push(`${skippedNoQty.length} line${skippedNoQty.length > 1 ? 's have' : ' has'} no quantity in the file and ${skippedNoQty.length > 1 ? 'were' : 'was'} left out: ${skippedNoQty.slice(0, 5).join('; ')}${skippedNoQty.length > 5 ? '…' : ''}`);
   if (lines.some((l) => (l.billedQty ?? 0) > 0)) warnings.push('Some lines were already billed in the old ERP — billed quantities are shown per line; avoid billing them again here');
   if (!lines.some((l) => l.rate != null)) warnings.push('The file has no rates — rates are taken from the item master where the item is known; enter the rest before importing');

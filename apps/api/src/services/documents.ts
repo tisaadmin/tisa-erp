@@ -27,8 +27,10 @@ const lineCols = (inter: boolean): DocColumn[] => [
 
 type L = { description: string; hsnSac: string | null; qty: number; unit: string; rate: number; discountPct: number; gstRate: number; taxable: number };
 const toRows = (ls: L[]) => ls.map((l, i) => ({
-  sr: i + 1, description: l.discountPct ? `${l.description} (disc. ${l.discountPct}%)` : l.description, hsnSac: l.hsnSac, qty: l.qty, unit: l.unit,
-  rate: l.rate, gst: `${l.gstRate}`, taxable: l.taxable,
+  sr: i + 1, description: l.discountPct ? `${l.description} (disc. ${l.discountPct}%)` : l.description, hsnSac: l.hsnSac,
+  // rate-only lines: rate agreed, quantity as required at site
+  qty: Number(l.qty) === 0 ? 'Rate only' : l.qty, unit: l.unit,
+  rate: l.rate, gst: `${l.gstRate}`, taxable: Number(l.qty) === 0 ? '—' : l.taxable,
 }));
 
 export async function quotationPdf(id: string) {

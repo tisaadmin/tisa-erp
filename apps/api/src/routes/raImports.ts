@@ -98,7 +98,7 @@ const commitSchema = z.object({
   createBill: z.boolean().default(true),
   gstRate: z.coerce.number().min(0).max(40),
   lines: z.array(z.object({
-    key: z.string(), include: z.boolean(), description: z.string().trim().min(1), unit: z.string().trim().min(1), qty: z.coerce.number().positive(), rate: z.coerce.number().min(0),
+    key: z.string(), include: z.boolean(), description: z.string().trim().min(1), unit: z.string().trim().nullish().transform((u) => u || 'Nos'), qty: z.coerce.number().min(0), rate: z.coerce.number().min(0),
     stages: z.array(z.object({ stage: stageEnum, percent: z.coerce.number().min(0).max(100), prevQty: z.coerce.number().min(0), prevAmt: z.coerce.number().nullish(), currQty: z.coerce.number().min(0) })).min(1),
   })).min(1),
 });

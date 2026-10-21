@@ -10,7 +10,8 @@ export const lineSchema = z.object({
   description: z.string().min(1).optional(),
   hsnSac: z.string().nullish(),
   unit: z.string().optional(),
-  qty: z.coerce.number().positive(),
+  /** 0 = rate-only line (rate agreed with the client, quantity added later on approval) */
+  qty: z.coerce.number().min(0),
   rate: z.coerce.number().min(0).optional(),
   discountPct: z.coerce.number().min(0).max(100).default(0),
   gstRate: z.coerce.number().min(0).max(40).optional(),

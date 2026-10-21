@@ -96,6 +96,7 @@ export async function parseRaBill(buf: Buffer, fileName: string, ownGstin?: stri
   // ── body
   const lines: RaLine[] = [];
   const skipped: string[] = [];
+  const rateOnly: string[] = [];
   const warnings: string[] = [];
   let section: string | null = null, group: string | null = null, gstRate: number | null = null;
   let cur: RaLine | null = null;
@@ -119,7 +120,8 @@ export async function parseRaBill(buf: Buffer, fileName: string, ownGstin?: stri
     if (!cur) return;
     const maxCum = Math.max(0, ...cur.stages.map((s) => s.cumQty));
     if (!(cur.qty > 0)) cur.qty = maxCum;
-    if (!(cur.qty > 0) && !cur.stages.some((s) => s.prevQty || s.currQty)) { skipped.push(`${cur.key} ${cur.description.split('\n')[0].slice(0, 60)}`); cur = null; return; }
+    // no quantity and nothing billed: a rate-only item (rate agreed; quantity added later on approval) — kept with quantity 0
+    if (!(cur.qty > 0) && !cur.stages.some((s) => s.prevQty || s.currQty)) { if (!(cur.rate > 0)) { skipped.push(`${cur.key} ${cur.description.split('\n')[0].slice(0, 60)}`); cur = null; return; } rateOnly.push(cur.key); }
     lines.push(cur); cur = null;
   };
 
@@ -176,7 +178,7 @@ export async function parseRaBill(buf: Buffer, fileName: string, ownGstin?: stri
       }
     }
     const sum = r2(l.stages.reduce((a, s) => a + s.percent, 0));
-    if (!l.stages.length) warnings.push(`${l.key}: no payment break-up under the item — it is billed as one milestone (100% on supply)`);
+    if (!l.stages.length) { warnings.push(`${l.key}: no payment break-up under the item — it is billed as one milestone (100% on supply)`); l.stages.push({ stage: 'DELIVERY', label: '100% on supply', percent: 100, rate: l.rate, prevQty: 0, currQty: 0, cumQty: 0, prevAmt: null, currAmt: null }); }
     else if (sum !== 100) warnings.push(`${l.key}: payment break-up adds up to ${sum}%, not 100% — correct it below`);
     const dup = l.stages.map((s) => s.stage).filter((s, i, a) => a.indexOf(s) !== i);
     if (dup.length) warnings.push(`${l.key}: two break-up rows are the same milestone (${dup.join(', ')}) — they are added together`);
@@ -221,7 +223,8 @@ export async function parseRaBill(buf: Buffer, fileName: string, ownGstin?: stri
   const clientGstin = found.find((f) => f.g !== own && (!ownPan || f.g.slice(2, 12) !== ownPan) && !ownCols.has(f.c))?.g
     ?? found.find((f) => f.g !== own && !ownCols.has(f.c))?.g ?? null;
 
-  if (skipped.length) warnings.push(`${skipped.length} BOQ item${skipped.length > 1 ? 's have' : ' has'} no quantity and nothing billed — left out: ${skipped.slice(0, 6).join('; ')}${skipped.length > 6 ? '…' : ''}`);
+  if (rateOnly.length) warnings.push(`${rateOnly.length} rate-only item${rateOnly.length > 1 ? 's' : ''} (rate agreed, no quantity yet): ${rateOnly.slice(0, 12).join(', ')}${rateOnly.length > 12 ? '…' : ''} — kept on the order with quantity 0; add quantities later with approval`);
+  if (skipped.length) warnings.push(`${skipped.length} BOQ item${skipped.length > 1 ? 's have' : ' has'} no quantity, no rate and nothing billed — left out: ${skipped.slice(0, 6).join('; ')}${skipped.length > 6 ? '…' : ''}`);
   if (gstRate == null) warnings.push('No GST line (CGST / SGST / IGST @ x%) was found — 18% is used');
 
   return {

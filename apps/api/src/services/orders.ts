@@ -2,11 +2,12 @@ import { count, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { DbOrTx } from '../db';
 import { deliveryChallans, invoices, salesOrders, salesOrderItems } from '../db/schema';
-import { badRequest } from '../lib/http';
+import { badRequest, notFound } from '../lib/http';
 import { nextNumber } from '../lib/numbering';
 import { validateTerms } from './billing';
 import { resolvePlaceOfSupply } from './company';
 import { lineSchema, priceLines } from './lines';
+import { calcTotals } from '../lib/gst';
 
 export const STAGE_KEYS = ['ADVANCE', 'DELIVERY', 'INSTALLATION', 'TESTING', 'COMMISSIONING', 'HANDOVER'] as const;
 export const termsSchema = z.array(z.object({ stage: z.enum(STAGE_KEYS), percent: z.coerce.number() }));
@@ -56,3 +57,20 @@ export async function replaceOrderLines(tx: DbOrTx, orderId: string, d: OrderInp
   }).where(eq(salesOrders.id, orderId)).returning();
   return row;
 }
+
+/** Recomputes every line amount and the order totals (after a quantity change). */
+export async function recalcOrder(tx: DbOrTx, orderId: string) {
+  const o = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, orderId) });
+  if (!o) throw notFound('Order');
+  const items = await tx.query.salesOrderItems.findMany({ where: eq(salesOrderItems.orderId, orderId), orderBy: [salesOrderItems.sortOrder] });
+  const ctx = await resolvePlaceOfSupply(tx, o.clientId, o.siteId);
+  const { lines, totals } = calcTotals(items.map((i) => ({ qty: i.qty, rate: i.rate, discountPct: i.discountPct, gstRate: i.gstRate })), ctx.isInterState);
+  for (const [k, it] of items.entries()) {
+    const c = lines[k];
+    if (c.taxable !== it.taxable || c.taxAmount !== it.taxAmount || c.amount !== it.amount) {
+      await tx.update(salesOrderItems).set({ taxable: c.taxable, taxAmount: c.taxAmount, amount: c.amount }).where(eq(salesOrderItems.id, it.id));
+    }
+  }
+  await tx.update(salesOrders).set(totals).where(eq(salesOrders.id, orderId));
+}
+

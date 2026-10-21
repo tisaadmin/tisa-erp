@@ -81,6 +81,7 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
                   <td><input className="input" value={l.hsnSac ?? ''} onChange={(e) => set(i, { hsnSac: e.target.value })} /></td>
                   <td>
                     <input type="number" min={0} step="any" className={cx('input text-right', l.itemId && limits?.[l.itemId] && (used.get(l.itemId) ?? 0) > limits[l.itemId].remaining && 'border-red-400 text-red-700')} value={l.qty} onChange={(e) => set(i, { qty: Number(e.target.value) })} />
+                    {Number(l.qty) === 0 && l.rate > 0 && <div className="mt-1 text-right text-[11px] font-medium text-violet-700" title="Rate agreed with the client; quantity is added later with approval">rate only</div>}
                     {l.itemId && limits?.[l.itemId] && <div className={cx('mt-1 text-right text-[11px] leading-tight', (used.get(l.itemId) ?? 0) > limits[l.itemId].remaining ? 'font-medium text-red-600' : 'text-slate-400')}>{limits[l.itemId].remaining} left of {limits[l.itemId].qty}</div>}
                   </td>
                   <td><input className="input" value={l.unit} onChange={(e) => set(i, { unit: e.target.value })} /></td>
