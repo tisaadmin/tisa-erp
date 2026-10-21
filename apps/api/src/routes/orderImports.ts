@@ -8,22 +8,28 @@ import multer from 'multer';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
-import { clients, importJobs, items, salesOrderItems, salesOrders, sites } from '../db/schema';
+import { clients, importJobs, items, quotationItems, quotations, salesOrderItems, salesOrders, sites, vendors } from '../db/schema';
 import { audit } from '../lib/audit';
-import { badRequest, notFound } from '../lib/http';
+import { badRequest, forbidden, notFound } from '../lib/http';
 import { GSTIN_REGEX, INDIAN_STATES, stateFromGstin } from '../lib/gst';
 import { nextCode, reserveCodes } from '../lib/numbering';
-import { can, requirePerm, type AuthUser } from '../middleware/auth';
+import { can, type AuthUser } from '../middleware/auth';
 import { itemKey, unitKey } from '../lib/itemMatch';
 import { enforceRule } from '../services/workflow';
 import { UNIT_MAP } from '../import/engine';
 import { parseOrderDocument, type ParsedOrderDoc } from '../import/orderDoc';
 import { guessItemType, suggestClients, suggestItems, suggestSites, systemGuesser } from '../import/orderMatch';
 import { createSalesOrder, replaceOrderLines, termsSchema } from '../services/orders';
+import { getCompany, resolvePlaceOfSupply } from '../services/company';
+import { priceLines } from '../services/lines';
+import { validateTerms } from '../services/billing';
+import { nextNumber } from '../lib/numbering';
+import type { RequestHandler } from 'express';
 
 const r = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
-const perm = requirePerm('orders:create');
+// the same upload makes an order form (order desk) or a draft quotation (Sales)
+const perm: RequestHandler = (req, _res, next) => next(can(req.user, 'orders:create') || can(req.user, 'quotations:create') ? undefined : forbidden());
 
 const unitOf = (u: string | null, type: string) => {
   if (!u) return type === 'SERVICE' ? 'Job' : 'Nos';
@@ -128,12 +134,16 @@ const commitSchema = z.object({
   clientPoNo: z.string().trim().nullish(), clientPoDate: z.coerce.date().nullish(), expectedCompletion: z.coerce.date().nullish(),
   paymentTerms: termsSchema.min(1), terms: z.string().nullish(), notes: z.string().nullish(),
   allowDuplicate: z.boolean().optional(),
+  /** QUOTE = draft quotation (goes through approval with its costing), ORDER = order form */
+  target: z.enum(['ORDER', 'QUOTE']).default('ORDER'),
+  subject: z.string().trim().nullish(), validUntil: z.coerce.date().nullish(),
   lines: z.array(z.object({
     key: z.string(), include: z.boolean(), action: z.enum(['match', 'new', 'text']),
     itemId: z.string().nullish(), description: z.string().trim().min(1), unit: z.string().trim().min(1), qty: z.coerce.number().positive(),
     rate: z.coerce.number().min(0), discountPct: z.coerce.number().min(0).max(100).default(0), gstRate: z.coerce.number().min(0).max(40),
     hsnSac: z.string().trim().nullish(),
     deliveredQty: z.coerce.number().min(0).nullish(),
+    costRate: z.coerce.number().min(0).nullish(), costVendor: z.string().trim().nullish(),
     newItem: z.object({ type: z.enum(['PRODUCT', 'ACCESSORY', 'SERVICE']), categoryId: z.string().nullish(), brand: z.string().nullish() }).nullish(),
   })).min(1),
 });
@@ -145,12 +155,15 @@ type Job = typeof importJobs.$inferSelect;
 async function commitOrderImport(job: Job, doc: ParsedOrderDoc, d: CommitInput, user: AuthUser) {
   const userId = user.id;
   if (job.status === 'DONE') throw badRequest('This document has already been imported — upload it again to import another copy');
+  const asQuote = d.target === 'QUOTE';
+  if (asQuote ? !can(user, 'quotations:create') : !can(user, 'orders:create')) throw forbidden();
+  if (asQuote) validateTerms(d.paymentTerms);
   const sourceRef = sourceRefOf(doc);
-  const dup = await duplicateOf(sourceRef);
+  const dup = asQuote ? null : await duplicateOf(sourceRef);
   const fillIn = !!dup?.summaryOnly && !d.allowDuplicate; // complete the order-list entry instead of creating another order
   if (dup && !dup.summaryOnly && !d.allowDuplicate) throw badRequest(`This order (${doc.sourceNo}) was already imported as ${dup.number}`);
   // filling in an order brought over from the old ERP is fine; a brand-new order follows the "orders from quotations" rule
-  if (!fillIn) await enforceRule('orderRequiresQuote', user, 'This document is not an order from the old ERP\'s order list, and new orders must be created from an approved quotation — ask for the "direct order" permission to import it as a new order');
+  if (!fillIn && !asQuote) await enforceRule('orderRequiresQuote', user, 'This document is not an order from the old ERP\'s order list, and new orders must be created from an approved quotation — ask for the "direct order" permission to import it as a new order');
 
   const lines = d.lines.filter((l) => l.include);
   if (!lines.length) throw badRequest('Include at least one line');
@@ -228,6 +241,33 @@ async function commitOrderImport(job: Job, doc: ParsedOrderDoc, d: CommitInput, 
       doc.dueAmount != null ? `Due amount on source document: ₹${doc.dueAmount}` : null,
       d.notes || null,
     ].filter(Boolean);
+
+    if (asQuote) {
+      const company = await getCompany();
+      const ctx = await resolvePlaceOfSupply(tx, client.id, siteId);
+      const qLines = lines.map((l) => ({
+        itemId: l.action === 'match' ? l.itemId : l.action === 'new' ? idByKey.get(keyOfItem(l))! : null,
+        description: l.description, hsnSac: l.hsnSac || null, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate,
+      }));
+      const { rows, totals } = await priceLines(tx, qLines, ctx.placeOfSupply !== company.stateCode);
+      // purchase rates / vendors from the sheet are kept only for people who may see costs
+      const costing = can(user, 'quotations:costing');
+      const vendorRows = costing && lines.some((l) => l.costVendor) ? await tx.select({ id: vendors.id, name: vendors.name }).from(vendors) : [];
+      const vendorId = (n?: string | null) => (n ? vendorRows.find((v) => v.name.toLowerCase().trim() === n.toLowerCase().trim())?.id ?? null : null);
+      const date = d.date ?? new Date();
+      const [q] = await tx.insert(quotations).values({
+        number: await nextNumber(tx, 'QUOTATION', date), date, validUntil: d.validUntil ?? new Date(date.getTime() + 30 * 864e5), clientId: client.id, siteId,
+        subject: d.subject || doc.subject || doc.title || null, placeOfSupply: ctx.placeOfSupply, paymentTerms: d.paymentTerms,
+        terms: d.terms || company.quoteTerms, notes: noteParts.join('\n').replace(/^Imported from/, 'Created from'), ...totals, createdById: userId,
+      }).returning();
+      await tx.insert(quotationItems).values(rows.map(({ paymentTerms: _pt, ...l }, i) => ({
+        ...l, quotationId: q.id,
+        ...(costing && lines[i].costRate != null ? { costRate: lines[i].costRate, costVendor: lines[i].costVendor || null, costVendorId: vendorId(lines[i].costVendor) } : {}),
+      })));
+      const summary = { quotationId: q.id, number: q.number, total: q.total, itemsCreated: distinct.length, siteCreated, clientCreated, lines: lines.length, filledIn: false };
+      await tx.update(importJobs).set({ status: 'DONE', summary }).where(eq(importJobs.id, job.id));
+      return { order: { id: q.id }, summary, sourceRef: null as string | null };
+    }
 
     const input = {
       clientId: client.id, siteId, date: d.date, clientPoNo: d.clientPoNo || null, clientPoDate: d.clientPoDate ?? null,
@@ -329,7 +369,7 @@ r.post('/order-imports/bulk/commit', perm, async (req, res) => {
       // items are matched again for every file, so a new item created by an earlier file is reused, not duplicated
       const a = await assess(doc, d.defaultCategoryId ?? null);
       if (a.status !== 'ready' || !a.dup) { out.push({ jobId: id, fileName: job.fileName, status: a.status, reasons: a.reasons }); continue; }
-      const result = await commitOrderImport(job, doc, {
+      const result = await commitOrderImport(job, doc, { target: 'ORDER',
         clientId: a.dup.clientId, site: a.dup.siteId ? { mode: 'existing', siteId: a.dup.siteId } : { mode: 'none' },
         paymentTerms: a.dup.paymentTerms as CommitInput['paymentTerms'],
         lines: a.linesFull.map((l) => ({ ...l, newItem: { ...l.newItem, categoryId: l.newItem.categoryId ?? d.defaultCategoryId ?? null } })),
@@ -354,7 +394,7 @@ r.get('/order-imports/:id', perm, async (req, res) => {
 r.post('/order-imports/:id/commit', perm, async (req, res) => {
   const { job, doc } = await loadJob(req.params.id);
   const result = await commitOrderImport(job, doc, commitSchema.parse(req.body), req.user);
-  audit(req, 'import', 'order', result.order.id, { file: job.fileName, sourceRef: result.sourceRef, ...result.summary });
+  audit(req, 'import', 'quotationId' in result.summary ? 'quotation' : 'order', result.order.id, { file: job.fileName, sourceRef: result.sourceRef, ...result.summary });
   res.status(201).json(result.summary);
 });
 

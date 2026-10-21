@@ -40,6 +40,7 @@ export default function App() {
         <Route path="orders" element={<OrdersPage />} />
         <Route path="orders/new" element={<OrderEditor />} />
         <Route path="orders/import" element={<OrderImportPage />} />
+        <Route path="quotations/import" element={<OrderImportPage mode="quote" />} />
         <Route path="orders/import-bulk" element={<OrderBulkImportPage />} />
         <Route path="orders/:id" element={<OrderDetail />} />
         <Route path="challans" element={<ChallansPage />} />

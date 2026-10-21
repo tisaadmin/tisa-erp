@@ -1,5 +1,5 @@
 import { AlertTriangle, CheckCircle2, FileSpreadsheet, Upload } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Combo } from '../components/Combo';
@@ -8,6 +8,7 @@ import { Badge, Button, Card, Field, Input, KV, PageHeader, Select, Textarea, cx
 import { api } from '../lib/api';
 import { inr } from '../lib/format';
 import { useCategories, useClients, useItems } from '../lib/hooks';
+import { useAuth } from '../lib/auth';
 import { stateOpts } from './Masters';
 import { useCompanyState } from './Sales';
 
@@ -16,12 +17,14 @@ type Doc = {
   source: string; title: string | null; sourceNo: string | null; date: string | null; poNo: string | null; poDate: string | null; contact: string | null;
   owner: string | null; clientHint: string | null; billTo: Party; shipTo: Party; remark: string | null; dueAmount: number | null; advanceReceived: number | null;
   grandTotal: number | null; warnings: string[];
+  subject?: string | null; paymentTermsText?: string | null; paymentTerms?: Term[] | null; sheets?: string[];
 };
 type ItemSug = { id: string; name: string; sku: string; brand: string | null; unit: string; gstRate: number; salePrice: number; hsnSac: string | null; score: number };
 type ImpLine = {
   key: string; srNo: string | null; parentKey: string | null; description: string; manufacturer: string | null; suggestions: ItemSug[];
   include: boolean; action: 'match' | 'new' | 'text'; itemId: string | null; unit: string; qty: number; rate: number; gstRate: number; hsnSac: string | null;
-  discountPct: number; deliveredQty: number | null; billedQty: number | null; model: string | null; newItem: { type: 'PRODUCT' | 'ACCESSORY' | 'SERVICE'; categoryId: string | null; brand: string | null };
+  discountPct: number; deliveredQty: number | null; billedQty: number | null; model: string | null;
+  sheet?: string | null; section?: string | null; costRate?: number | null; costVendor?: string | null; newItem: { type: 'PRODUCT' | 'ACCESSORY' | 'SERVICE'; categoryId: string | null; brand: string | null };
 };
 type ClientSug = { id: string; name: string; code: string; city: string | null; score: number; reason: string };
 type SiteSug = { id: string; name: string; code: string; address: string | null; city: string | null; score: number };
@@ -34,8 +37,12 @@ const guessClientType = (name: string) => (/\b(chs|co-?op|society|housing|apartm
 const pct = (s: number) => `${Math.round(s * (s <= 1 ? 100 : 1))}%`;
 const DEFAULT_TERMS: Term[] = [{ stage: 'ADVANCE', percent: 0 }, { stage: 'DELIVERY', percent: 100 }];
 
-export function OrderImportPage() {
+export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }) {
   const nav = useNavigate();
+  const { can } = useAuth();
+  const [target, setTarget] = useState<'ORDER' | 'QUOTE'>(mode === 'quote' || !can('orders:create') ? 'QUOTE' : 'ORDER');
+  const asQuote = target === 'QUOTE';
+  const [offSheets, setOffSheets] = useState<string[]>([]);
   const companyState = useCompanyState();
   const clients = useClients();
   const items = useItems();
@@ -51,7 +58,7 @@ export function OrderImportPage() {
   const [siteId, setSiteId] = useState<string | null>(null);
   const [newSite, setNewSite] = useState<NewSite>({ name: '', address: '', city: '', stateCode: '', contactName: '', phone: '' });
   const [lines, setLines] = useState<ImpLine[]>([]);
-  const [hdr, setHdr] = useState({ date: '', clientPoNo: '', clientPoDate: '', expectedCompletion: '', notes: '' });
+  const [hdr, setHdr] = useState({ date: '', clientPoNo: '', clientPoDate: '', expectedCompletion: '', notes: '', subject: '', validUntil: '' });
   const [terms, setTerms] = useState<Term[]>(DEFAULT_TERMS);
   const [allowDuplicate, setAllowDuplicate] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -83,15 +90,18 @@ export function OrderImportPage() {
       setP(r);
       setClientId(r.clientId); setSites(r.sites); setSiteId(r.siteId);
       const likely = r.clients.some((c) => c.score >= 50);
-      setClientMode(r.clientId || likely ? 'existing' : 'new');
+      // nothing in the file names the client (typical for a BOQ): pick an existing one rather than typing a new one
+      setClientMode(r.clientId || likely || !(r.doc.clientHint || r.doc.billTo.name) ? 'existing' : 'new');
       if (r.duplicate?.summaryOnly) setTerms(r.duplicate.paymentTerms);
+      else if (r.doc.paymentTerms?.length) setTerms(r.doc.paymentTerms);
+      setOffSheets([]);
       setSiteMode(r.clientId && r.siteId ? 'existing' : 'new');
       const ship = r.doc.shipTo, bill = r.doc.billTo;
       const name = r.doc.clientHint ?? bill.name ?? '';
       setNewClient({ name, type: guessClientType(name), gstin: bill.gstin ?? '', billingAddress: bill.text ?? '', city: bill.city ?? '', stateCode: bill.stateCode ?? '', contactName: r.doc.contact ?? '', phone: '', email: '' });
       setNewSite({ name: '', address: ship.text ?? bill.text ?? '', city: ship.city ?? bill.city ?? '', stateCode: ship.stateCode ?? bill.stateCode ?? '', contactName: r.doc.contact ?? '', phone: '' });
       setLines(r.lines);
-      setHdr({ date: r.doc.date ?? '', clientPoNo: r.doc.poNo ?? '', clientPoDate: r.doc.poDate ?? '', expectedCompletion: '', notes: '' });
+      setHdr({ date: r.doc.date ?? '', clientPoNo: r.doc.poNo ?? '', clientPoDate: r.doc.poDate ?? '', expectedCompletion: '', notes: '', subject: r.doc.subject ?? r.doc.title ?? '', validUntil: '' });
       setAllowDuplicate(false);
   }
 
@@ -101,7 +111,8 @@ export function OrderImportPage() {
     try {
       const s = await api<SiteSug[]>(`/order-imports/${p.id}/sites?clientId=${id}`);
       setSites(s);
-      if (s[0] && s[0].score >= 60) { setSiteId(s[0].id); setSiteMode('existing'); } else if (!s.length) setSiteMode('new');
+      // the client's sites: pick the matching one, else ask (rather than quietly adding another site)
+      if (s[0] && s[0].score >= 60) { setSiteId(s[0].id); setSiteMode('existing'); } else if (s.length) { setSiteMode('existing'); if (s.length === 1) setSiteId(s[0].id); } else setSiteMode('new');
     } catch (e) { toast.error((e as Error).message); }
   };
 
@@ -113,7 +124,7 @@ export function OrderImportPage() {
     set(i, { action: 'match', itemId: it.id, unit: it.unit, gstRate: it.gstRate, hsnSac: it.hsnSac ?? l.hsnSac, rate: l.rate || it.salePrice });
   };
 
-  const included = lines.filter((l) => l.include);
+  const included = lines.filter((l) => l.include && !(l.sheet && offSheets.includes(l.sheet)));
   const clientName = clientMode === 'new' ? newClient.name : client?.name ?? '';
   const clientState = clientMode === 'new' ? (newClient.gstin.slice(0, 2).match(/^\d{2}$/)?.[0] ?? newClient.stateCode) : client?.stateCode;
   const stateCode = clientMode === 'new' ? (siteMode === 'new' && newSite.stateCode) || clientState : siteMode === 'existing' ? (sites.find((s) => s.id === siteId) as any)?.stateCode ?? client?.stateCode : siteMode === 'new' ? newSite.stateCode || client?.stateCode : client?.stateCode;
@@ -127,7 +138,8 @@ export function OrderImportPage() {
     ...included.filter((l) => l.action === 'match' && !l.itemId).map((l) => `Line ${l.key}: pick the inventory item`),
     ...included.filter((l) => l.action === 'new' && !l.newItem.categoryId).map((l) => `Line ${l.key}: choose a system for the new item`),
     ...included.filter((l) => !(l.qty > 0)).map((l) => `Line ${l.key}: quantity must be more than 0`),
-    p?.duplicate && !p.duplicate.summaryOnly && !allowDuplicate && `Already imported as ${p.duplicate.number}`,
+    !asQuote && p?.duplicate && !p.duplicate.summaryOnly && !allowDuplicate && `Already imported as ${p.duplicate.number}`,
+    Math.abs(terms.reduce((a, x) => a + Number(x.percent || 0), 0) - 100) > 0.01 && 'Payment terms must add up to 100%',
   ].filter(Boolean) as string[];
   const zeroRate = included.filter((l) => !l.rate).length;
 
@@ -135,17 +147,17 @@ export function OrderImportPage() {
     if (!p) return;
     setSaving(true);
     try {
-      const r = await api<{ orderId: string; number: string; itemsCreated: number; siteCreated: string | null; clientCreated: string | null; filledIn: boolean }>(`/order-imports/${p.id}/commit`, {
+      const r = await api<{ orderId?: string; quotationId?: string; number: string; itemsCreated: number; siteCreated: string | null; clientCreated: string | null; filledIn: boolean }>(`/order-imports/${p.id}/commit`, {
         body: {
           clientId: clientMode === 'existing' ? clientId : null, newClient: clientMode === 'new' ? newClient : null, allowDuplicate,
           site: siteMode === 'existing' && clientMode === 'existing' ? { mode: 'existing', siteId } : siteMode === 'new' ? { mode: 'new', ...newSite } : { mode: 'none' },
           date: hdr.date || undefined, clientPoNo: hdr.clientPoNo || null, clientPoDate: hdr.clientPoDate || null, expectedCompletion: hdr.expectedCompletion || null,
-          notes: hdr.notes || null, paymentTerms: terms,
-          lines: lines.map(({ suggestions: _s, srNo: _n, parentKey: _p, manufacturer: _m, ...l }) => l),
+          notes: hdr.notes || null, paymentTerms: terms, target, subject: hdr.subject || null, validUntil: hdr.validUntil || null,
+          lines: lines.map(({ suggestions: _s, srNo: _n, parentKey: _p, manufacturer: _m, sheet, section: _se, ...l }) => ({ ...l, include: l.include && !(sheet && offSheets.includes(sheet)) })),
         },
       });
-      toast.success(`Order ${r.number} ${r.filledIn ? 'updated with its items' : 'created'}${r.clientCreated ? ` · client "${r.clientCreated}" added` : ''}${r.itemsCreated ? ` · ${r.itemsCreated} new item${r.itemsCreated > 1 ? 's' : ''} added to inventory` : ''}${r.siteCreated ? ` · site "${r.siteCreated}" added` : ''}`);
-      nav(`/orders/${r.orderId}`);
+      toast.success(`${r.quotationId ? 'Quotation' : 'Order'} ${r.number} ${r.filledIn ? 'updated with its items' : 'created'}${r.clientCreated ? ` · client "${r.clientCreated}" added` : ''}${r.itemsCreated ? ` · ${r.itemsCreated} new item${r.itemsCreated > 1 ? 's' : ''} added to inventory` : ''}${r.siteCreated ? ` · site "${r.siteCreated}" added` : ''}`);
+      nav(r.quotationId ? `/quotations/${r.quotationId}` : `/orders/${r.orderId}`);
     } catch (e) { toast.error((e as Error).message); } finally { setSaving(false); }
   };
 
@@ -153,26 +165,38 @@ export function OrderImportPage() {
 
   return (
     <div className="space-y-4">
-      <PageHeader back="/orders" title="Import sales order" subtitle="Upload one sales order (FFH ERP export or similar). Check the client, site and items, then create the order form."
+      <PageHeader back={asQuote ? '/quotations' : '/orders'} title={asQuote ? 'Quotation from Excel' : 'Import sales order'}
+        subtitle={asQuote ? 'Upload the project\'s final quote / BOQ sheet. Check the client, site, items and payment terms, then create the quotation (it goes for approval as usual).' : 'Upload one sales order (FFH ERP export or similar). Check the client, site and items, then create the order form.'}
         actions={<>
-          <Link to="/orders/import-bulk"><Button>Import many files…</Button></Link>
-          {p && <Button variant="primary" loading={saving} disabled={problems.length > 0} onClick={commit}>Create order</Button>}
+          {!asQuote && <Link to="/orders/import-bulk"><Button>Import many files…</Button></Link>}
+          {p && <Button variant="primary" loading={saving} disabled={problems.length > 0} onClick={commit}>{asQuote ? 'Create quotation' : 'Create order'}</Button>}
         </>} />
+      {can('orders:create') && can('quotations:create') && (
+        <div className="flex items-center gap-3 text-sm">
+          <span className="text-slate-500">Create as</span>
+          {(['QUOTE', 'ORDER'] as const).map((t) => (
+            <label key={t} className={cx('flex cursor-pointer items-center gap-1.5 rounded-md border px-3 py-1.5', target === t ? 'border-brand-400 bg-brand-50 font-medium text-brand-800' : 'border-slate-200 bg-white')}>
+              <input type="radio" checked={target === t} onChange={() => setTarget(t)} /> {t === 'QUOTE' ? 'Quotation (draft → approval → client)' : 'Order form (client has confirmed)'}
+            </label>
+          ))}
+        </div>
+      )}
 
       <Card>
         <div className="flex flex-wrap items-end gap-3">
-          <Field label="Sales order file (.xlsx)" className="min-w-72 flex-1">
+          <Field label={asQuote ? 'Final quote / BOQ (.xlsx)' : 'Sales order file (.xlsx)'} className="min-w-72 flex-1">
             <input type="file" accept=".xlsx" className="input file:mr-3 file:rounded file:border-0 file:bg-slate-100 file:px-2 file:py-1 file:text-sm"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
           </Field>
           <Button variant={p ? 'secondary' : 'primary'} icon={<Upload className="size-4" />} disabled={!file} loading={busy} onClick={upload}>{p ? 'Read another file' : 'Read file'}</Button>
         </div>
-        {!p && <p className="mt-3 text-sm text-slate-500">Upload FFH's <b>product details</b> export of an order (ProductDetails_Id-&lt;SO no&gt;.xlsx — it has rates and quantities) or the sales order print saved as .xlsx. The SO number in the file name links it to the order brought in from the FFH order list, so its client and site are filled in automatically.</p>}
+        {!p && asQuote && <p className="mt-3 text-sm text-slate-500">Any Excel quote or BOQ with a heading row containing <b>Description</b> and <b>Qty</b> (plus Unit, Rate, Make, Model, HSN, GST %, Discount where present). Section headings, several sheets (e.g. one per system) and a <b>Payment terms</b> line such as “30% advance, 60% against delivery, 10% after commissioning” are picked up. Optional <b>Purchase rate</b> / <b>Vendor</b> columns fill the internal costing. Old .xls files: open in Excel and save as .xlsx.</p>}
+        {!p && !asQuote && <p className="mt-3 text-sm text-slate-500">Upload FFH's <b>product details</b> export of an order (ProductDetails_Id-&lt;SO no&gt;.xlsx — it has rates and quantities) or the sales order print saved as .xlsx. The SO number in the file name links it to the order brought in from the FFH order list, so its client and site are filled in automatically.</p>}
       </Card>
 
       {p && (
         <>
-          {p.duplicate?.summaryOnly && (
+          {!asQuote && p.duplicate?.summaryOnly && (
             <div className="flex flex-wrap items-center gap-3 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
               <CheckCircle2 className="size-4" />
               <span>FFH SO {p.doc.sourceNo} is already in the ERP from the order list as <Link className="font-semibold underline" to={`/orders/${p.duplicate.id}`}>{p.duplicate.number}</Link>{p.duplicate.title ? ` (${p.duplicate.title})` : ''}.
@@ -180,7 +204,7 @@ export function OrderImportPage() {
               <label className="ml-auto flex items-center gap-2"><input type="checkbox" checked={allowDuplicate} onChange={(e) => setAllowDuplicate(e.target.checked)} /> Create a separate order instead</label>
             </div>
           )}
-          {p.duplicate && !p.duplicate.summaryOnly && (
+          {!asQuote && p.duplicate && !p.duplicate.summaryOnly && (
             <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               <AlertTriangle className="size-4" />
               <span>This document ({p.doc.sourceNo}) was already imported as <Link className="font-semibold underline" to={`/orders/${p.duplicate.id}`}>{p.duplicate.number}</Link>.</span>
@@ -191,12 +215,15 @@ export function OrderImportPage() {
 
           <div className="grid gap-4 lg:grid-cols-3">
             <Card title={<>From the document <Badge t="violet">{p.doc.source}</Badge></>}>
-              <KV cols={2} items={[
+{asQuote ? <KV cols={2} items={[
+                ['File', p.fileName], ['Subject', p.doc.subject ?? '—'], ['Sheets with items', (p.doc.sheets ?? []).join(', ') || '—'], ['Lines', String(lines.length)],
+                ['Value in the file', inr(lines.reduce((a, l) => a + l.qty * (l.rate || 0), 0))], ['Payment terms', p.doc.paymentTerms ? p.doc.paymentTerms.map((t) => `${t.percent}% ${t.stage.toLowerCase()}`).join(', ') : p.doc.paymentTermsText ? 'see below' : 'not in the file'],
+              ]} /> :               <KV cols={2} items={[
                 ['Document', `${p.doc.title ?? 'Sales order'}${p.doc.sourceNo ? ` · ${p.doc.sourceNo}` : ''}`], ['Date', p.doc.date ?? '—'],
                 ['Client (file name)', p.doc.clientHint ?? '—'], ['Contact', p.doc.contact ?? '—'],
                 ['Billed to', p.doc.billTo.text ?? '—'], ['Despatched to', p.doc.shipTo.text ?? '—'],
                 ['Remark', p.doc.remark ?? '—'], ['Due amount', p.doc.dueAmount != null ? inr(p.doc.dueAmount) : '—'],
-              ]} />
+              ]} />}
             </Card>
 
             <Card title="Client & site" className="lg:col-span-2">
@@ -269,28 +296,46 @@ export function OrderImportPage() {
                 </div>
               </div>
               <div className="mt-4 grid gap-3 border-t border-slate-100 pt-4 sm:grid-cols-4">
+                {asQuote ? <>
+                  <Field label="Subject / project" className="sm:col-span-2"><Input value={hdr.subject} onChange={(e) => setHdr({ ...hdr, subject: e.target.value })} placeholder="e.g. ELV systems for Express Inn" /></Field>
+                  <Field label="Quotation date"><Input type="date" value={hdr.date} onChange={(e) => setHdr({ ...hdr, date: e.target.value })} /></Field>
+                  <Field label="Valid until" hint="Blank = 30 days"><Input type="date" value={hdr.validUntil} onChange={(e) => setHdr({ ...hdr, validUntil: e.target.value })} /></Field>
+                </> : <>
                 <Field label="Order date"><Input type="date" value={hdr.date} onChange={(e) => setHdr({ ...hdr, date: e.target.value })} /></Field>
                 <Field label="Client PO no."><Input value={hdr.clientPoNo} onChange={(e) => setHdr({ ...hdr, clientPoNo: e.target.value })} /></Field>
                 <Field label="Client PO date"><Input type="date" value={hdr.clientPoDate} onChange={(e) => setHdr({ ...hdr, clientPoDate: e.target.value })} /></Field>
                 <Field label="Target completion"><Input type="date" value={hdr.expectedCompletion} onChange={(e) => setHdr({ ...hdr, expectedCompletion: e.target.value })} /></Field>
+                </>}
               </div>
             </Card>
           </div>
 
+          {(p.doc.sheets?.length ?? 0) > 1 && (
+            <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-500">Sheets with items:</span>
+              {p.doc.sheets!.map((sh) => (
+                <label key={sh} className={cx('flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-0.5', offSheets.includes(sh) ? 'border-slate-200 text-slate-400 line-through' : 'border-brand-300 bg-brand-50 text-brand-800')}>
+                  <input type="checkbox" checked={!offSheets.includes(sh)} onChange={(e) => setOffSheets(e.target.checked ? offSheets.filter((x) => x !== sh) : [...offSheets, sh])} />{sh} <span className="text-xs text-slate-400">({lines.filter((l) => l.sheet === sh).length})</span>
+                </label>))}
+            </div>
+          )}
           <Card title={`Items (${included.length} of ${lines.length} included)`}
             actions={lines.some((l) => l.action === 'new') && (
               <div className="flex items-center gap-2 text-sm"><span className="text-slate-500">System for all new items</span>
                 <Select className="w-52" value="" onChange={(e) => e.target.value && setAllNewSystems(e.target.value)} options={catOpts} placeholder="Set all…" /></div>
             )} pad={false}>
             <div className="overflow-x-auto">
-              <table className="tbl min-w-[1100px]">
+              <table className="tbl min-w-[1250px]">
                 <thead>
                   <tr><th className="w-8" /><th className="w-12">Sr.</th><th className="min-w-60">Description (from file)</th><th className="w-[19rem]">Inventory item</th>
-                    <th className="w-16 text-right">Qty</th><th className="w-16">Unit</th><th className="w-28 text-right">Rate</th><th className="w-20 text-right">GST %</th><th className="w-28 text-right">Taxable</th></tr>
+                    <th className="w-24 min-w-20 text-right">Qty</th><th className="w-20 min-w-20">Unit</th><th className="w-28 min-w-28 text-right">Rate</th><th className="w-24 min-w-20 text-right">GST %</th><th className="w-28 text-right">Taxable</th></tr>
                 </thead>
                 <tbody>
-                  {lines.map((l, i) => (
-                    <tr key={l.key} className={cx(!l.include && 'opacity-45')}>
+                  {lines.map((l, i) => (l.sheet && offSheets.includes(l.sheet) ? null : (
+                    <Fragment key={l.key}>
+                    {(l.section || l.sheet) && (l.section !== lines[i - 1]?.section || l.sheet !== lines[i - 1]?.sheet) && (
+                      <tr className="bg-slate-50"><td colSpan={9} className="py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">{[l.sheet, l.section].filter(Boolean).join(' · ')}</td></tr>
+                    )}
+                    <tr className={cx(!l.include && 'opacity-45')}>
                       <td className="pt-3"><input type="checkbox" checked={l.include} onChange={(e) => set(i, { include: e.target.checked })} title="Include this line" /></td>
                       <td className={cx('pt-3 text-slate-500', l.parentKey && 'pl-5')}>{l.srNo ?? l.key}</td>
                       <td>
@@ -330,9 +375,11 @@ export function OrderImportPage() {
                       <td><input className="input" value={l.unit} onChange={(e) => set(i, { unit: e.target.value })} /></td>
                       <td><input type="number" min={0} step="any" className={cx('input text-right', l.include && !l.rate && 'border-amber-400')} value={l.rate} onChange={(e) => set(i, { rate: Number(e.target.value) })} /></td>
                       <td><select className="input text-right" value={l.gstRate} onChange={(e) => set(i, { gstRate: Number(e.target.value) })}>{[0, 5, 12, 18, 28, 40].map((g) => <option key={g} value={g}>{g}</option>)}</select></td>
-                      <td className="num pt-3">{inr(l.qty * l.rate * (1 - (l.discountPct || 0) / 100))}</td>
+                      <td className="num pt-3">{inr(l.qty * l.rate * (1 - (l.discountPct || 0) / 100))}
+                        {l.costRate != null && <div className="mt-0.5 text-[11px] font-normal text-slate-400" title="Purchase rate from the sheet — goes to the quotation's internal costing">cost {inr(l.costRate)}{l.costVendor ? ` · ${l.costVendor}` : ''}</div>}</td>
                     </tr>
-                  ))}
+                    </Fragment>
+                  )))}
                 </tbody>
               </table>
             </div>
@@ -351,7 +398,11 @@ export function OrderImportPage() {
           </Card>
 
           <div className="grid gap-4 lg:grid-cols-2">
-            <Card title="Milestone payment schedule"><PaymentTermsEditor terms={terms} onChange={setTerms} /></Card>
+            <Card title="Milestone payment schedule">
+              {p.doc.paymentTermsText && <div className={cx('mb-3 rounded-md px-3 py-2 text-sm', p.doc.paymentTerms ? 'bg-emerald-50 text-emerald-900' : 'bg-amber-50 text-amber-900')}>
+                <div className="text-xs font-medium">{p.doc.paymentTerms ? 'Read from the file' : 'In the file (set the milestones below)'}</div><div className="whitespace-pre-line">{p.doc.paymentTermsText}</div></div>}
+              <PaymentTermsEditor terms={terms} onChange={setTerms} />
+            </Card>
             <Card title="Notes">
               <Textarea rows={4} value={hdr.notes} onChange={(e) => setHdr({ ...hdr, notes: e.target.value })} placeholder="Optional. The source document number, remark and contact are added automatically." />
             </Card>
@@ -359,7 +410,7 @@ export function OrderImportPage() {
 
           <div className="flex flex-wrap items-center justify-end gap-3">
             {problems.length > 0 && <ul className="text-sm text-amber-800">{problems.slice(0, 4).map((x) => <li key={x}>• {x}</li>)}{problems.length > 4 && <li>• and {problems.length - 4} more</li>}</ul>}
-            <Button variant="primary" loading={saving} disabled={problems.length > 0} onClick={commit}>Create order</Button>
+            <Button variant="primary" loading={saving} disabled={problems.length > 0} onClick={commit}>{asQuote ? 'Create quotation' : 'Create order'}</Button>
           </div>
         </>
       )}

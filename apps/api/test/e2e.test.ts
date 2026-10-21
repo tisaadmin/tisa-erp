@@ -1331,3 +1331,48 @@ test('merge orders of a project: lines, deliveries, POs, accessories and team mo
   const st = await ok('tech', 'GET', `/projects/${a.id}`);
   assert.equal(st.orderItems.length, 3);
 });
+
+test('quotation from a final quote / BOQ sheet: sections, two sheets, payment terms and purchase rates', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  const a = wb.addWorksheet('CCTV');
+  a.addRow(['ELV systems for Express Inn, Nashik']);
+  a.addRow([]);
+  a.addRow(['Sl. No.', 'Description', 'Make', 'Qty', 'Unit', 'Rate', 'Amount', 'Purchase rate', 'Vendor']);
+  a.addRow(['A', 'Cameras']);
+  a.addRow([1, ctx.cam.name, 'Hikvision', 10, 'Nos', 3200, 32000, 2300, 'Netcom Distributors']);
+  a.addRow([]);
+  a.addRow(['B', 'Recording']);
+  a.addRow([2, 'Brand new 8 channel NVR from the BOQ', 'Hikvision', 1, 'Nos', 7200, 7200, 5000, 'Some dealer']);
+  a.addRow(['', 'Sub total', '', '', '', '', 39200]);
+  a.addRow([]);
+  a.addRow(['Payment terms: 30% advance along with PO, 60% against delivery (pro-rata), 10% after testing & commissioning']);
+  const b = wb.addWorksheet('Installation');
+  b.addRow(['Sr. No.', 'Description', 'Qty', 'Unit', 'Rate']);
+  b.addRow([1, 'Installation, testing & commissioning of cameras', 10, 'Nos', 650]);
+  const buf = Buffer.from(await wb.xlsx.writeBuffer() as ArrayBuffer);
+  const file = () => { const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(buf)]), 'Express Inn final quote.xlsx'); return fd; };
+
+  const p = await ok('sales', 'POST', '/order-imports/parse', undefined, file());
+  assert.equal(p.doc.subject, 'ELV systems for Express Inn, Nashik');
+  assert.deepEqual(p.doc.sheets, ['CCTV', 'Installation']);
+  assert.deepEqual(p.doc.paymentTerms, [{ stage: 'ADVANCE', percent: 30 }, { stage: 'DELIVERY', percent: 60 }, { stage: 'COMMISSIONING', percent: 10 }]);
+  assert.equal(p.lines.length, 3, 'section headings and the sub-total are not lines');
+  assert.deepEqual(p.lines.map((l: any) => l.section ?? null), ['Cameras', 'Recording', null]);
+  assert.equal(p.lines[0].manufacturer, 'Hikvision'); assert.equal(p.lines[0].costRate, 2300); assert.equal(p.lines[0].costVendor, 'Netcom Distributors');
+  assert.equal(p.lines[0].itemId, ctx.cam.id, 'known item matched');
+
+  const lines = p.lines.map((l: any) => ({ ...l, action: l.itemId ? 'match' : 'text' }));
+  const body = { target: 'QUOTE', clientId: ctx.client.id, site: { mode: 'existing', siteId: ctx.site.id }, paymentTerms: p.doc.paymentTerms, subject: p.doc.subject, lines };
+  assert.equal((await call('tech', 'POST', `/order-imports/${p.id}/commit`, body)).status, 403);
+  const done = await ok('sales', 'POST', `/order-imports/${p.id}/commit`, body);
+  assert.ok(done.quotationId); assert.match(done.number, /QT/);
+  const q = await ok('sales', 'GET', `/quotations/${done.quotationId}`);
+  assert.equal(q.status, 'DRAFT'); assert.equal(q.subject, 'ELV systems for Express Inn, Nashik'); assert.equal(q.items.length, 3);
+  assert.deepEqual(q.paymentTerms.map((t: any) => t.percent), [30, 60, 10]);
+  assert.equal(q.taxable, 32000 + 7200 + 6500);
+  assert.equal(q.items[0].costRate, 2300, 'purchase rate goes to the costing'); assert.equal(q.costingSummary.material, 23000 + 5000);
+  // payment terms that do not add up are refused
+  const p2 = await ok('sales', 'POST', '/order-imports/parse', undefined, file());
+  assert.equal((await call('sales', 'POST', `/order-imports/${p2.id}/commit`, { ...body, paymentTerms: [{ stage: 'ADVANCE', percent: 40 }] })).status, 400);
+});

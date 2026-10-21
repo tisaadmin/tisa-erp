@@ -50,7 +50,10 @@ export function QuotationsPage() {
   const list = useGet<Page<any>>('/quotations', q);
   return (
     <div>
-      <PageHeader title="Quotations" actions={can('quotations:create') && <Link to="/quotations/new"><Button variant="primary" icon={<Plus className="size-4" />}>New quotation</Button></Link>} />
+      <PageHeader title="Quotations" actions={can('quotations:create') && <>
+        <Link to="/quotations/import"><Button icon={<Upload className="size-4" />}>From Excel (final quote / BOQ)</Button></Link>
+        <Link to="/quotations/new"><Button variant="primary" icon={<Plus className="size-4" />}>New quotation</Button></Link>
+      </>} />
       <Card pad={false}>
         <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
           <SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} />
