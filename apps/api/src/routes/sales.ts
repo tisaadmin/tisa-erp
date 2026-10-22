@@ -171,6 +171,20 @@ r.put('/quotations/:id', requirePerm('quotations:edit'), async (req, res) => {
   res.json(q);
 });
 
+/**
+ * Before a quotation goes out (sent / made into an order) or for approval: every product line needs our purchase rate, and
+ * — when it is going to the client without approval — its gross profit % must meet the target, else Management approves it.
+ */
+async function assertQuoteMayGo(q: { status: string; taxable: number; costing?: unknown }, items0: (typeof quotationItems.$inferSelect)[], user: AuthUser, goingOut: boolean) {
+  const svc = await serviceItemIds(db, items0);
+  const missing = items0.filter((i) => i.costRate == null && Number(i.qty) > 0 && !isServiceLine(i, svc));
+  if (missing.length) await enforceRule('quoteRequiresCosting', user, `Enter our purchase rate (and vendor) for: ${missing.slice(0, 5).map((i) => i.description.slice(0, 40)).join(', ')}${missing.length > 5 ? ` and ${missing.length - 5} more` : ''} — edit the quotation and fill the purchase rate under each item`);
+  if (!goingOut || q.status === 'APPROVED') return;
+  const cfg = await costingConfig();
+  const sum = costingSummary(q as never, items0, cfg.minGpPct, svc);
+  if (sum.belowTarget) await enforceRule('quoteRequiresApproval', user, `Gross profit is ${sum.gpPct}% — below the ${sum.minGpPct}% target, so Management has to approve it first — use "Submit for approval"`);
+}
+
 const QUOTE_FLOW: Record<string, string[]> = {
   DRAFT: ['PENDING_APPROVAL', 'APPROVED', 'SENT'],
   PENDING_APPROVAL: ['APPROVED', 'DRAFT', 'REJECTED'],
@@ -187,14 +201,8 @@ r.post('/quotations/:id/status', requirePerm('quotations:edit'), async (req, res
   if (status === 'APPROVED' && !req.user.permissions.some((p) => p === '*' || p === 'quotations:approve' || p === 'quotations:*')) {
     throw badRequest('Only users with quotation approval rights can approve');
   }
-  if (status === 'SENT' && q.status === 'DRAFT') await enforceRule('quoteRequiresApproval', req.user, 'Get the quotation approved (with its costing) before sending it to the client — use "Submit for approval"');
   const items0 = await db.query.quotationItems.findMany({ where: eq(quotationItems.quotationId, q.id) });
-  if (status === 'PENDING_APPROVAL' || status === 'APPROVED') {
-    // every product / accessory line needs our purchase rate; service lines are costed through manpower
-    const svc = await serviceItemIds(db, items0);
-    const missing = items0.filter((i) => i.costRate == null && !isServiceLine(i, svc));
-    if (missing.length) await enforceRule('quoteRequiresCosting', req.user, `Enter our purchase rate (and vendor) for: ${missing.slice(0, 5).map((i) => i.description.slice(0, 40)).join(', ')}${missing.length > 5 ? ` and ${missing.length - 5} more` : ''} — edit the quotation and fill the purchase rate under each item`);
-  }
+  if (status === 'PENDING_APPROVAL' || status === 'APPROVED' || (status === 'SENT' && q.status === 'DRAFT')) await assertQuoteMayGo(q, items0, req.user, status === 'SENT');
   const [row] = await db.update(quotations).set({ status, approvedById: status === 'APPROVED' ? req.user.id : q.approvedById })
     .where(eq(quotations.id, q.id)).returning();
   const cfg = await costingConfig();
@@ -236,6 +244,7 @@ r.post('/quotations/:id/convert', requirePerm('orders:create'), async (req, res)
     if (!q) throw notFound('Quotation');
     if (!q.clientId) throw badRequest('Convert the lead to a client first, then set the client on this quotation');
     if (['CONVERTED', 'REVISED', 'REJECTED'].includes(q.status)) throw badRequest(`Quotation is ${q.status.toLowerCase()}`);
+    if (!['APPROVED', 'SENT', 'ACCEPTED'].includes(q.status)) await assertQuoteMayGo(q, q.items, req.user, true);
     const terms = body.paymentTerms ?? q.paymentTerms ?? [{ stage: 'ADVANCE' as const, percent: 100 }];
     validateTerms(terms);
     // the site is the quotation's; it can only be chosen here when the quotation has none

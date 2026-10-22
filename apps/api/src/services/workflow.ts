@@ -9,13 +9,13 @@ import { getCompany } from './company';
 
 export const WORKFLOW_RULES = {
   quoteRequiresApproval: {
-    label: 'Quotations go to the client only after approval',
-    help: 'A quotation must be approved (with its costing and gross profit) before it is marked as sent to the client.',
+    label: 'Low-margin quotations need approval',
+    help: 'A quotation whose gross profit % is below the target in Settings → Costing Rates must be approved by Management before it is sent to the client or made into an order. Quotations at or above the target go straight to the client — no approval step.',
     exception: 'quotations:approve', default: true,
   },
   quoteRequiresCosting: {
-    label: 'Quotations need a purchase rate on every product line before approval',
-    help: 'Every product / accessory line needs our purchase rate (and vendor) so the project cost and gross profit can be worked out. Service lines are costed through manpower.',
+    label: 'Quotations need a purchase rate on every product line',
+    help: 'Every product / accessory line needs our purchase rate (and vendor) before the quotation is sent, made into an order or submitted for approval, so the project cost and gross profit are known. Service lines are costed through manpower.',
     exception: 'quotations:approve', default: true,
   },
   orderRequiresQuote: {

@@ -106,7 +106,7 @@ export function QuotationEditor() {
     <div className="space-y-4">
       <RequisitionBanner req={rq.req} />
       <PageHeader back="/quotations" title={id ? `Edit ${existing.data.number}` : 'New quotation'}
-        actions={<><Button loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" loading={save.isPending} onClick={() => save.mutate(true)}>Save & submit for approval</Button></>} />
+        actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(false)}>Save quotation</Button>} />
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
           <PartyPicker clientId={d.clientId} siteId={d.siteId} lockClient={!!rq.req?.clientId} lockSite={!!rq.req?.siteId} lockedFrom={rq.req ? `requisition ${rq.req.number}` : undefined} onChange={(v) => setD((x) => ({ ...x, ...v, stateCode: v.stateCode ?? x.stateCode }))} />
@@ -133,7 +133,7 @@ export function QuotationEditor() {
 }
 
 const QUOTE_NEXT: Record<string, { to: string; label: string; perm?: string; variant?: any }[]> = {
-  DRAFT: [{ to: 'PENDING_APPROVAL', label: 'Submit for approval' }, { to: 'APPROVED', label: 'Approve', perm: 'quotations:approve', variant: 'success' }],
+  DRAFT: [{ to: 'SENT', label: 'Mark as sent to client', variant: 'primary' }, { to: 'PENDING_APPROVAL', label: 'Submit for approval' }, { to: 'APPROVED', label: 'Approve', perm: 'quotations:approve', variant: 'success' }],
   PENDING_APPROVAL: [{ to: 'APPROVED', label: 'Approve', perm: 'quotations:approve', variant: 'success' }, { to: 'DRAFT', label: 'Send back', perm: 'quotations:approve' }],
   APPROVED: [{ to: 'SENT', label: 'Mark as sent to client', variant: 'primary' }],
   SENT: [{ to: 'ACCEPTED', label: 'Client accepted', variant: 'success' }, { to: 'REJECTED', label: 'Client rejected', variant: 'danger' }],
@@ -164,6 +164,9 @@ export function QuotationDetail() {
       <Card>
         <KV cols={4} items={[['Client', q.client ? <Link className="text-brand-700" to={`/clients/${q.client.id}`}>{q.client.name}</Link> : null], ['Lead', q.lead?.companyName], ['Site', q.site?.name], ['Date', fmtDate(q.date)], ['Valid until', fmtDate(q.validUntil)], ['Place of supply', q.placeOfSupply], ['Revision', q.revision ? `R${q.revision}` : 'Original']]} />
       </Card>
+      {q.status === 'DRAFT' && q.costingSummary && (q.costingSummary.belowTarget
+        ? <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">Gross profit {q.costingSummary.gpPct}% is below the {q.costingSummary.minGpPct}% target — Management has to approve this quotation before it goes to the client. Use <b>Submit for approval</b>.</div>
+        : <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900">Gross profit {q.costingSummary.gpPct}% meets the {q.costingSummary.minGpPct}% target — no approval needed; send it to the client.</div>)}
       <DocLines doc={q} />
       <QuoteCostingCard q={q} />
       {q.paymentTerms && <Card title="Payment schedule"><div className="flex flex-wrap gap-2">{q.paymentTerms.map((t: Term) => <Badge key={t.stage} t="blue">{t.percent}% {STAGE_LABEL[t.stage]}</Badge>)}</div></Card>}

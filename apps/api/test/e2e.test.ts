@@ -102,6 +102,9 @@ test('quotation → approve → convert to order with milestone terms', async ()
   // technicians / projects never see our costs
   const asTech = await ok('tech', 'GET', `/quotations/${q.id}`).catch(() => null);
   if (asTech) { assert.equal(asTech.costing, undefined); assert.equal(asTech.items[0].costRate, undefined); }
+  // 15% gross profit is below the 20% target: it cannot go to the client without approval
+  const low = await call('sales', 'POST', `/quotations/${q.id}/status`, { status: 'SENT' });
+  assert.equal(low.status, 403); assert.match(low.data.error, /below the 20% target/);
   await ok('sales', 'POST', `/quotations/${q.id}/status`, { status: 'PENDING_APPROVAL' });
   const notes = await ok('director', 'GET', '/notifications');
   const n = (notes.data ?? notes).find((x: any) => x.title.includes(q.number));
@@ -112,6 +115,9 @@ test('quotation → approve → convert to order with milestone terms', async ()
   assert.equal(typeof hist[ctx.cam.id].masterRate, 'number');
   const rev = await ok('sales', 'POST', `/quotations/${q.id}/revise`);
   assert.match(rev.number, /-R1$/);
+  // a revision is a new quotation: low margin, so it is approved again before it becomes an order
+  assert.equal((await call('sales', 'POST', `/quotations/${rev.id}/convert`, { clientPoNo: 'APX/PO/889' })).status, 403);
+  await ok('director', 'POST', `/quotations/${rev.id}/status`, { status: 'APPROVED' });
   const o = await ok('sales', 'POST', `/quotations/${rev.id}/convert`, { clientPoNo: 'APX/PO/889' });
   ctx.order = await ok('sales', 'GET', `/orders/${o.id}`);
   assert.equal(ctx.order.items.length, 3);
@@ -1476,4 +1482,17 @@ test('rate-only items: order lines with quantity 0 at an agreed rate; quantity a
   assert.equal((await call('director', 'POST', `/orders/${o.id}/qty-requests/${own.id}/decide`, { decision: 'APPROVE' })).status, 400);
   // invoices / POs still need a real quantity
   assert.equal((await call('admin', 'POST', '/invoices', { clientId: ctx.client.id, type: 'TAX_INVOICE', lines: [{ description: 'x', unit: 'Nos', qty: 0, rate: 10, gstRate: 18 }] })).status, 400);
+});
+
+test('quotations at or above the margin target go straight to the client — no approval step', async () => {
+  const q = await ok('sales', 'POST', '/quotations', {
+    clientId: ctx.client.id, siteId: ctx.site.id, subject: 'Good margin job',
+    lines: [{ itemId: ctx.cam.id, qty: 10, costRate: 2000 }, { description: 'Rate-only bracket', unit: 'Nos', qty: 0, rate: 500, gstRate: 18 }],
+  });
+  const sent = await ok('sales', 'POST', `/quotations/${q.id}/status`, { status: 'SENT' });
+  assert.equal(sent.status, 'SENT', '37.5% gross profit — sent without approval; a rate-only line needs no purchase rate');
+  // a low-margin draft cannot be made into an order either
+  const q2 = await ok('sales', 'POST', '/quotations', { clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ itemId: ctx.cam.id, qty: 1, costRate: 3100 }] });
+  const conv = await call('sales', 'POST', `/quotations/${q2.id}/convert`, {});
+  assert.equal(conv.status, 403); assert.match(conv.data.error, /below/);
 });

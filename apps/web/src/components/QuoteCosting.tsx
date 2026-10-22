@@ -132,7 +132,7 @@ export function QuoteCostingEditor({ lines, value, onChange }: { lines: Line[]; 
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 lg:sticky lg:top-4 lg:self-start">
           <div className="mb-2 text-sm font-semibold">Project cost &amp; gross profit</div>
           <CostingSummaryTable s={s} />
-          <p className="mt-3 text-xs text-slate-500">This summary goes to management with the approval request. Rates come from Settings → Costing rates.</p>
+          <p className="mt-3 text-xs text-slate-500">Below the gross margin target, this summary goes to Management for approval; at or above it the quotation can go straight to the client. Rates and the target are in Settings → Costing rates.</p>
         </div>
       </div>
     </Card>
@@ -243,7 +243,7 @@ export function CostingSettingsPage() {
         <Card title="Service & margin">
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Service cost for the year (% of quotation value)" hint="Suggested on each quotation; can be changed there"><Input type="number" min={0} max={100} step="0.5" disabled={!edit} value={d.servicePct} onChange={(e) => setD({ ...d, servicePct: Number(e.target.value) })} /></Field>
-            <Field label="Gross margin target (%)" hint="Quotations below this are flagged to the approver"><Input type="number" min={0} max={100} step="0.5" disabled={!edit} value={d.minGpPct} onChange={(e) => setD({ ...d, minGpPct: Number(e.target.value) })} /></Field>
+            <Field label="Gross margin target (%)" hint="Quotations below this need Management approval before they go to the client; at or above it they go straight out"><Input type="number" min={0} max={100} step="0.5" disabled={!edit} value={d.minGpPct} onChange={(e) => setD({ ...d, minGpPct: Number(e.target.value) })} /></Field>
           </div>
         </Card>
         <Card title="Who sees costs">
