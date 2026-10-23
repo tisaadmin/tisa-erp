@@ -391,6 +391,8 @@ export type QuoteCosting = {
   transport?: { label: string; amount: number }[];
   serviceCost?: number | null;
   serviceNote?: string | null;
+  /** maintenance for the year: visits × (full / half day) × people × day rate */
+  maintenance?: { visits: number; duration: 'FULL' | 'HALF'; people: number; role: string; label: string; dayRate: number } | null;
   other?: { label: string; amount: number }[];
 };
 

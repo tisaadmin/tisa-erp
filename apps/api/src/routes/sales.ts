@@ -52,6 +52,10 @@ const quoteSchema = z.object({
     manpower: z.array(z.object({ role: z.string(), label: z.string(), dayRate: z.coerce.number().min(0), people: z.coerce.number().min(0), days: z.coerce.number().min(0) })).default([]),
     transport: z.array(z.object({ label: z.string().min(1), amount: z.coerce.number().min(0) })).default([]),
     serviceCost: z.coerce.number().min(0).nullish(), serviceNote: opt,
+    maintenance: z.object({
+      visits: z.coerce.number().min(0), duration: z.enum(['FULL', 'HALF']), people: z.coerce.number().min(0),
+      role: z.string(), label: z.string(), dayRate: z.coerce.number().min(0),
+    }).nullish(),
     other: z.array(z.object({ label: z.string().min(1), amount: z.coerce.number().min(0) })).default([]),
   }).nullish(),
 });
@@ -117,6 +121,11 @@ r.get('/quotations/:id', requirePerm('quotations:view'), async (req, res) => {
 
 /** Rate card for costing a quotation (manpower day rates, transport presets, service %, GP target). */
 r.get('/quotations-costing/config', requirePerm('quotations:view'), async (_req, res) => { res.json(await costingConfig()); });
+/** Vendors to pick for a purchase rate (Sales may not have the Vendors module). */
+r.get('/quotations-costing/vendors', async (req, res) => {
+  if (!can(req.user, 'quotations:costing') && !can(req.user, 'quotations:approve') && !can(req.user, 'vendors:view')) throw forbidden();
+  res.json(await db.select({ id: vendors.id, name: vendors.name, city: vendors.city }).from(vendors).where(eq(vendors.active, true)).orderBy(vendors.name));
+});
 r.get('/quotations-costing/purchase-history', async (req, res) => {
   if (!can(req.user, 'quotations:costing') && !can(req.user, 'purchase_orders:view')) throw forbidden();
   const ids = (qs(req.query.ids) ?? '').split(',').filter(Boolean).slice(0, 200);

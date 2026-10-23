@@ -1496,3 +1496,16 @@ test('quotations at or above the margin target go straight to the client — no 
   const conv = await call('sales', 'POST', `/quotations/${q2.id}/convert`, {});
   assert.equal(conv.status, 403); assert.match(conv.data.error, /below/);
 });
+
+test('quotation costing: maintenance for the year from visits, half / full day, people and man-day rate; vendors listed for Sales', async () => {
+  const vs = await ok('sales', 'GET', '/quotations-costing/vendors');
+  assert.ok(vs.length > 0 && vs[0].name, 'Sales can pick vendors without the Vendors module');
+  const q = await ok('sales', 'POST', '/quotations', {
+    clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ itemId: ctx.cam.id, qty: 10, rate: 3000, costRate: 2000, costVendor: 'Typed-in Dealer' }],
+    costing: { manpower: [], transport: [], other: [], maintenance: { visits: 4, duration: 'HALF', people: 2, role: 'TECHNICIAN', label: 'Technician', dayRate: 1200 } },
+  });
+  const full = await ok('sales', 'GET', `/quotations/${q.id}`);
+  assert.equal(full.items[0].costVendor, 'Typed-in Dealer');
+  assert.equal(full.costingSummary.maintenanceManDays, 4); assert.equal(full.costingSummary.maintenance, 4800);
+  assert.equal(full.costingSummary.totalCost, 20000 + 4800);
+});

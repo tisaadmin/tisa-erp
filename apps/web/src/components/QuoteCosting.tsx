@@ -19,8 +19,10 @@ export type QuoteCosting = {
   manpower: { role: string; label: string; dayRate: number; people: number; days: number }[];
   transport: { label: string; amount: number }[];
   serviceCost?: number | null; serviceNote?: string | null;
+  maintenance?: Maintenance | null;
   other: { label: string; amount: number }[];
 };
+export type Maintenance = { visits: number; duration: 'FULL' | 'HALF'; people: number; role: string; label: string; dayRate: number };
 export const emptyCosting = (): QuoteCosting => ({ manpower: [], transport: [], serviceCost: null, serviceNote: '', other: [] });
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -34,12 +36,15 @@ export function summarise(lines: Line[], c: QuoteCosting, minGpPct: number) {
   const manDays = r2(c.manpower.reduce((s, m) => s + m.people * m.days, 0));
   const transport = r2(c.transport.reduce((s, t) => s + Number(t.amount || 0), 0));
   const service = r2(Number(c.serviceCost) || 0);
+  const m = c.maintenance;
+  const maintenanceManDays = m ? r2(m.visits * (m.duration === 'HALF' ? 0.5 : 1) * m.people) : 0;
+  const maintenance = m ? r2(maintenanceManDays * m.dayRate) : 0;
   const other = r2(c.other.reduce((s, t) => s + Number(t.amount || 0), 0));
-  const totalCost = r2(material + manpower + transport + service + other);
+  const totalCost = r2(material + manpower + transport + maintenance + service + other);
   const grossProfit = r2(value - totalCost);
   const gpPct = value ? r2((grossProfit / value) * 100) : 0;
   const missingCost = lines.filter((l) => l.description && l.costRate == null && !/^99/.test(String(l.hsnSac ?? '').trim())).map((l) => l.description);
-  return { value, material, manpower, manDays, transport, service, other, totalCost, grossProfit, gpPct, missingCost, belowTarget: gpPct < minGpPct, minGpPct };
+  return { value, material, manpower, manDays, transport, maintenance, maintenanceManDays, maintenanceVisits: m?.visits ?? 0, service, other, totalCost, grossProfit, gpPct, missingCost, belowTarget: gpPct < minGpPct, minGpPct };
 }
 type Summary = ReturnType<typeof summarise>;
 
@@ -55,7 +60,8 @@ export function CostingSummaryTable({ s }: { s: Summary }) {
           {row('Material (our purchase rates)', s.material)}
           {row('Manpower', s.manpower, `${s.manDays} man-days`)}
           {row('Transport', s.transport)}
-          {row('Service cost for the year', s.service)}
+          {(s.maintenance ?? 0) > 0 && row('Maintenance for the year', s.maintenance, `${s.maintenanceVisits} visits · ${s.maintenanceManDays} man-days`)}
+          {(s.service > 0 || !s.maintenance) && row('Other service cost (year)', s.service)}
           {s.other > 0 && row('Other', s.other)}
           <tr className="border-t border-slate-200"><td className="py-1 font-medium">Total cost of project</td><td className="py-1 text-right font-medium tabular-nums">{inr(s.totalCost)}</td><td className="py-1 pl-3 text-right text-xs text-slate-400">{s.value ? `${r2((s.totalCost / s.value) * 100)}%` : ''}</td></tr>
           <tr><td className="py-1.5 text-base font-semibold">Gross profit</td>
@@ -115,9 +121,32 @@ export function QuoteCostingEditor({ lines, value, onChange }: { lines: Line[]; 
           {/* transport */}
           <AmountRows title="Transport for execution" rows={c.transport} presets={conf.transportPresets} onChange={(transport) => set({ transport })} addLabel="Add transport" />
 
-          {/* service */}
+          {/* maintenance for the year */}
           <section>
-            <div className="label">Service cost for the year</div>
+            <div className="mb-1 flex items-center justify-between"><div className="label">Maintenance for the year</div>
+              {c.maintenance ? <button type="button" className="text-xs text-slate-500 underline" onClick={() => set({ maintenance: null })}>Remove</button>
+                : <Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => { const r = conf.manpowerRoles.find((x) => x.key === 'TECHNICIAN') ?? conf.manpowerRoles[0]; set({ maintenance: { visits: 4, duration: 'HALF', people: 2, role: r.key, label: r.label, dayRate: r.dayRate } }); }}>Add maintenance visits</Button>}</div>
+            {c.maintenance ? (() => {
+              const m = c.maintenance!;
+              const md = r2(m.visits * (m.duration === 'HALF' ? 0.5 : 1) * m.people);
+              const upd = (p: Partial<Maintenance>) => set({ maintenance: { ...m, ...p } });
+              return (
+                <div className="grid items-end gap-2 sm:grid-cols-[90px_130px_80px_1fr_110px]">
+                  <Field label="Visits / year"><Input type="number" min={0} className="text-right" value={m.visits} onChange={(e) => upd({ visits: num(e.target.value) })} /></Field>
+                  <Field label="Each visit"><Select value={m.duration} onChange={(e) => upd({ duration: e.target.value as 'FULL' | 'HALF' })} options={[{ value: 'FULL', label: 'Full day' }, { value: 'HALF', label: 'Half day' }]} /></Field>
+                  <Field label="People"><Input type="number" min={0} className="text-right" value={m.people} onChange={(e) => upd({ people: num(e.target.value) })} /></Field>
+                  <Field label="Who (man-day rate)"><Select value={m.role} onChange={(e) => { const r = conf.manpowerRoles.find((x) => x.key === e.target.value); if (r) upd({ role: r.key, label: r.label, dayRate: r.dayRate }); }}
+                    options={[...conf.manpowerRoles.map((r) => ({ value: r.key, label: `${r.label} (${inr(r.dayRate)}/day)` })), ...(conf.manpowerRoles.some((r) => r.key === m.role) ? [] : [{ value: m.role, label: m.label }])]} /></Field>
+                  <Field label="Rate / man-day"><Input type="number" min={0} className="text-right" value={m.dayRate} onChange={(e) => upd({ dayRate: num(e.target.value) })} /></Field>
+                  <p className="text-xs text-slate-500 sm:col-span-5">{m.visits} visits × {m.duration === 'HALF' ? '½' : '1'} day × {m.people} {m.people === 1 ? 'person' : 'people'} = <b>{md} man-days</b> × {inr(m.dayRate)} = <b>{inr(md * m.dayRate)}</b> for the year</p>
+                </div>
+              );
+            })() : <p className="text-sm text-slate-500">No maintenance visits added.</p>}
+          </section>
+
+          {/* other service cost */}
+          <section>
+            <div className="label">Other service cost for the year <span className="font-normal text-slate-400">(spares, consumables, call-outs)</span></div>
             <div className="grid gap-2 sm:grid-cols-[180px_1fr]">
               <Input type="number" min={0} className="text-right" placeholder={String(suggestedService)} value={c.serviceCost ?? ''} onChange={(e) => set({ serviceCost: e.target.value === '' ? null : Number(e.target.value) })} />
               <Input placeholder="Note (e.g. 4 preventive visits + breakdown calls)" value={c.serviceNote ?? ''} onChange={(e) => set({ serviceNote: e.target.value })} />
@@ -192,7 +221,8 @@ export function QuoteCostingCard({ q }: { q: any }) {
           {c.manpower.length > 0 && <div><div className="label">Manpower</div>
             <ul className="space-y-0.5">{c.manpower.map((m, i) => <li key={i}>{m.label}: {m.people} × {m.days} days @ {inr(m.dayRate)} = <b>{inr(m.people * m.days * m.dayRate)}</b></li>)}</ul></div>}
           {c.transport.length > 0 && <div><div className="label">Transport</div><ul>{c.transport.map((t, i) => <li key={i}>{t.label}: <b>{inr(t.amount)}</b></li>)}</ul></div>}
-          {(c.serviceCost ?? 0) > 0 && <div><div className="label">Service cost for the year</div>{inr(c.serviceCost!)}{c.serviceNote ? ` — ${c.serviceNote}` : ''}</div>}
+          {c.maintenance && <div><div className="label">Maintenance for the year</div>{c.maintenance.visits} visits × {c.maintenance.duration === 'HALF' ? 'half' : 'full'} day × {c.maintenance.people} × {inr(c.maintenance.dayRate)} ({c.maintenance.label}) = <b>{inr(c.maintenance.visits * (c.maintenance.duration === 'HALF' ? 0.5 : 1) * c.maintenance.people * c.maintenance.dayRate)}</b></div>}
+          {(c.serviceCost ?? 0) > 0 && <div><div className="label">Other service cost for the year</div>{inr(c.serviceCost!)}{c.serviceNote ? ` — ${c.serviceNote}` : ''}</div>}
           {c.other.length > 0 && <div><div className="label">Other</div><ul>{c.other.map((t, i) => <li key={i}>{t.label}: <b>{inr(t.amount)}</b></li>)}</ul></div>}
         </div>
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 lg:self-start"><CostingSummaryTable s={s} /></div>

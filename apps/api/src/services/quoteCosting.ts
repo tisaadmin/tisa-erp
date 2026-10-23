@@ -50,17 +50,20 @@ export function costingSummary(q: { taxable: number; costing?: QuoteCosting | nu
   const manDays = r2((c.manpower ?? []).reduce((s, m) => s + Number(m.people) * Number(m.days), 0));
   const transport = r2((c.transport ?? []).reduce((s, t) => s + Number(t.amount), 0));
   const service = r2(Number(c.serviceCost) || 0);
+  const m = c.maintenance;
+  const maintenanceManDays = m ? r2(Number(m.visits) * (m.duration === 'HALF' ? 0.5 : 1) * Number(m.people)) : 0;
+  const maintenance = m ? r2(maintenanceManDays * Number(m.dayRate)) : 0;
   const other = r2((c.other ?? []).reduce((s, t) => s + Number(t.amount), 0));
-  const totalCost = r2(material + manpower + transport + service + other);
+  const totalCost = r2(material + manpower + transport + maintenance + service + other);
   const value = r2(Number(q.taxable));
   const grossProfit = r2(value - totalCost);
   const gpPct = value ? r2((grossProfit / value) * 100) : 0;
-  return { value, material, manpower, manDays, transport, service, other, totalCost, grossProfit, gpPct, missingCost: missing, belowTarget: gpPct < minGpPct, minGpPct };
+  return { value, material, manpower, manDays, transport, maintenance, maintenanceManDays, maintenanceVisits: m ? Number(m.visits) : 0, service, other, totalCost, grossProfit, gpPct, missingCost: missing, belowTarget: gpPct < minGpPct, minGpPct };
 }
 
 export const summaryText = (s: ReturnType<typeof costingSummary>) => {
   const inr = (n: number) => `Rs. ${Math.round(n).toLocaleString('en-IN')}`;
-  return `Value ${inr(s.value)} · cost ${inr(s.totalCost)} (material ${inr(s.material)}, manpower ${inr(s.manpower)} / ${s.manDays} man-days, transport ${inr(s.transport)}, service ${inr(s.service)}${s.other ? `, other ${inr(s.other)}` : ''}) · gross profit ${inr(s.grossProfit)} (${s.gpPct}%)${s.belowTarget ? ` — below the ${s.minGpPct}% target` : ''}`;
+  return `Value ${inr(s.value)} · cost ${inr(s.totalCost)} (material ${inr(s.material)}, manpower ${inr(s.manpower)} / ${s.manDays} man-days, transport ${inr(s.transport)}${s.maintenance ? `, maintenance ${inr(s.maintenance)} / ${s.maintenanceVisits} visits` : ''}${s.service ? `, service ${inr(s.service)}` : ''}${s.other ? `, other ${inr(s.other)}` : ''}) · gross profit ${inr(s.grossProfit)} (${s.gpPct}%)${s.belowTarget ? ` — below the ${s.minGpPct}% target` : ''}`;
 };
 
 /** Last purchases of items: rate, vendor, PO — to prefill cost rates on a quotation. */

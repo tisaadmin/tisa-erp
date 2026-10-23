@@ -4,7 +4,7 @@ import { useGet, useItems } from '../lib/hooks';
 import { inr, STAGE_LABEL, STAGES } from '../lib/format';
 import { ItemSuggest, type SuggestItem } from './ItemSuggest';
 import { Button, cx } from './ui';
-import { Combo } from './Combo';
+import { Combo, CUSTOM } from './Combo';
 import { api } from '../lib/api';
 
 export type Line = { itemId?: string | null; description: string; hsnSac?: string | null; unit: string; qty: number; rate: number; discountPct: number; gstRate: number;
@@ -33,8 +33,9 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
   /** per item: quantity on the order and how much is still left to order */ limits?: Record<string, { qty: number; ordered: number; remaining: number }>;
   /** quotation: show our purchase rate + vendor per line (internal costing) */ costing?: boolean;
 }) {
-  const vendors = useGet<{ data: { id: string; name: string }[] }>(costing ? '/vendors' : null, { active: true, pageSize: 10000, all: 1 });
-  const vendorOpts = useMemo(() => (vendors.data?.data ?? []).map((v) => ({ value: v.id, label: v.name })), [vendors.data]);
+  // Sales may not have the Vendors module — this list is for picking who quoted a purchase rate
+  const vendors = useGet<{ id: string; name: string; city: string | null }[]>(costing ? '/quotations-costing/vendors' : null);
+  const vendorOpts = useMemo(() => (vendors.data ?? []).map((v) => ({ value: v.id, label: v.name, sub: v.city ?? undefined })), [vendors.data]);
   const items = useItems();
   const stock = useGet<any[]>('/items/stock');
   // inventory with live stock where the user may see it; plain item list otherwise
@@ -103,7 +104,7 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
                         <span className="font-semibold">Purchase rate</span>
                         <input type="number" min={0} step="any" className={cx('input w-32 text-right', l.costRate == null && 'border-amber-400')} value={l.costRate ?? ''} placeholder="our cost / unit" onChange={(e) => set(i, { costRate: e.target.value === '' ? null : Number(e.target.value) })} />
                         <span className="ml-2 font-semibold">Vendor</span>
-                        <div className="w-64"><Combo options={vendorOpts} value={l.costVendorId ?? null} placeholder={l.costVendor || 'Vendor quoting this rate…'} onChange={(v, o) => set(i, { costVendorId: v, costVendor: o?.label ?? null })} /></div>
+                        <div className="w-64"><Combo options={vendorOpts} value={l.costVendorId ?? null} text={l.costVendorId ? null : l.costVendor} placeholder="Vendor quoting this rate…" allowCustom onChange={(v, o) => set(i, { costVendorId: v && v !== CUSTOM ? v : null, costVendor: o?.label ?? null })} /></div>
                         {l.costRate != null && l.qty > 0 && <span className="ml-2">Cost {inr(l.costRate * l.qty)}</span>}
                         {l.costRate != null && l.rate > 0 && <span className={cx('ml-2 font-medium', l.costRate > l.rate * (1 - (l.discountPct || 0) / 100) ? 'text-red-600' : 'text-emerald-700')}>margin {Math.round((1 - l.costRate / (l.rate * (1 - (l.discountPct || 0) / 100))) * 100)}%</span>}
                       </div>
