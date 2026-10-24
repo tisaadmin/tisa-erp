@@ -137,6 +137,7 @@ const commitSchema = z.object({
   /** QUOTE = draft quotation (goes through approval with its costing), ORDER = order form */
   target: z.enum(['ORDER', 'QUOTE']).default('ORDER'),
   subject: z.string().trim().nullish(), validUntil: z.coerce.date().nullish(),
+  isProject: z.boolean().optional(),
   lines: z.array(z.object({
     key: z.string(), include: z.boolean(), action: z.enum(['match', 'new', 'text']),
     itemId: z.string().nullish(), description: z.string().trim().min(1), unit: z.string().trim().min(1), qty: z.coerce.number().min(0),
@@ -270,6 +271,7 @@ async function commitOrderImport(job: Job, doc: ParsedOrderDoc, d: CommitInput, 
     }
 
     const input = {
+      isProject: !!d.isProject,
       clientId: client.id, siteId, date: d.date, clientPoNo: d.clientPoNo || null, clientPoDate: d.clientPoDate ?? null,
       expectedCompletion: d.expectedCompletion ?? null, paymentTerms: d.paymentTerms, terms: d.terms || null, notes: noteParts.join('\n'),
       sourceRef: dup && d.allowDuplicate ? null : sourceRef,

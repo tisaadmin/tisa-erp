@@ -72,7 +72,7 @@ export function QuotationsPage() {
   );
 }
 
-type DocState = { clientId: string | null; siteId: string | null; leadId?: string | null; stateCode?: string | null; date: string; validUntil?: string; subject?: string; clientPoNo?: string; clientPoDate?: string; expectedCompletion?: string; terms?: string; notes?: string; lines: Line[]; paymentTerms: Term[]; useTerms?: boolean; costing?: QuoteCosting };
+type DocState = { clientId: string | null; siteId: string | null; leadId?: string | null; stateCode?: string | null; date: string; validUntil?: string; subject?: string; clientPoNo?: string; clientPoDate?: string; expectedCompletion?: string; terms?: string; notes?: string; lines: Line[]; paymentTerms: Term[]; useTerms?: boolean; costing?: QuoteCosting; isProject?: boolean };
 
 export function QuotationEditor() {
   const { id } = useParams();
@@ -145,7 +145,7 @@ export function QuotationDetail() {
   const nav = useNavigate();
   const { can } = useAuth();
   const { data: q } = useGet<any>(`/quotations/${id}`);
-  const [conv, setConv] = useState<{ clientPoNo: string; clientPoDate: string; paymentTerms: Term[] } | null>(null);
+  const [conv, setConv] = useState<{ clientPoNo: string; clientPoDate: string; paymentTerms: Term[]; isProject?: boolean } | null>(null);
   const status = useAction((s: string) => api(`/quotations/${id}/status`, { body: { status: s } }), { success: 'Updated', invalidate: [['/quotations']] });
   const revise = useAction(() => api(`/quotations/${id}/revise`, { body: {} }), { success: 'Revision created', invalidate: [['/quotations']], onSuccess: (r: any) => nav(`/quotations/${r.id}/edit`) });
   const convert = useAction(() => api(`/quotations/${id}/convert`, { body: { ...conv, clientPoDate: conv?.clientPoDate || null } }), { success: 'Order created', invalidate: [['/quotations'], ['/orders']], onSuccess: (o: any) => nav(`/orders/${o.id}`) });
@@ -177,6 +177,7 @@ export function QuotationDetail() {
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Client PO number"><Input value={conv.clientPoNo} onChange={(e) => setConv({ ...conv, clientPoNo: e.target.value })} /></Field>
             <Field label="Client PO date"><Input type="date" value={conv.clientPoDate} onChange={(e) => setConv({ ...conv, clientPoDate: e.target.value })} /></Field>
+            <ProjectSwitch className="sm:col-span-2" on={!!conv.isProject} onChange={(isProject) => setConv({ ...conv, isProject })} />
           </div>
           <div><div className="label">Payment schedule (drives running bills)</div><PaymentTermsEditor terms={conv.paymentTerms} onChange={(paymentTerms) => setConv({ ...conv, paymentTerms })} /></div>
         </div>}
@@ -213,6 +214,8 @@ export function OrdersPage() {
   const rules = useGet<{ key: string; enabled: boolean }[]>('/settings/workflow');
   const directOrderAllowed = !rules.data?.find((r) => r.key === 'orderRequiresQuote')?.enabled || can('orders:without_quote');
   const list = useGet<Page<any>>('/orders', q);
+  const sites = useGet<Page<any>>('/sites', { pageSize: 10000, all: 1, active: true });
+  const siteOpts = useMemo(() => (sites.data?.data ?? []).map((x: any) => ({ value: x.id, label: x.name, sub: [x.client?.name, x.code].filter(Boolean).join(' · ') })), [sites.data]);
   return (
     <div>
       <PageHeader title="Order forms" subtitle="Confirmed work orders — deliveries, running bills and purchase are driven from here"
@@ -226,15 +229,19 @@ export function OrdersPage() {
         <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
           <SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} placeholder="Order no., FFH SO no., PO or title…" />
           <Select className="w-44" value={q.status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} placeholder="All statuses" options={['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']} />
+          <Combo className="w-72" options={siteOpts} value={q.siteId || null} onChange={(v) => setQ({ ...q, siteId: v ?? '', page: 1 })} placeholder="All sites" />
+          <Select className="w-40" value={q.project ?? ''} onChange={(e) => setQ({ ...q, project: e.target.value, page: 1 })} placeholder="Projects & others" options={[{ value: '1', label: 'Projects only' }, { value: '0', label: 'Not projects' }]} />
+          <label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={q.sort === 'site'} onChange={(e) => setQ({ ...q, sort: e.target.checked ? 'site' : '', page: 1, pageSize: e.target.checked ? 200 : 50 })} /> Group by site</label>
         </div>
+        {q.sort === 'site' && list.data ? <SiteGroups rows={list.data.data} onSite={(siteId) => setQ({ ...q, siteId, page: 1 })} /> :
         <Table rows={list.data?.data} exportAs={{ name: 'orders', path: '/orders', query: q }} to={(r) => `/orders/${r.id}`} cols={[
           { key: 'number', label: 'Order', render: (r) => <>{r.number}{r.sourceData?.soNumber && <div className="text-xs text-slate-400">FFH {r.sourceData.soNumber}{r.sourceData.summaryOnly && <span className="ml-1 text-amber-600" title="Items not imported yet">· summary</span>}</div>}</> },
           { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
           { key: 'client', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="max-w-xs truncate text-xs text-slate-400">{r.site?.name ?? r.sourceData?.title}</div></> },
           { key: 'clientPoNo', label: 'Client PO', render: (r) => r.clientPoNo ?? '—' },
           { key: 'terms', label: 'Payment terms', render: (r) => <span className="text-xs">{r.paymentTerms.map((t: Term) => `${t.percent}% ${STAGE_LABEL[t.stage].replace('Against ', '')}`).join(' · ')}</span> },
-          { key: 'total', label: 'Value', num: true, render: (r) => inr(r.total) }, { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
-        ]} />
+          { key: 'total', label: 'Value', num: true, render: (r) => inr(r.total) }, { key: 'status', label: 'Status', render: (r) => <>{r.isProject && <Badge t="violet">Project</Badge>} <Status s={r.status} /></> },
+        ]} />}
         {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
       </Card>
     </div>
@@ -246,7 +253,7 @@ export function OrderEditor() {
   const companyState = useCompanyState();
   const [d, setD] = useState<DocState>({ clientId: null, siteId: null, date: toInputDate(new Date()), lines: [emptyLine()], paymentTerms: [{ stage: 'ADVANCE', percent: 30 }, { stage: 'DELIVERY', percent: 60 }, { stage: 'COMMISSIONING', percent: 10 }] });
   const inter = !!d.stateCode && d.stateCode !== companyState;
-  const save = useAction(() => api('/orders', { body: { clientId: d.clientId, siteId: d.siteId, date: d.date, clientPoNo: d.clientPoNo, clientPoDate: d.clientPoDate || null, expectedCompletion: d.expectedCompletion || null, paymentTerms: d.paymentTerms, terms: d.terms, notes: d.notes, lines: d.lines } }),
+  const save = useAction(() => api('/orders', { body: { clientId: d.clientId, siteId: d.siteId, date: d.date, clientPoNo: d.clientPoNo, clientPoDate: d.clientPoDate || null, expectedCompletion: d.expectedCompletion || null, paymentTerms: d.paymentTerms, terms: d.terms, notes: d.notes, lines: d.lines, isProject: !!d.isProject } }),
     { success: 'Order created', invalidate: [['/orders']], onSuccess: (o: any) => nav(`/orders/${o.id}`) });
   return (
     <div className="space-y-4">
@@ -259,6 +266,7 @@ export function OrderEditor() {
           <Field label="Client PO no."><Input value={d.clientPoNo ?? ''} onChange={(e) => setD({ ...d, clientPoNo: e.target.value })} /></Field>
           <Field label="Client PO date"><Input type="date" value={d.clientPoDate ?? ''} onChange={(e) => setD({ ...d, clientPoDate: e.target.value })} /></Field>
         </div>
+        <ProjectSwitch className="mt-3" on={!!d.isProject} onChange={(isProject) => setD({ ...d, isProject })} />
       </Card>
       <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} /></Card>
       <div className="grid gap-4 lg:grid-cols-2">
@@ -287,6 +295,7 @@ export function OrderDetail() {
   const [proforma, setProforma] = useState(false);
   const saveProgress = useAction(() => api(`/orders/${id}/items/${progress!.id}/progress`, { method: 'PATCH', body: { installedQty: progress!.installedQty } }), { success: 'Progress updated', invalidate: [['/orders']], onSuccess: () => setProgress(null) });
   const setStatus = useAction((status: string) => api(`/orders/${id}`, { method: 'PATCH', body: { status } }), { success: 'Updated', invalidate: [['/orders']] });
+  const setProject = useAction((isProject: boolean) => api(`/orders/${id}`, { method: 'PATCH', body: { isProject } }), { success: 'Updated', invalidate: [['/orders'], [`/orders/${id}`], ['/projects']] });
   const createRa = useAction(() => api('/invoices/running-bill', { body: { orderId: id, proforma, lines: Object.entries(ra!).filter(([, v]) => v > 0).map(([k, v]) => { const [orderItemId, stage] = k.split('|'); return { orderItemId, stage, qty: v }; }) } }),
     { success: 'Draft running bill created', invalidate: [['/invoices'], ['/orders']], onSuccess: (inv: any) => nav(`/invoices/${inv.id}`) });
   const raTaxable = useMemo(() => {
@@ -304,7 +313,7 @@ export function OrderDetail() {
   };
   return (
     <div className="space-y-4">
-      <PageHeader back="/orders" title={<>{o.number} <Status s={o.status} /></>} subtitle={<>{o.client.name}{o.site && ` · ${o.site.name}`}{o.quotation && <> · from <Link className="text-brand-700" to={`/quotations/${o.quotation.id}`}>{o.quotation.number}</Link></>}</>}
+      <PageHeader back="/orders" title={<>{o.number} <Status s={o.status} />{o.isProject && <Badge t="violet">Project</Badge>}</>} subtitle={<>{o.client.name}{o.site && ` · ${o.site.name}`}{o.quotation && <> · from <Link className="text-brand-700" to={`/quotations/${o.quotation.id}`}>{o.quotation.number}</Link></>}</>}
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/orders/${o.id}/pdf`)}>Order acknowledgement</Button>
           {can('challans:create') && <Link to={`/challans/new?orderId=${o.id}`}><Button icon={<Truck className="size-4" />}>Delivery challan</Button></Link>}
@@ -316,6 +325,7 @@ export function OrderDetail() {
         </>} />
       {o.mergedInto && <div className="rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-800">This order was merged into <Link className="font-medium underline" to={`/orders/${o.mergedInto.id}`}>{o.mergedInto.number}</Link> — its lines, deliveries and documents are there now.</div>}
       {!!o.mergedFrom?.length && <div className="rounded-md bg-sky-50 px-4 py-2 text-sm text-sky-800">Includes merged orders: {o.mergedFrom.map((m: any, n: number) => <span key={m.id}>{n ? ', ' : ''}<Link className="underline" to={`/orders/${m.id}`}>{m.number}</Link></span>)}</div>}
+      {can('orders:edit') && !['CLOSED', 'CANCELLED', 'MERGED'].includes(o.status) && <ProjectSwitch on={!!o.isProject} disabled={setProject.isPending} onChange={(v) => setProject.mutate(v)} />}
       {o.sourceData?.summaryOnly && (
       <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <span>This order came from the FFH order list with <b>one summary line</b> ({inr(o.sourceData.basicValue ?? o.taxable)} basic). Import FFH SO {o.sourceData.soNumber} to bring in its items before delivering or billing item-wise.</span>
@@ -579,6 +589,57 @@ export function ChallanDetail() {
       <Card title="Items" pad={false}>
         <Table rows={dc.items} cols={[{ key: 'description', label: 'Description' }, { key: 'serialNos', label: 'Serial nos.', render: (l: any) => l.serialNos ?? '—' }, { key: 'qty', label: 'Qty', num: true, render: (l: any) => `${qty(l.qty)} ${l.unit}` }]} />
       </Card>
+    </div>
+  );
+}
+
+/** "Run as a project" — site execution with a team, material tracking, requisitions and installation (not every order is one). */
+export function ProjectSwitch({ on, onChange, className, disabled }: { on: boolean; onChange: (v: boolean) => void; className?: string; disabled?: boolean }) {
+  return (
+    <label className={cx('flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2', on ? 'border-brand-300 bg-brand-50' : 'border-slate-200', disabled && 'cursor-default opacity-60', className)}>
+      <span className="relative mt-0.5 inline-flex items-center">
+        <input type="checkbox" className="peer sr-only" checked={on} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+        <span className="h-5 w-9 rounded-full bg-slate-300 transition peer-checked:bg-brand-600" />
+        <span className="absolute left-0.5 top-0.5 size-4 rounded-full bg-white shadow transition peer-checked:translate-x-4" />
+      </span>
+      <span className="text-sm"><b className="font-medium">This order is a project</b>
+        <span className="block text-xs text-slate-500">Site execution — appears under Projects with a team in charge, material-to-site tracking, project requisitions and installation. Leave off for plain supply orders.</span></span>
+    </label>
+  );
+}
+
+/** Orders listed together by site: a heading per site with its count and value. */
+function SiteGroups({ rows, onSite }: { rows: any[]; onSite: (siteId: string) => void }) {
+  const groups: { key: string; site: any; client: any; rows: any[] }[] = [];
+  for (const r of rows) {
+    const key = r.site?.id ?? 'none';
+    let g = groups.find((x) => x.key === key);
+    if (!g) groups.push(g = { key, site: r.site, client: r.client, rows: [] });
+    g.rows.push(r);
+  }
+  if (!rows.length) return <p className="p-6 text-center text-sm text-slate-500">No orders</p>;
+  return (
+    <div className="divide-y divide-slate-100">
+      {groups.map((g) => (
+        <div key={g.key}>
+          <div className="flex flex-wrap items-center gap-3 bg-slate-50 px-4 py-2 text-sm">
+            {g.site ? <button className="font-semibold text-brand-800 hover:underline" onClick={() => onSite(g.site.id)}>{g.site.name}</button> : <b>No site</b>}
+            <span className="text-slate-500">{g.client?.name}</span>
+            <span className="ml-auto text-slate-500">{g.rows.length} order{g.rows.length > 1 ? 's' : ''} · <b className="text-slate-800">{inr(g.rows.reduce((a, r) => a + Number(r.total), 0))}</b>{g.rows.some((r) => r.isProject) && <Badge t="violet">Project</Badge>}</span>
+          </div>
+          <table className="tbl"><tbody>
+            {g.rows.map((r) => (
+              <tr key={r.id}>
+                <td className="w-48"><Link className="font-medium text-brand-700 hover:underline" to={`/orders/${r.id}`}>{r.number}</Link>{r.sourceData?.soNumber && <div className="text-xs text-slate-400">FFH {r.sourceData.soNumber}</div>}</td>
+                <td className="w-28">{fmtDate(r.date)}</td>
+                <td className="max-w-xs truncate text-sm text-slate-500">{r.sourceData?.title ?? ''}</td>
+                <td className="w-36">{r.clientPoNo ?? '—'}</td>
+                <td className="num w-32">{inr(r.total)}</td>
+                <td className="w-40">{r.isProject && <Badge t="violet">Project</Badge>} <Status s={r.status} /></td>
+              </tr>))}
+          </tbody></table>
+        </div>
+      ))}
     </div>
   );
 }

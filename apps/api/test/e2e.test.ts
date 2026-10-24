@@ -1527,3 +1527,17 @@ test('search: every word, any order, across number, client and site names, ignor
   assert.ok(!(await find('/orders', 'MCGM nowhere')).includes(o.id), 'every word must match');
   assert.ok((await find('/sites', 'om enterprises')).includes(st.id), 'sites by their client');
 });
+
+test('orders as projects: a switch when creating; only projects are listed as projects; orders listed together by site', async () => {
+  const mk = (isProject: boolean) => ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, isProject, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 1 }] });
+  const proj = await mk(true), plain = await mk(false);
+  assert.equal(proj.isProject, true); assert.equal(plain.isProject, false);
+  const all = await ok('admin', 'GET', '/projects?all=1');
+  assert.ok(all.some((p: any) => p.id === proj.id)); assert.ok(!all.some((p: any) => p.id === plain.id), 'a plain supply order is not a project');
+  const onlyProjects = (await ok('admin', 'GET', '/orders?project=1&pageSize=500')).data;
+  assert.ok(onlyProjects.every((o: any) => o.isProject));
+  await ok('admin', 'PATCH', `/orders/${plain.id}`, { isProject: true });
+  assert.ok((await ok('admin', 'GET', '/projects?all=1')).some((p: any) => p.id === plain.id), 'switched on later from the order page');
+  const bySite = (await ok('admin', 'GET', `/orders?siteId=${ctx.site.id}&sort=site&pageSize=500`)).data;
+  assert.ok(bySite.length >= 2 && bySite.every((o: any) => o.site?.id === ctx.site.id));
+});

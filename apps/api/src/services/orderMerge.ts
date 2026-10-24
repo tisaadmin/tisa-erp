@@ -80,7 +80,7 @@ export async function mergeOrders(tx: Tx, targetId: string, sourceIds: string[],
   const note = `Merged in: ${sources.map((x) => `${x.number}${x.clientPoNo ? ` (client PO ${x.clientPoNo})` : ''}`).join(', ')}`;
   const anyStarted = sources.some((x) => x.status !== 'OPEN') || target.status !== 'OPEN';
   await tx.update(salesOrders).set({
-    ...totals, projectInchargeId: incharge, siteId: target.siteId ?? sources.find((x) => x.siteId)?.siteId ?? null,
+    ...totals, projectInchargeId: incharge, isProject: target.isProject || sources.some((x) => x.isProject), siteId: target.siteId ?? sources.find((x) => x.siteId)?.siteId ?? null,
     status: anyStarted ? 'IN_PROGRESS' : target.status, notes: [target.notes, note].filter(Boolean).join('\n'),
   }).where(eq(salesOrders.id, target.id));
   for (const s of sources) {

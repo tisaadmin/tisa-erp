@@ -10,7 +10,7 @@ import { inr } from '../lib/format';
 import { useCategories, useClients, useItems } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { stateOpts } from './Masters';
-import { useCompanyState } from './Sales';
+import { ProjectSwitch, useCompanyState } from './Sales';
 
 type Party = { text: string | null; name: string | null; city: string | null; pincode: string | null; stateCode: string | null; gstin: string | null; pan: string | null };
 type Doc = {
@@ -58,7 +58,7 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
   const [siteId, setSiteId] = useState<string | null>(null);
   const [newSite, setNewSite] = useState<NewSite>({ name: '', address: '', city: '', stateCode: '', contactName: '', phone: '' });
   const [lines, setLines] = useState<ImpLine[]>([]);
-  const [hdr, setHdr] = useState({ date: '', clientPoNo: '', clientPoDate: '', expectedCompletion: '', notes: '', subject: '', validUntil: '' });
+  const [hdr, setHdr] = useState({ date: '', clientPoNo: '', clientPoDate: '', expectedCompletion: '', notes: '', subject: '', validUntil: '', isProject: false });
   const [terms, setTerms] = useState<Term[]>(DEFAULT_TERMS);
   const [allowDuplicate, setAllowDuplicate] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -101,7 +101,7 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
       setNewClient({ name, type: guessClientType(name), gstin: bill.gstin ?? '', billingAddress: bill.text ?? '', city: bill.city ?? '', stateCode: bill.stateCode ?? '', contactName: r.doc.contact ?? '', phone: '', email: '' });
       setNewSite({ name: '', address: ship.text ?? bill.text ?? '', city: ship.city ?? bill.city ?? '', stateCode: ship.stateCode ?? bill.stateCode ?? '', contactName: r.doc.contact ?? '', phone: '' });
       setLines(r.lines);
-      setHdr({ date: r.doc.date ?? '', clientPoNo: r.doc.poNo ?? '', clientPoDate: r.doc.poDate ?? '', expectedCompletion: '', notes: '', subject: r.doc.subject ?? r.doc.title ?? '', validUntil: '' });
+      setHdr({ date: r.doc.date ?? '', clientPoNo: r.doc.poNo ?? '', clientPoDate: r.doc.poDate ?? '', expectedCompletion: '', notes: '', subject: r.doc.subject ?? r.doc.title ?? '', validUntil: '', isProject: false });
       setAllowDuplicate(false);
   }
 
@@ -152,7 +152,7 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
           clientId: clientMode === 'existing' ? clientId : null, newClient: clientMode === 'new' ? newClient : null, allowDuplicate,
           site: siteMode === 'existing' && clientMode === 'existing' ? { mode: 'existing', siteId } : siteMode === 'new' ? { mode: 'new', ...newSite } : { mode: 'none' },
           date: hdr.date || undefined, clientPoNo: hdr.clientPoNo || null, clientPoDate: hdr.clientPoDate || null, expectedCompletion: hdr.expectedCompletion || null,
-          notes: hdr.notes || null, paymentTerms: terms, target, subject: hdr.subject || null, validUntil: hdr.validUntil || null,
+          notes: hdr.notes || null, paymentTerms: terms, target, isProject: hdr.isProject, subject: hdr.subject || null, validUntil: hdr.validUntil || null,
           lines: lines.map(({ suggestions: _s, srNo: _n, parentKey: _p, manufacturer: _m, sheet, section: _se, ...l }) => ({ ...l, include: l.include && !(sheet && offSheets.includes(sheet)) })),
         },
       });
@@ -305,6 +305,7 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
                 <Field label="Client PO no."><Input value={hdr.clientPoNo} onChange={(e) => setHdr({ ...hdr, clientPoNo: e.target.value })} /></Field>
                 <Field label="Client PO date"><Input type="date" value={hdr.clientPoDate} onChange={(e) => setHdr({ ...hdr, clientPoDate: e.target.value })} /></Field>
                 <Field label="Target completion"><Input type="date" value={hdr.expectedCompletion} onChange={(e) => setHdr({ ...hdr, expectedCompletion: e.target.value })} /></Field>
+                <ProjectSwitch className="sm:col-span-4" on={hdr.isProject} onChange={(isProject) => setHdr({ ...hdr, isProject })} />
                 </>}
               </div>
             </Card>

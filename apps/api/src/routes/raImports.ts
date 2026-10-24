@@ -213,7 +213,7 @@ r.post('/ra-imports/:id/commit', perm, async (req, res) => {
       }, userId);
       const its = await tx.query.salesOrderItems.findMany({ where: eq(salesOrderItems.orderId, o.id), orderBy: [salesOrderItems.sortOrder] });
       for (const [i, it] of its.entries()) await tx.update(salesOrderItems).set({ sourceKey: lines[i].key }).where(eq(salesOrderItems.id, it.id));
-      await tx.update(salesOrders).set({ sourceData: { system: 'RA sheet', soNumber: '', title: doc.project ?? null, importedAt: new Date().toISOString() }, status: 'IN_PROGRESS' }).where(eq(salesOrders.id, o.id));
+      await tx.update(salesOrders).set({ sourceData: { system: 'RA sheet', soNumber: '', title: doc.project ?? null, importedAt: new Date().toISOString() }, status: 'IN_PROGRESS', isProject: true }).where(eq(salesOrders.id, o.id));
       orderId = o.id; orderNumber = o.number; created = true;
     }
     // RA numbering continues from the client's sheet

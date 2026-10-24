@@ -485,7 +485,7 @@ r.get('/projects', async (req, res) => {
   const search = qs(req.query.search);
   let ids = await myProjectOrderIds(db, [req.user.id, ...(await teamIds(req.user.id))]);
   if (can(req.user, 'orders:view') && (search || req.query.all === '1')) {
-    const rows = await db.select({ id: salesOrders.id }).from(salesOrders).where(inArray(salesOrders.status, ['OPEN', 'IN_PROGRESS'])).orderBy(desc(salesOrders.date)).limit(300);
+    const rows = await db.select({ id: salesOrders.id }).from(salesOrders).where(and(inArray(salesOrders.status, ['OPEN', 'IN_PROGRESS']), eq(salesOrders.isProject, true))).orderBy(desc(salesOrders.date)).limit(300);
     ids = [...new Set([...ids, ...rows.map((x) => x.id)])];
   }
   const want = qs(req.query.incharge);
@@ -520,7 +520,8 @@ r.put('/projects/:orderId/team', async (req, res) => {
   const members = d.memberIds.filter((m) => m !== d.inchargeId);
   const before = new Set([order.projectInchargeId, ...order.projectMembers.map((m) => m.userId)].filter(Boolean));
   await db.transaction(async (tx) => {
-    await tx.update(salesOrders).set({ projectInchargeId: d.inchargeId ?? null }).where(eq(salesOrders.id, order.id));
+    // putting a team on an order makes it a project
+    await tx.update(salesOrders).set({ projectInchargeId: d.inchargeId ?? null, ...(d.inchargeId || members.length ? { isProject: true } : {}) }).where(eq(salesOrders.id, order.id));
     await tx.delete(projectMembers).where(eq(projectMembers.orderId, order.id));
     if (members.length) await tx.insert(projectMembers).values(members.map((userId) => ({ orderId: order.id, userId })));
   });

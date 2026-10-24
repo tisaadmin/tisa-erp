@@ -431,6 +431,8 @@ export const salesOrders = pgTable('sales_orders', {
   mergedIntoId: text(),
   /** RA bills raised before the ERP (e.g. 19 when the first RA bill made here is RA 020) — continues the client's RA numbering */
   raBillOffset: integer().notNull().default(0),
+  /** a project (site execution with a team, material tracking, requisitions, installation) — not every order is one */
+  isProject: boolean().notNull().default(false),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 }, (t) => [index().on(t.sourceRef)]);

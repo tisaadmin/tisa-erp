@@ -248,7 +248,7 @@ r.post('/quotations/:id/revise', requirePerm('quotations:create'), async (req, r
 
 /** Accepted quotation → order form. */
 r.post('/quotations/:id/convert', requirePerm('orders:create'), async (req, res) => {
-  const body = z.object({ clientPoNo: opt, clientPoDate: z.coerce.date().nullish(), paymentTerms: termsSchema.nullish(), siteId: opt }).parse(req.body ?? {});
+  const body = z.object({ clientPoNo: opt, clientPoDate: z.coerce.date().nullish(), paymentTerms: termsSchema.nullish(), siteId: opt, isProject: z.boolean().optional() }).parse(req.body ?? {});
   const order = await db.transaction(async (tx) => {
     const q = await tx.query.quotations.findFirst({ where: eq(quotations.id, req.params.id), with: { items: true } });
     if (!q) throw notFound('Quotation');
@@ -267,7 +267,7 @@ r.post('/quotations/:id/convert', requirePerm('orders:create'), async (req, res)
       number: await nextNumber(tx, 'ORDER'), quotationId: q.id, clientId: q.clientId, siteId: body.siteId ?? q.siteId,
       clientPoNo: body.clientPoNo, clientPoDate: body.clientPoDate, placeOfSupply: q.placeOfSupply, paymentTerms: terms, terms: q.terms,
       notes: q.notes, subtotal: q.subtotal, discount: q.discount, taxable: q.taxable, cgst: q.cgst, sgst: q.sgst, igst: q.igst,
-      roundOff: q.roundOff, total: q.total, createdById: req.user.id,
+      roundOff: q.roundOff, total: q.total, createdById: req.user.id, isProject: !!body.isProject,
     }).returning();
     await tx.insert(salesOrderItems).values(q.items.map(({ id: _i, quotationId: _q, ...l }) => ({ ...l, orderId: o.id })));
     await tx.update(quotations).set({ status: 'CONVERTED' }).where(eq(quotations.id, q.id));
@@ -291,11 +291,14 @@ r.get('/orders', requirePerm('orders:view'), async (req, res) => {
     qs(req.query.status) ? eq(salesOrders.status, qs(req.query.status)!) : undefined,
     qs(req.query.clientId) ? eq(salesOrders.clientId, qs(req.query.clientId)!) : undefined,
     qs(req.query.siteId) ? eq(salesOrders.siteId, qs(req.query.siteId)!) : undefined,
+    req.query.project === '1' ? eq(salesOrders.isProject, true) : req.query.project === '0' ? eq(salesOrders.isProject, false) : undefined,
     textSearch(search, [salesOrders.number, salesOrders.clientPoNo, salesOrders.sourceRef, sql`${salesOrders.sourceData}->>'title'`], [rel(salesOrders.clientId, clients, clients.id, clients.name, clients.code), rel(salesOrders.siteId, sites, sites.id, sites.name, sites.code, sites.city)]),
   ]);
   const [data, total] = await Promise.all([
     db.query.salesOrders.findMany({
-      where, limit: pageSize, offset, orderBy: [desc(salesOrders.date), desc(salesOrders.number)],
+      where, limit: pageSize, offset,
+      // grouped by site: orders of a site together (newest first within the site)
+      orderBy: req.query.sort === 'site' ? [sql`(select name from sites where sites.id = ${salesOrders.siteId}) nulls last`, desc(salesOrders.date)] : [desc(salesOrders.date), desc(salesOrders.number)],
       with: { client: { columns: { id: true, name: true } }, site: { columns: { id: true, name: true } } },
     }),
     db.$count(salesOrders, where),
@@ -327,7 +330,12 @@ r.patch('/orders/:id', requirePerm('orders:edit'), async (req, res) => {
   const d = z.object({
     clientPoNo: opt, clientPoDate: z.coerce.date().nullish(), expectedCompletion: z.coerce.date().nullish(), notes: opt, terms: opt,
     status: z.enum(['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']).optional(), paymentTerms: termsSchema.optional(), siteId: opt,
+    isProject: z.boolean().optional(),
   }).parse(req.body);
+  if (d.isProject === false) {
+    const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), columns: { projectInchargeId: true } });
+    if (o?.projectInchargeId) throw badRequest('This project has a person in charge — remove the project team first');
+  }
   if (d.paymentTerms) {
     validateTerms(d.paymentTerms);
     const billing = await orderBillingStatus(db, req.params.id);
