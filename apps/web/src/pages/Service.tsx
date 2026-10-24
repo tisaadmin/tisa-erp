@@ -8,6 +8,7 @@ import { api, fileUrl, openPdf, pathUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, fmtDateTime, label, qty } from '../lib/format';
 import { useAction, useCategories, useGet, useSites, useUsers, type Page, useListQuery } from '../lib/hooks';
+import { DateFilter } from '../components/DateFilter';
 
 const TYPES = ['COMPLAINT', 'PREVENTIVE_MAINTENANCE', 'PAID_VISIT', 'INSTALLATION', 'SITE_SURVEY', 'VISIT', 'DEMO', 'OTHER'];
 const PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
@@ -30,6 +31,7 @@ export function TicketsPage() {
           <Select className="w-36" value={q.priority} onChange={(e) => set('priority', e.target.value)} options={PRIORITIES} placeholder="Any priority" />
           <Select className="w-48" value={q.type ?? ''} onChange={(e) => set('type', e.target.value)} options={TYPES} placeholder="Any type" />
           {can('tickets:view_all') && <Combo className="w-48" options={(users.data ?? []).filter((u) => u.isFieldStaff).map((u) => ({ value: u.id, label: u.name }))} value={q.assignedToId} onChange={(v) => set('assignedToId', v)} placeholder="Any technician" />}
+          <DateFilter value={{ from: q.from, to: q.to, dateMode: q.dateMode }} onChange={(v) => setQ({ ...q, from: v.from ?? '', to: v.to ?? '', dateMode: v.dateMode ?? '', page: 1 })} />
         </div>
         <Table rows={list.data?.data} exportAs={{ name: 'tickets', path: '/tickets', query: q }} to={(r) => `/tickets/${r.id}`} cols={[
           { key: 'number', label: 'Ticket', render: (r) => <>{r.number}<div className="text-xs font-normal text-slate-400">{fmtDateTime(r.createdAt)}</div></> },
@@ -168,7 +170,7 @@ export function ServiceReportsPage() {
     <div>
       <PageHeader title="Service reports" subtitle="Submitted from the mobile app with client signature; a PDF copy is emailed to the client and the office automatically" />
       <Card pad={false}>
-        <div className="border-b border-slate-100 p-3"><SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} /></div>
+        <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3"><SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} /><DateFilter value={{ from: q.from, to: q.to, dateMode: q.dateMode }} onChange={(v) => setQ({ ...q, from: v.from ?? '', to: v.to ?? '', dateMode: v.dateMode ?? '', page: 1 })} /></div>
         <Table rows={list.data?.data} exportAs={{ name: 'service-reports', path: '/service-reports', query: q }} to={(r) => `/service-reports/${r.id}`} cols={[
           { key: 'number', label: 'Report' }, { key: 'visitDate', label: 'Visit', render: (r) => fmtDateTime(r.visitDate) },
           { key: 'site', label: 'Client / site', render: (r) => <>{r.site?.client?.name}<div className="text-xs text-slate-400">{r.site?.name}</div></> },
@@ -225,11 +227,13 @@ export function SitePhotosPage() {
   const sites = useSites();
   const [siteId, setSiteId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const photos = useGet<any[]>('/site-photos', { siteId, page, pageSize: 48 });
+  const [range, setRange] = useState<{ from?: string; to?: string; dateMode?: string }>({});
+  const photos = useGet<any[]>('/site-photos', { siteId, page, pageSize: 48, from: range.from, to: range.to });
   return (
     <div>
       <PageHeader title="Geo-tagged site photos" subtitle="Photos taken from the mobile app on arrival / during work, stamped with GPS, time and distance from the site pin" />
-      <div className="mb-3 flex gap-2"><Combo className="w-72" options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={siteId} onChange={(v) => { setSiteId(v); setPage(1); }} placeholder="All sites" /></div>
+      <div className="mb-3 flex gap-2"><Combo className="w-72" options={(sites.data?.data ?? []).map((s) => ({ value: s.id, label: s.name, sub: s.client?.name }))} value={siteId} onChange={(v) => { setSiteId(v); setPage(1); }} placeholder="All sites" />
+        <DateFilter value={range} onChange={(v) => { setRange(v); setPage(1); }} /></div>
       {photos.data ? <PhotoGrid photos={photos.data} /> : <Spinner />}
       <div className="mt-3 flex gap-2"><Button size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>Newer</Button><Button size="sm" disabled={(photos.data?.length ?? 0) < 48} onClick={() => setPage(page + 1)}>Older</Button></div>
     </div>

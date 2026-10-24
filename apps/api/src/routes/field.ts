@@ -9,7 +9,7 @@ import { classifyProjectLines, decideExcess, projectRequestable } from '../servi
 import { attachments, attendance, auditLogs, departments, projectMembers, salesOrders, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { rel, searchWords, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
-import { istDate, istTime } from '../lib/dates';
+import { istDate, istTime, dayRange } from '../lib/dates';
 import { absPath, geoStampImage, normaliseUpload, saveBuffer, upload } from '../lib/files';
 import { distanceMeters } from '../lib/geo';
 import { badRequest, forbidden, notFound, pageParams } from '../lib/http';
@@ -265,7 +265,7 @@ r.get('/site-photos', requirePerm('sites:view'), async (req, res) => {
   const siteId = qs(req.query.siteId);
   const { pageSize, offset } = pageParams(req.query);
   const rows = await db.query.attachments.findMany({
-    where: and(isNotNull(attachments.latitude), siteId ? eq(attachments.siteId, siteId) : undefined),
+    where: and(isNotNull(attachments.latitude), siteId ? eq(attachments.siteId, siteId) : undefined, dayRange(attachments.createdAt, qs(req.query.from), qs(req.query.to))),
     orderBy: [desc(attachments.createdAt)], limit: pageSize, offset,
   });
   const ids = [...new Set(rows.map((r) => r.uploadedById))];
@@ -319,6 +319,7 @@ r.get('/requisitions', requirePerm('requisitions:view'), async (req, res) => {
     qs(req.query.clientId) ? eq(requisitions.clientId, qs(req.query.clientId)!) : undefined,
     req.query.unassigned === '1' ? isNull(requisitions.siteId) : undefined,
     qs(req.query.type) ? eq(requisitions.type, qs(req.query.type)!) : undefined,
+    dayRange(requisitions.createdAt, qs(req.query.from), qs(req.query.to)),
     textSearch(qs(req.query.search), [requisitions.number, requisitions.description], [rel(requisitions.clientId, clients, clients.id, clients.name), rel(requisitions.siteId, sites, sites.id, sites.name), rel(requisitions.orderId, salesOrders, salesOrders.id, salesOrders.number)]),
   ].filter((x): x is SQL => !!x);
   const where = conds.length ? and(...conds) : undefined;

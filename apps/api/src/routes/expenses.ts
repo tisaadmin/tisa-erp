@@ -1,5 +1,5 @@
 import { Router, type Request } from 'express';
-import { and, desc, eq, inArray, isNull, ne, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { approverFor, manages } from '../lib/team';
 import { db, type Tx } from '../db';
@@ -71,6 +71,11 @@ r.get('/expenses', requirePerm('expenses:view'), async (req, res) => {
     if (!can(req.user, 'expenses:finance') && !can(req.user, 'expenses:approve')) throw forbidden();
     where = typeof req.query.status === 'string' ? inArray(expenseClaims.status, req.query.status.split(',')) : undefined;
   }
+  // claims whose period overlaps the dates (or raised in them when no period is given)
+  const ymd = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+  const f = ymd(req.query.from), t = ymd(req.query.to);
+  if (f) where = and(where, sql`coalesce(${expenseClaims.periodTo}, (${expenseClaims.createdAt} at time zone 'Asia/Kolkata')::date) >= ${f}::date`);
+  if (t) where = and(where, sql`coalesce(${expenseClaims.periodFrom}, (${expenseClaims.createdAt} at time zone 'Asia/Kolkata')::date) <= ${t}::date`);
   const [data, total] = await Promise.all([
     db.query.expenseClaims.findMany({ where, limit: pageSize, offset, orderBy: [desc(expenseClaims.createdAt)], with: withAll }),
     db.$count(expenseClaims, where),

@@ -1541,3 +1541,19 @@ test('orders as projects: a switch when creating; only projects are listed as pr
   const bySite = (await ok('admin', 'GET', `/orders?siteId=${ctx.site.id}&sort=site&pageSize=500`)).data;
   assert.ok(bySite.length >= 2 && bySite.every((o: any) => o.site?.id === ctx.site.id));
 });
+
+test('date filters: from / to / a particular date on tickets, service reports, photos, requisitions, expenses, receipts, receivables', async () => {
+  const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+  const old = '2001-01-01';
+  for (const path of ['/tickets', '/service-reports', '/requisitions', '/payments']) {
+    const all = (await ok('admin', 'GET', `${path}?status=&pageSize=500`)).total;
+    const none = (await ok('admin', 'GET', `${path}?status=&from=${old}&to=${old}`)).total;
+    const upToToday = (await ok('admin', 'GET', `${path}?status=&to=${today}&pageSize=500`)).total;
+    assert.equal(none, 0, `${path}: nothing on ${old}`); assert.equal(upToToday, all, `${path}: everything up to today`);
+  }
+  assert.equal((await ok('admin', 'GET', `/site-photos?from=${old}&to=${old}`)).length, 0);
+  assert.equal((await ok('admin', 'GET', `/expenses?scope=all&from=${old}&to=${old}`)).total, 0);
+  const rec = await ok('admin', 'GET', `/receivables?from=${old}&to=${old}`);
+  assert.equal(rec.clients.length, 0);
+  assert.ok((await ok('admin', 'GET', `/tickets?status=&from=${today}&to=${today}`)).total >= 1, 'tickets raised today');
+});

@@ -7,8 +7,9 @@ import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Search
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, inr, inrShort, label, toInputDate } from '../lib/format';
-import { useAction, useGet, type Page, useListQuery } from '../lib/hooks';
+import { useAction, useGet, type Page, useListQuery, useSessionState } from '../lib/hooks';
 import { DocLines, PartyPicker, useCompanyState } from './Sales';
+import { DateFilter } from '../components/DateFilter';
 
 export function InvoicesPage() {
   const [q, setQ] = useListQuery({ page: 1, pageSize: 50 });
@@ -162,8 +163,9 @@ export function InvoiceDetail() {
 
 export function ReceivablesPage() {
   const [tab, setTab] = useState<'ageing' | 'receipts'>('ageing');
-  const r = useGet<{ buckets: Record<string, number>; clients: { clientId: string; name: string; outstanding: number; overdue: number }[] }>('/receivables');
-  const pays = useGet<Page<any>>(tab === 'receipts' ? '/payments' : null, { pageSize: 200 });
+  const [range, setRange] = useSessionState<{ from?: string; to?: string; dateMode?: string }>('list:/receivables:dates', {});
+  const r = useGet<{ buckets: Record<string, number>; clients: { clientId: string; name: string; outstanding: number; overdue: number }[] }>('/receivables', { from: range.from, to: range.to });
+  const pays = useGet<Page<any>>(tab === 'receipts' ? '/payments' : null, { pageSize: 200, from: range.from, to: range.to });
   return (
     <div>
       <PageHeader title="Receivables" />
@@ -176,13 +178,15 @@ export function ReceivablesPage() {
       </div>}
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'ageing', label: 'Outstanding by client' }, { value: 'receipts', label: 'Receipts' }]} />
       <Card pad={false}>
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3"><span className="text-sm text-slate-500">{tab === 'ageing' ? 'Invoice date' : 'Receipt date'}</span><DateFilter value={range} onChange={setRange} />
+          {(range.from || range.to) && tab === 'ageing' && <span className="text-xs text-slate-500">Outstanding of invoices dated in this period</span>}</div>
         {tab === 'ageing' ? (
           <Table rows={r.data?.clients.map((c) => ({ ...c, id: c.clientId }))} exportAs={{ name: 'receivables' }} to={(c) => `/clients/${c.id}`} empty="No outstanding invoices" cols={[
             { key: 'name', label: 'Client' }, { key: 'outstanding', label: 'Outstanding', num: true, render: (c) => inr(c.outstanding) },
             { key: 'overdue', label: 'Overdue', num: true, render: (c) => <span className={c.overdue ? 'text-red-600' : ''}>{inr(c.overdue)}</span> },
           ]} />
         ) : (
-          <Table rows={pays.data?.data} exportAs={{ name: 'receipts', path: '/payments' }} to={(p) => `/invoices/${p.invoiceId}`} cols={[
+          <Table rows={pays.data?.data} exportAs={{ name: 'receipts', path: '/payments', query: { from: range.from, to: range.to } }} to={(p) => `/invoices/${p.invoiceId}`} cols={[
             { key: 'number', label: 'Receipt' }, { key: 'date', label: 'Date', render: (p) => fmtDate(p.date) }, { key: 'client', label: 'Client', render: (p) => p.invoice?.client?.name },
             { key: 'invoice', label: 'Invoice', render: (p) => p.invoice?.number }, { key: 'mode', label: 'Mode' }, { key: 'amount', label: 'Amount', num: true, render: (p) => inr(p.amount) },
           ]} />

@@ -5,7 +5,7 @@ import { db } from '../db';
 import { amcContracts, attachments, clients, deliveryChallans, salesOrderItems, salesOrders, serviceReports, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
-import { addDays, fmtDateTime, istDate } from '../lib/dates';
+import { addDays, fmtDateTime, istDate, dayRange } from '../lib/dates';
 import { saveBuffer } from '../lib/files';
 import { badRequest, forbidden, notFound, pageParams } from '../lib/http';
 import { sendMail } from '../lib/mailer';
@@ -57,6 +57,7 @@ r.get('/tickets', requirePerm('tickets:view'), async (req, res) => {
     qs(req.query.clientId) ? eq(tickets.clientId, qs(req.query.clientId)!) : undefined,
     qs(req.query.type) ? eq(tickets.type, qs(req.query.type)!) : undefined,
     qs(req.query.priority) ? eq(tickets.priority, qs(req.query.priority)!) : undefined,
+    dayRange(tickets.createdAt, qs(req.query.from), qs(req.query.to)),
     textSearch(search, [tickets.number, tickets.title], [rel(tickets.clientId, clients, clients.id, clients.name), rel(tickets.siteId, sites, sites.id, sites.name, sites.city), rel(tickets.orderId, salesOrders, salesOrders.id, salesOrders.number)]),
   ].filter((x): x is SQL => !!x);
   const where = conds.length ? and(...conds) : undefined;
@@ -372,6 +373,7 @@ r.get('/service-reports', requirePerm('service_reports:view'), async (req, res) 
     qs(req.query.siteId) ? eq(serviceReports.siteId, qs(req.query.siteId)!) : undefined,
     qs(req.query.ticketId) ? eq(serviceReports.ticketId, qs(req.query.ticketId)!) : undefined,
     qs(req.query.technicianId) ? eq(serviceReports.technicianId, qs(req.query.technicianId)!) : undefined,
+    dayRange(serviceReports.visitDate, qs(req.query.from), qs(req.query.to)),
     textSearch(search, [serviceReports.number], [rel(serviceReports.siteId, sites, sites.id, sites.name), rel(serviceReports.ticketId, tickets, tickets.id, tickets.number, tickets.title)]),
   ].filter((x): x is SQL => !!x);
   const where = conds.length ? and(...conds) : undefined;

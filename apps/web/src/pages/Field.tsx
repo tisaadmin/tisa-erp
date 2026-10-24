@@ -7,9 +7,10 @@ import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Select
 import { api, fileUrl, pathUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, fmtDateTime, fmtTime, inr, label, qty, today } from '../lib/format';
-import { useAction, useGet, useItems, useSites, type Page, useListQuery } from '../lib/hooks';
+import { useAction, useGet, useItems, useSites, type Page, useListQuery, useSessionState } from '../lib/hooks';
 import { PhotoGrid } from './Service';
 import { PartyPicker } from './Sales';
+import { DateFilter } from '../components/DateFilter';
 
 // ═══════════════════════ Attendance ═══════════════════════
 
@@ -45,7 +46,7 @@ export function AttendancePage() {
   const { can } = useAuth();
   const [sp] = useSearchParams();
   const [tab, setTab] = useState<'today' | 'log' | 'muster' | 'leaves'>((sp.get('tab') as any) ?? 'today');
-  const [range, setRange] = useState({ from: today(), to: today() });
+  const [range, setRange] = useState<{ from: string; to: string; dateMode?: string }>({ from: today(), to: today(), dateMode: 'today' });
   const [month, setMonth] = useState(today().slice(0, 7));
   const log = useGet<any[]>(tab === 'today' || tab === 'log' ? '/attendance' : null, tab === 'today' ? { from: today(), to: today() } : range, { refetchInterval: tab === 'today' ? 60_000 : undefined });
   const muster = useGet<any>(tab === 'muster' ? '/attendance/muster' : null, { month });
@@ -56,7 +57,7 @@ export function AttendancePage() {
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'today', label: 'Today' }, { value: 'log', label: 'Log' }, { value: 'muster', label: 'Monthly muster' }, { value: 'leaves', label: 'Leaves' }]} />
       {(tab === 'today' || tab === 'log') && (
         <Card pad={false}>
-          {tab === 'log' && <div className="flex gap-2 border-b border-slate-100 p-3"><Input type="date" className="w-40" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /><Input type="date" className="w-40" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} /></div>}
+          {tab === 'log' && <div className="flex gap-2 border-b border-slate-100 p-3"><DateFilter value={range} onChange={(v) => setRange({ ...range, from: v.from || today(), to: v.to || today(), dateMode: v.dateMode })} /></div>}
           <Table rows={log.data} exportAs={{ name: 'attendance' }} empty="No attendance marked" cols={[
             { key: 'user', label: 'Employee', render: (r: any) => <>{r.user.name}<div className="text-xs text-slate-400">{r.user.employeeCode}</div></> },
             ...(tab === 'log' ? [{ key: 'date', label: 'Date', render: (r: any) => fmtDate(r.date) }] : []),
@@ -150,6 +151,7 @@ export function RequisitionsPage() {
           <Select className="w-56" value={q.status} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} options={[{ value: 'PENDING,APPROVED,IN_PROGRESS', label: 'Open' }, ...['PENDING', 'APPROVED', 'IN_PROGRESS', 'FULFILLED', 'REJECTED'].map((s) => ({ value: s, label: label(s) }))]} placeholder="All" />
           <Select className="w-44" value={q.type ?? ''} onChange={(e) => setQ({ ...q, type: e.target.value, page: 1 })} options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} placeholder="All types" />
           <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={q.unassigned === '1'} onChange={(e) => setQ({ ...q, unassigned: e.target.checked ? '1' : '', page: 1 })} /> Site not assigned</label>
+          <DateFilter value={{ from: q.from, to: q.to, dateMode: q.dateMode }} onChange={(v) => setQ({ ...q, from: v.from ?? '', to: v.to ?? '', dateMode: v.dateMode ?? '', page: 1 })} />
         </div>
         <Table rows={list.data?.data} exportAs={{ name: 'requisitions', path: '/requisitions', query: q }} to={(r) => `/requisitions/${r.id}`} cols={[
           { key: 'number', label: 'Number', render: (r) => <>{r.number}<div className="text-xs font-normal text-slate-400">{fmtDateTime(r.createdAt)}</div></> },
@@ -293,7 +295,8 @@ export function ExpensesPage() {
   const { can } = useAuth();
   const [sp] = useSearchParams();
   const [tab, setTab] = useState<'mine' | 'approvals' | 'all'>((sp.get('tab') as any) ?? 'mine');
-  const list = useGet<Page<any>>('/expenses', { scope: tab, pageSize: 100 });
+  const [range, setRange] = useSessionState<{ from?: string; to?: string; dateMode?: string }>('list:/expenses:dates', {});
+  const list = useGet<Page<any>>('/expenses', { scope: tab, pageSize: 100, from: range.from, to: range.to });
   const tabs: { value: 'mine' | 'approvals' | 'all'; label: string }[] = [{ value: 'mine', label: 'My claims' }, { value: 'approvals', label: 'For my approval' }];
   if (can('expenses:finance') || can('expenses:approve')) tabs.push({ value: 'all' as const, label: 'All claims' });
   return (
@@ -302,7 +305,8 @@ export function ExpensesPage() {
         actions={can('expenses:create') && <Link to="/expenses/new"><Button variant="primary" icon={<Plus className="size-4" />}>New claim</Button></Link>} />
       <Tabs value={tab} onChange={setTab} tabs={tabs} />
       <Card pad={false}>
-        <Table rows={list.data?.data} exportAs={{ name: 'expenses', path: '/expenses', query: { scope: tab } }} to={(r) => `/expenses/${r.id}`} empty={tab === 'approvals' ? 'Nothing waiting for you' : 'No claims'} cols={[
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-3"><span className="text-sm text-slate-500">Claim period</span><DateFilter value={range} onChange={setRange} /></div>
+        <Table rows={list.data?.data} exportAs={{ name: 'expenses', path: '/expenses', query: { scope: tab, from: range.from, to: range.to } }} to={(r) => `/expenses/${r.id}`} empty={tab === 'approvals' ? 'Nothing waiting for you' : 'No claims'} cols={[
           { key: 'number', label: 'Claim' }, ...(tab !== 'mine' ? [{ key: 'user', label: 'Employee', render: (r: any) => r.user?.name }] : []),
           { key: 'title', label: 'Title' }, { key: 'period', label: 'Period', render: (r: any) => `${fmtDate(r.periodFrom)} → ${fmtDate(r.periodTo)}` },
           { key: 'lines', label: 'Lines', num: true, render: (r: any) => r.lines.length }, { key: 'total', label: 'Claimed', num: true, render: (r: any) => inr(r.total) },

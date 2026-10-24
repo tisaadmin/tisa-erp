@@ -7,7 +7,7 @@ import { db, type Tx } from '../db';
 import { amcContracts, clients, invoiceItems, invoices, paymentReceipts, salesOrders, sites, type MilestoneStage } from '../db/schema';
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
-import { addDays } from '../lib/dates';
+import { addDays, dayRange } from '../lib/dates';
 import { calcTotals, r2, r3 } from '../lib/gst';
 import { badRequest, notFound, pageParams } from '../lib/http';
 import { sendMail } from '../lib/mailer';
@@ -210,11 +210,12 @@ r.post('/invoices/:id/email', requirePerm('invoices:view'), async (req, res) => 
 // ── Payment receipts ──
 r.get('/payments', requirePerm('payments:view'), async (req, res) => {
   const { pageSize, offset } = pageParams(req.query);
+  const where = dayRange(paymentReceipts.date, qs(req.query.from), qs(req.query.to));
   const data = await db.query.paymentReceipts.findMany({
-    limit: pageSize, offset, orderBy: [desc(paymentReceipts.date)],
+    where, limit: pageSize, offset, orderBy: [desc(paymentReceipts.date)],
     with: { invoice: { columns: { id: true, number: true, clientId: true }, with: { client: { columns: { name: true } } } } },
   });
-  res.json({ data, total: await db.$count(paymentReceipts) });
+  res.json({ data, total: await db.$count(paymentReceipts, where) });
 });
 
 r.post('/invoices/:id/payments', requirePerm('payments:create'), async (req, res) => {
@@ -259,9 +260,10 @@ r.post('/invoices/mark-paid', requirePerm('payments:create'), async (req, res) =
 });
 
 /** Receivables ageing for the MIS / accounts view. */
-r.get('/receivables', requirePerm('invoices:view'), async (_req, res) => {
+r.get('/receivables', requirePerm('invoices:view'), async (req, res) => {
+  // optionally only invoices dated in a range
   const open = await db.query.invoices.findMany({
-    where: and(inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID']), ne(invoices.type, 'PROFORMA'), gt(invoices.total, 0)),
+    where: and(inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID']), ne(invoices.type, 'PROFORMA'), gt(invoices.total, 0), dayRange(invoices.date, qs(req.query.from), qs(req.query.to))),
     with: { client: { columns: { id: true, name: true } } },
   });
   const now = Date.now();
