@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api } from './api';
 
@@ -41,3 +43,24 @@ export const useItems = () => lookup<ItemLite>('/items', { active: true });
 export const useVendors = () => lookup<{ id: string; name: string; stateCode?: string }>('/vendors', { active: true });
 export const useCategories = () => lookup<{ id: string; name: string; code: string }>('/categories');
 export const useUsers = () => useQuery<{ id: string; name: string; designation?: string; isFieldStaff: boolean }[]>({ queryKey: ['/users/lookup'], queryFn: () => api('/users/lookup'), staleTime: 60_000 });
+
+/** useState kept for this browser tab (sessionStorage), so a list's search / filters / page survive opening a record and coming back. */
+export function useSessionState<T>(key: string, init: T, fresh = false): [T, (v: T) => void] {
+  const [v, setV] = useState<T>(() => {
+    if (fresh) return init;
+    try {
+      const raw = sessionStorage.getItem(key);
+      if (!raw) return init;
+      const saved = JSON.parse(raw);
+      return init && typeof init === 'object' ? { ...(init as object), ...saved } as T : saved as T;
+    } catch { return init; }
+  });
+  useEffect(() => { try { sessionStorage.setItem(key, JSON.stringify(v)); } catch { /* private mode */ } }, [key, v]);
+  return [v, setV];
+}
+
+/** A list page's query (search, filters, page). Remembered per page; a link with its own filters (?status=…) starts fresh. */
+export function useListQuery(init: Record<string, any>): [Record<string, any>, (v: Record<string, any>) => void] {
+  const loc = useLocation();
+  return useSessionState(`list:${loc.pathname}`, init, !!loc.search);
+}

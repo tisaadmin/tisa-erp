@@ -7,7 +7,7 @@ import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Search
 import { api, fileUrl, openPdf, pathUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, fmtDateTime, label, qty } from '../lib/format';
-import { useAction, useCategories, useGet, useSites, useUsers, type Page } from '../lib/hooks';
+import { useAction, useCategories, useGet, useSites, useUsers, type Page, useListQuery } from '../lib/hooks';
 
 const TYPES = ['COMPLAINT', 'PREVENTIVE_MAINTENANCE', 'PAID_VISIT', 'INSTALLATION', 'SITE_SURVEY', 'VISIT', 'DEMO', 'OTHER'];
 const PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
@@ -16,7 +16,7 @@ export function TicketsPage() {
   const [sp] = useSearchParams();
   const { can } = useAuth();
   const users = useUsers();
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50, status: 'OPEN_ALL', priority: sp.get('priority') ?? '' });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50, status: 'OPEN_ALL', priority: sp.get('priority') ?? '' });
   const list = useGet<Page<any>>('/tickets', q, { refetchInterval: 60_000 });
   const set = (k: string, v: any) => setQ({ ...q, [k]: v, page: 1 });
   return (
@@ -162,7 +162,7 @@ export function TicketDetail() {
 }
 
 export function ServiceReportsPage() {
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50 });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50 });
   const list = useGet<Page<any>>('/service-reports', q);
   return (
     <div>

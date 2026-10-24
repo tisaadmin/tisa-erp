@@ -8,7 +8,7 @@ import { api, downloadFile } from '../lib/api';
 import { toast } from 'sonner';
 import { useAuth } from '../lib/auth';
 import { fmtDate, fmtDateTime, inr, label, qty } from '../lib/format';
-import { useAction, useCategories, useClients, useGet, useSites, useUsers } from '../lib/hooks';
+import { useAction, useCategories, useClients, useGet, useSites, useUsers, useSessionState } from '../lib/hooks';
 
 const STATES: Record<string, string> = {
   '01': 'Jammu and Kashmir', '02': 'Himachal Pradesh', '03': 'Punjab', '04': 'Chandigarh', '05': 'Uttarakhand', '06': 'Haryana', '07': 'Delhi', '08': 'Rajasthan',
@@ -163,7 +163,7 @@ export function InventoryPage() {
   const { can } = useAuth();
   const cats = useCategories();
   const [cat, setCat] = useState('');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useSessionState('list:/inventory:search', '');
   const [ledgerFor, setLedgerFor] = useState<any>(null);
   const [adjust, setAdjust] = useState<{ reason: string; itemId: string | null; qty: number; note: string } | null>(null);
   const stock = useGet<any[]>('/items/stock', { categoryId: cat });

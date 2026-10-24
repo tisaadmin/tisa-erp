@@ -2,7 +2,7 @@ import { Pencil, Plus } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { useAction, useGet, type Page } from '../lib/hooks';
+import { useAction, useGet, type Page, useListQuery } from '../lib/hooks';
 import { label as fmt } from '../lib/format';
 import { Combo, type Opt } from './Combo';
 import { Button, Card, Field, Input, Modal, PageHeader, Pager, SearchBox, Select, Table, Textarea, type Col } from './ui';
@@ -126,7 +126,7 @@ export function MasterPage<T extends { id: string }>({ title, singular, path, pe
 }) {
   const { fields, defaults } = useConfiguredFields(entity, rawFields, rawDefaults);
   const { can } = useAuth();
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50, search: '' });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50, search: '' });
   const list = useGet<Page<T>>(path, q);
   const ed = useEditor(path, fields, defaults);
   const set = (k: string, v: any) => setQ({ ...q, [k]: v, page: 1 });

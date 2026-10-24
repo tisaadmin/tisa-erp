@@ -7,7 +7,7 @@ import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Select
 import { api, fileUrl, pathUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, fmtDateTime, fmtTime, inr, label, qty, today } from '../lib/format';
-import { useAction, useGet, useItems, useSites, type Page } from '../lib/hooks';
+import { useAction, useGet, useItems, useSites, type Page, useListQuery } from '../lib/hooks';
 import { PhotoGrid } from './Service';
 import { PartyPicker } from './Sales';
 
@@ -133,7 +133,7 @@ export function RequisitionsPage() {
   const [sp, setSp] = useSearchParams();
   const sites = useSites();
   const items = useItems();
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50, status: 'PENDING,APPROVED,IN_PROGRESS' });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50, status: 'PENDING,APPROVED,IN_PROGRESS' });
   const list = useGet<Page<any>>('/requisitions', q, { refetchInterval: 60_000 });
   const [form, setForm] = useState<any>(null);
   const projects = useGet<{ id: string; number: string; site: { name: string } | null; client: { name: string } }[]>(form ? '/projects' : null, { all: can('orders:view') ? 1 : undefined });

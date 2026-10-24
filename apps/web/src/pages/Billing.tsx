@@ -7,11 +7,11 @@ import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Search
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, inr, inrShort, label, toInputDate } from '../lib/format';
-import { useAction, useGet, type Page } from '../lib/hooks';
+import { useAction, useGet, type Page, useListQuery } from '../lib/hooks';
 import { DocLines, PartyPicker, useCompanyState } from './Sales';
 
 export function InvoicesPage() {
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50 });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50 });
   const { can } = useAuth();
   const list = useGet<Page<any>>('/invoices', q);
   const [sel, setSel] = useState<Set<string>>(new Set());

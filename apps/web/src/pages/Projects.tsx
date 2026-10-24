@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { Combo } from '../components/Combo';
 import { Badge, Button, Card, Modal, PageHeader, SearchBox, Select, Spinner, Status, Table } from '../components/ui';
 import { api } from '../lib/api';
-import { useAction, useGet, useUsers } from '../lib/hooks';
+import { useAction, useGet, useUsers, useSessionState } from '../lib/hooks';
 
 type Person = { id: string; name: string; phone?: string | null };
 type Team = { incharge: Person | null; members: Person[] };
@@ -77,8 +77,8 @@ export function ProjectTeamModal({ orderId, title, team, onClose }: { orderId: s
 export function ProjectsPage() {
   const meta = useGet<{ canAssign: boolean; canSeeAll: boolean }>('/projects-meta');
   const users = useUsers();
-  const [search, setSearch] = useState('');
-  const [incharge, setIncharge] = useState('');
+  const [search, setSearch] = useSessionState('list:/projects:search', '');
+  const [incharge, setIncharge] = useSessionState('list:/projects:incharge', '');
   const list = useGet<ProjectRow[]>(meta.data ? '/projects' : null, { all: meta.data?.canSeeAll ? 1 : undefined, incharge: incharge || undefined, search: search.trim().length >= 2 ? search.trim() : undefined });
   const [edit, setEdit] = useState<ProjectRow | null>(null);
   return (

@@ -8,7 +8,7 @@ import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Search
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, inr, label, qty, STAGE_LABEL, toInputDate } from '../lib/format';
-import { useAction, useClients, useGet, useSites, type Page } from '../lib/hooks';
+import { useAction, useClients, useGet, useSites, type Page, useListQuery } from '../lib/hooks';
 import { OrderAccessoriesCard } from './Accessories';
 import { OrderInstallationCard } from '../components/Installation';
 import { OrderProjectTeamCard } from './Projects';
@@ -46,7 +46,7 @@ const linesFrom = (items: any[]): Line[] => items.map((l) => ({ itemId: l.itemId
 // ═══════════════════════ Quotations ═══════════════════════
 
 export function QuotationsPage() {
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50 });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50 });
   const { can } = useAuth();
   const list = useGet<Page<any>>('/quotations', q);
   return (
@@ -208,7 +208,7 @@ export function DocLines({ doc, extraCols }: { doc: any; extraCols?: { label: st
 // ═══════════════════════ Orders ═══════════════════════
 
 export function OrdersPage() {
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50 });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50 });
   const { can } = useAuth();
   const rules = useGet<{ key: string; enabled: boolean }[]>('/settings/workflow');
   const directOrderAllowed = !rules.data?.find((r) => r.key === 'orderRequiresQuote')?.enabled || can('orders:without_quote');
@@ -425,7 +425,7 @@ export function OrderDetail() {
 // ═══════════════════════ Delivery challans ═══════════════════════
 
 export function ChallansPage() {
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50 });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50 });
   const { can } = useAuth();
   const list = useGet<Page<any>>('/challans', q);
   return (

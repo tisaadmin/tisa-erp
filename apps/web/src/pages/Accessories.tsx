@@ -6,7 +6,7 @@ import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Search
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, fmtDateTime, inr, qty } from '../lib/format';
-import { useAction, useGet, useItems, type Page } from '../lib/hooks';
+import { useAction, useGet, useItems, type Page, useListQuery } from '../lib/hooks';
 
 type SheetLine = { id?: string; orderItemId: string | null; itemId: string | null; description: string; unit: string; qty: number; rate: number; source: 'TEMPLATE' | 'MANUAL'; remarks: string | null };
 type Sheet = {
@@ -21,7 +21,7 @@ const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 // ═══════════════════════ List ═══════════════════════
 
 export function AccessorySheetsPage() {
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50 });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50 });
   const list = useGet<Page<any>>('/accessory-sheets', q);
   return (
     <div>

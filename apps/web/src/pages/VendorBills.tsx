@@ -7,7 +7,7 @@ import { Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Se
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, inr, inrShort, label, toInputDate } from '../lib/format';
-import { useAction, useGet, useVendors, type Page } from '../lib/hooks';
+import { useAction, useGet, useVendors, type Page, useListQuery } from '../lib/hooks';
 import { DocLines, useCompanyState } from './Sales';
 import { ExportListButton, type ExportCol } from '../components/ExportList';
 
@@ -31,7 +31,7 @@ export function VendorBillsPage() {
   const { can } = useAuth();
   const [sp] = useSearchParams();
   const [tab, setTab] = useState<'bills' | 'ageing' | 'payments'>('bills');
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50, status: sp.get('status') ?? 'OPEN', vendorId: sp.get('vendorId') ?? '' });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50, status: sp.get('status') ?? 'OPEN', vendorId: sp.get('vendorId') ?? '' });
   const list = useGet<BillPage>(tab === 'bills' ? '/vendor-bills' : null, q);
   const ageing = useGet<{ buckets: Record<string, number>; vendors: { vendorId: string; name: string; outstanding: number; overdue: number; bills: number }[] }>('/vendor-bills/summary');
   const pays = useGet<Page<any>>(tab === 'payments' ? '/vendor-payments' : null, { pageSize: 200 });

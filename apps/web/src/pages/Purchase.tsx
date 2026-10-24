@@ -8,11 +8,11 @@ import { Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Se
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, inr, qty, toInputDate } from '../lib/format';
-import { useAction, useGet, useSites, useVendors, type Page } from '../lib/hooks';
+import { useAction, useGet, useSites, useVendors, type Page, useListQuery } from '../lib/hooks';
 import { DocLines, useCompanyState } from './Sales';
 
 export function PurchaseOrdersPage() {
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50 });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50 });
   const { can } = useAuth();
   const list = useGet<Page<any>>('/purchase-orders', q);
   return (
@@ -213,7 +213,7 @@ export function PoDetail() {
 }
 
 export function GrnsPage() {
-  const [q, setQ] = useState<Record<string, any>>({ page: 1, pageSize: 50 });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50 });
   const list = useGet<Page<any>>('/grns', q);
   return (
     <div>
