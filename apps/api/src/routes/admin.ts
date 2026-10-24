@@ -4,6 +4,7 @@ import { and, asc, eq, ilike, inArray, notInArray, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
 import { companySettings, departments, refreshTokens, roles, users } from '../db/schema';
+import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { badRequest, notFound, pageParams } from '../lib/http';
 import { ALL_PERMISSIONS, MODULES } from '../lib/permissions';
@@ -40,7 +41,7 @@ r.get('/users', requirePerm('users:view'), async (req, res) => {
     columns: publicUser, with: { role: { columns: { id: true, name: true } }, manager: { columns: { id: true, name: true } }, dept: { columns: { id: true, name: true } } },
     // switched-off users are hidden unless asked for (?status=inactive or all)
     where: and(
-      search ? or(ilike(users.name, `%${search}%`), ilike(users.email, `%${search}%`)) : undefined,
+      textSearch(search, [users.name, users.email, users.employeeCode, users.phone]),
       req.query.status === 'all' ? undefined : eq(users.active, req.query.status !== 'inactive'),
     ),
     orderBy: [asc(users.name)],

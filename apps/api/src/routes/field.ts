@@ -7,6 +7,7 @@ import { approverFor, manages, teamIds } from '../lib/team';
 import { myProjectOrderIds, projectMaterialStatus, projectSummaries } from '../services/projectStatus';
 import { classifyProjectLines, decideExcess, projectRequestable } from '../services/projectRequisitions';
 import { attachments, attendance, auditLogs, departments, projectMembers, salesOrders, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
+import { rel, searchWords, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { istDate, istTime } from '../lib/dates';
 import { absPath, geoStampImage, normaliseUpload, saveBuffer, upload } from '../lib/files';
@@ -318,6 +319,7 @@ r.get('/requisitions', requirePerm('requisitions:view'), async (req, res) => {
     qs(req.query.clientId) ? eq(requisitions.clientId, qs(req.query.clientId)!) : undefined,
     req.query.unassigned === '1' ? isNull(requisitions.siteId) : undefined,
     qs(req.query.type) ? eq(requisitions.type, qs(req.query.type)!) : undefined,
+    textSearch(qs(req.query.search), [requisitions.number, requisitions.description], [rel(requisitions.clientId, clients, clients.id, clients.name), rel(requisitions.siteId, sites, sites.id, sites.name), rel(requisitions.orderId, salesOrders, salesOrders.id, salesOrders.number)]),
   ].filter((x): x is SQL => !!x);
   const where = conds.length ? and(...conds) : undefined;
   const [data, total] = await Promise.all([
@@ -488,7 +490,7 @@ r.get('/projects', async (req, res) => {
   }
   const want = qs(req.query.incharge);
   const out = (await projectSummaries(db, ids.slice(0, 300))).filter((p) => {
-    if (search && !`${p.number} ${p.client.name} ${p.site?.name ?? ''} ${p.team.incharge?.name ?? ''}`.toLowerCase().includes(search.toLowerCase())) return false;
+    if (search) { const hay = `${p.number} ${p.client.name} ${p.site?.name ?? ''} ${p.team.incharge?.name ?? ''}`.toLowerCase().replace(/[^a-z0-9]+/g, ''); if (!searchWords(search).every((w) => hay.includes(w))) return false; }
     if (want === 'none') return !p.team.incharge;
     if (want) return p.team.incharge?.id === (want === 'me' ? req.user.id : want);
     return true;

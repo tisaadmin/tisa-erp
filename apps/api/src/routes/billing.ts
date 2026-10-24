@@ -4,7 +4,8 @@ import { randomBytes } from 'node:crypto';
 import { and, desc, eq, gt, ilike, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, type Tx } from '../db';
-import { amcContracts, invoiceItems, invoices, paymentReceipts, salesOrders, type MilestoneStage } from '../db/schema';
+import { amcContracts, clients, invoiceItems, invoices, paymentReceipts, salesOrders, sites, type MilestoneStage } from '../db/schema';
+import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { addDays } from '../lib/dates';
 import { calcTotals, r2, r3 } from '../lib/gst';
@@ -33,7 +34,7 @@ r.get('/invoices', requirePerm('invoices:view'), async (req, res) => {
     qs(req.query.orderId) ? eq(invoices.orderId, qs(req.query.orderId)!) : undefined,
     qs(req.query.siteId) ? eq(invoices.siteId, qs(req.query.siteId)!) : undefined,
     req.query.overdue === '1' ? and(inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID']), lt(invoices.dueDate, new Date())) : undefined,
-    search ? or(ilike(invoices.number, `%${search}%`)) : undefined,
+    textSearch(search, [invoices.number], [rel(invoices.clientId, clients, clients.id, clients.name, clients.code), rel(invoices.siteId, sites, sites.id, sites.name), rel(invoices.orderId, salesOrders, salesOrders.id, salesOrders.number)]),
   ];
   const c = conds.filter((x): x is SQL => !!x);
   const where = c.length ? and(...c) : undefined;

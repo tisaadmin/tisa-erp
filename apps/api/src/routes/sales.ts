@@ -7,6 +7,7 @@ import { db } from '../db';
 import {
   clients, departments, deliveryChallanItems, items, requisitions, vendors, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
 } from '../db/schema';
+import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { notifyPermission, notifyUsers } from '../lib/notify';
 import { badRequest, forbidden, notFound, pageParams } from '../lib/http';
@@ -92,7 +93,7 @@ r.get('/quotations', requirePerm('quotations:view'), async (req, res) => {
     qs(req.query.status) ? eq(quotations.status, qs(req.query.status)!) : undefined,
     qs(req.query.clientId) ? eq(quotations.clientId, qs(req.query.clientId)!) : undefined,
     qs(req.query.leadId) ? eq(quotations.leadId, qs(req.query.leadId)!) : undefined,
-    search ? or(ilike(quotations.number, `%${search}%`), ilike(quotations.subject, `%${search}%`)) : undefined,
+    textSearch(search, [quotations.number, quotations.subject], [rel(quotations.clientId, clients, clients.id, clients.name, clients.code), rel(quotations.siteId, sites, sites.id, sites.name, sites.code, sites.city), rel(quotations.leadId, leads, leads.id, leads.companyName)]),
   ]);
   const [data, total] = await Promise.all([
     db.query.quotations.findMany({
@@ -290,7 +291,7 @@ r.get('/orders', requirePerm('orders:view'), async (req, res) => {
     qs(req.query.status) ? eq(salesOrders.status, qs(req.query.status)!) : undefined,
     qs(req.query.clientId) ? eq(salesOrders.clientId, qs(req.query.clientId)!) : undefined,
     qs(req.query.siteId) ? eq(salesOrders.siteId, qs(req.query.siteId)!) : undefined,
-    search ? or(ilike(salesOrders.number, `%${search}%`), ilike(salesOrders.clientPoNo, `%${search}%`), ilike(salesOrders.sourceRef, `%${search}%`), sql`${salesOrders.sourceData}->>'title' ilike ${`%${search}%`}`) : undefined,
+    textSearch(search, [salesOrders.number, salesOrders.clientPoNo, salesOrders.sourceRef, sql`${salesOrders.sourceData}->>'title'`], [rel(salesOrders.clientId, clients, clients.id, clients.name, clients.code), rel(salesOrders.siteId, sites, sites.id, sites.name, sites.code, sites.city)]),
   ]);
   const [data, total] = await Promise.all([
     db.query.salesOrders.findMany({
@@ -413,7 +414,7 @@ r.get('/challans', requirePerm('challans:view'), async (req, res) => {
     qs(req.query.orderId) ? eq(deliveryChallans.orderId, qs(req.query.orderId)!) : undefined,
     qs(req.query.clientId) ? eq(deliveryChallans.clientId, qs(req.query.clientId)!) : undefined,
     qs(req.query.status) ? eq(deliveryChallans.status, qs(req.query.status)!) : undefined,
-    search ? ilike(deliveryChallans.number, `%${search}%`) : undefined,
+    textSearch(search, [deliveryChallans.number, deliveryChallans.vehicleNo], [rel(deliveryChallans.clientId, clients, clients.id, clients.name), rel(deliveryChallans.siteId, sites, sites.id, sites.name, sites.city), rel(deliveryChallans.orderId, salesOrders, salesOrders.id, salesOrders.number)]),
   ]);
   const [data, total] = await Promise.all([
     db.query.deliveryChallans.findMany({

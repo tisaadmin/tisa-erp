@@ -9,6 +9,7 @@ import { and, asc, desc, eq, ilike, inArray, ne, or, sql, type SQL } from 'drizz
 import { z } from 'zod';
 import { db, type DbOrTx } from '../db';
 import { accessorySheetLines, accessorySheets, approvalLogs, clients, itemAccessories, items, salesOrders, users } from '../db/schema';
+import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { r2, r3 } from '../lib/gst';
 import { badRequest, notFound, pageParams } from '../lib/http';
@@ -119,7 +120,7 @@ r.get('/accessory-sheets', requirePerm('accessories:view'), async (req, res) => 
   const conds: (SQL | undefined)[] = [
     qs(req.query.status) ? eq(accessorySheets.status, qs(req.query.status)!) : undefined,
     qs(req.query.orderId) ? eq(accessorySheets.orderId, qs(req.query.orderId)!) : undefined,
-    search ? or(ilike(accessorySheets.number, `%${search}%`), ilike(salesOrders.number, `%${search}%`), ilike(clients.name, `%${search}%`), ilike(salesOrders.sourceRef, `%${search}%`)) : undefined,
+    textSearch(search, [accessorySheets.number, salesOrders.number, clients.name, salesOrders.sourceRef]),
   ];
   const where = and(...conds.filter(Boolean));
   const base = db.select({

@@ -7,6 +7,7 @@ import { and, asc, desc, eq, gt, ilike, inArray, lt, or, sql, type SQL } from 'd
 import { z } from 'zod';
 import { db } from '../db';
 import { purchaseOrderItems, purchaseOrders, salesOrders, vendorBillItems, vendorBills, vendorPayments, vendors } from '../db/schema';
+import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { r2 } from '../lib/gst';
 import { badRequest, notFound, pageParams } from '../lib/http';
@@ -69,8 +70,7 @@ r.get('/vendor-bills', requirePerm('vendor_bills:view'), async (req, res) => {
     due === 'overdue' ? and(inArray(vendorBills.status, ['UNPAID', 'PARTIALLY_PAID']), lt(vendorBills.dueDate, today())) : undefined,
     qs(req.query.from) ? sql`${vendorBills.billDate} >= ${qs(req.query.from)}` : undefined,
     qs(req.query.to) ? sql`${vendorBills.billDate} <= ${qs(req.query.to)}` : undefined,
-    search ? or(ilike(vendorBills.billNo, `%${search}%`), ilike(vendorBills.number, `%${search}%`), ilike(vendorBills.notes, `%${search}%`),
-      inArray(vendorBills.vendorId, db.select({ id: vendors.id }).from(vendors).where(ilike(vendors.name, `%${search}%`)))) : undefined,
+    textSearch(search, [vendorBills.billNo, vendorBills.number, vendorBills.notes], [rel(vendorBills.vendorId, vendors, vendors.id, vendors.name), rel(vendorBills.orderId, salesOrders, salesOrders.id, salesOrders.number), rel(vendorBills.poId, purchaseOrders, purchaseOrders.id, purchaseOrders.number)]),
   ]);
   const [data, total, [sum]] = await Promise.all([
     db.query.vendorBills.findMany({

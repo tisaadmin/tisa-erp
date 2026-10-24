@@ -4,6 +4,7 @@ import { and, desc, eq, ilike, inArray, notInArray, type SQL } from 'drizzle-orm
 import { z } from 'zod';
 import { db } from '../db';
 import { accessorySheets, goodsReceiptItems, goodsReceipts, items, purchaseOrderItems, purchaseOrders, requisitions, salesOrders, stockMovements, vendors } from '../db/schema';
+import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { r3 } from '../lib/gst';
 import { badRequest, notFound, pageParams } from '../lib/http';
@@ -108,7 +109,7 @@ r.get('/purchase-orders', requirePerm('purchase_orders:view'), async (req, res) 
     qs(req.query.status) ? inArray(purchaseOrders.status, qs(req.query.status)!.split(',')) : undefined,
     qs(req.query.vendorId) ? eq(purchaseOrders.vendorId, qs(req.query.vendorId)!) : undefined,
     qs(req.query.salesOrderId) ? eq(purchaseOrders.salesOrderId, qs(req.query.salesOrderId)!) : undefined,
-    search ? ilike(purchaseOrders.number, `%${search}%`) : undefined,
+    textSearch(search, [purchaseOrders.number], [rel(purchaseOrders.vendorId, vendors, vendors.id, vendors.name), rel(purchaseOrders.salesOrderId, salesOrders, salesOrders.id, salesOrders.number)]),
   ]);
   const [data, total] = await Promise.all([
     db.query.purchaseOrders.findMany({
@@ -256,7 +257,7 @@ r.get('/grns', requirePerm('grn:view'), async (req, res) => {
   const where = all([
     qs(req.query.poId) ? eq(goodsReceipts.poId, qs(req.query.poId)!) : undefined,
     qs(req.query.vendorId) ? eq(goodsReceipts.vendorId, qs(req.query.vendorId)!) : undefined,
-    search ? ilike(goodsReceipts.number, `%${search}%`) : undefined,
+    textSearch(search, [goodsReceipts.number], [rel(goodsReceipts.vendorId, vendors, vendors.id, vendors.name), rel(goodsReceipts.poId, purchaseOrders, purchaseOrders.id, purchaseOrders.number)]),
   ]);
   const [data, total] = await Promise.all([
     db.query.goodsReceipts.findMany({ where, limit: pageSize, offset, orderBy: [desc(goodsReceipts.date)], with: { vendor: { columns: { id: true, name: true } }, po: { columns: { id: true, number: true } } } }),

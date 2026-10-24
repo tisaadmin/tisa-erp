@@ -1515,3 +1515,15 @@ test('quotation costing: maintenance for the year from visits, half / full day, 
   assert.equal(full.costingSummary.maintenanceManDays, 4); assert.equal(full.costingSummary.maintenance, 4800);
   assert.equal(full.costingSummary.totalCost, 20000 + 4800);
 });
+
+test('search: every word, any order, across number, client and site names, ignoring case and punctuation', async () => {
+  const cl = await ok('admin', 'POST', '/clients', { name: 'OM Enterprises', type: 'CORPORATE', stateCode: '27' });
+  const st = await ok('admin', 'POST', '/sites', { clientId: cl.id, name: 'M.C.G.M. Bhandup Hospital', stateCode: '27' });
+  const o = await ok('admin', 'POST', '/orders', { clientId: cl.id, siteId: st.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 1 }] });
+  const find = async (path: string, q: string) => (await ok('admin', 'GET', `${path}?search=${encodeURIComponent(q)}`)).data.map((x: any) => x.id);
+  assert.ok((await find('/orders', 'MCGM')).includes(o.id), 'site name, punctuation ignored');
+  assert.ok((await find('/orders', 'om enterprise')).includes(o.id), 'client name, plural ignored');
+  assert.ok((await find('/orders', `bhandup ${o.number.slice(-4)}`)).includes(o.id), 'words in any order across fields');
+  assert.ok(!(await find('/orders', 'MCGM nowhere')).includes(o.id), 'every word must match');
+  assert.ok((await find('/sites', 'om enterprises')).includes(st.id), 'sites by their client');
+});

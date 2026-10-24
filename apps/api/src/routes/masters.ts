@@ -6,6 +6,7 @@ import { db } from '../db';
 import {
   amcContracts, clients, invoices, items, leadActivities, leads, salesOrders, sites, stockMovements, systemCategories, tickets, vendors,
 } from '../db/schema';
+import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { resolvedFields } from '../lib/fields';
 import { crudRouter } from '../lib/crud';
@@ -144,7 +145,7 @@ const siteSchema = z.object({
 
 r.use('/sites', crudRouter({
   queryKey: 'sites', fields: 'sites', table: sites, perm: 'sites', entity: 'site', createSchema: siteSchema,
-  searchCols: [sites.name, sites.code, sites.city, sites.address], filters: { clientId: sites.clientId, active: sites.active },
+  searchCols: [sites.name, sites.code, sites.city, sites.address], searchRelated: [rel(sites.clientId, clients, clients.id, clients.name, clients.code)], filters: { clientId: sites.clientId, active: sites.active },
   orderBy: { col: sites.name, dir: 'asc' }, with: { client: { columns: { id: true, name: true, code: true } } }, softDelete: true,
   beforeCreate: async (d, tx) => {
     const client = await tx.query.clients.findFirst({ where: eq(clients.id, d.clientId) });
@@ -302,7 +303,7 @@ const amcSchema = z.object({
 r.use('/amc', crudRouter({
   queryKey: 'amcContracts', table: amcContracts, perm: 'amc', entity: 'amc',
   createSchema: amcSchema,
-  searchCols: [amcContracts.number], filters: { clientId: amcContracts.clientId, siteId: amcContracts.siteId, status: amcContracts.status, kind: amcContracts.kind },
+  searchCols: [amcContracts.number], searchRelated: [rel(amcContracts.clientId, clients, clients.id, clients.name), rel(amcContracts.siteId, sites, sites.id, sites.name)], filters: { clientId: amcContracts.clientId, siteId: amcContracts.siteId, status: amcContracts.status, kind: amcContracts.kind },
   with: { client: { columns: { id: true, name: true } }, site: { columns: { id: true, name: true } } },
   beforeCreate: async (d, tx) => {
     const site = await tx.query.sites.findFirst({ where: eq(sites.id, d.siteId) });

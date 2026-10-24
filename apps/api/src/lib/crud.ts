@@ -3,6 +3,7 @@ import { Router, type Request } from 'express';
 import { and, asc, desc, eq, ilike, or, type SQL } from 'drizzle-orm';
 import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import type { ZodObject, ZodRawShape } from 'zod';
+import { textSearch, type Related } from './search';
 import { db, type Tx } from '../db';
 import { requirePerm } from '../middleware/auth';
 import { audit } from './audit';
@@ -17,6 +18,8 @@ type CrudOptions = {
   entity: string;
   createSchema: ZodObject<ZodRawShape>;
   searchCols?: PgColumn[];
+  /** related names searched too, e.g. the client of a site */
+  searchRelated?: Related[];
   /** query-string → column equality filters, e.g. { clientId: sites.clientId } */
   filters?: Record<string, PgColumn>;
   extraWhere?: (req: Request) => SQL | undefined;
@@ -39,7 +42,8 @@ export function crudRouter(o: CrudOptions) {
   const where = (req: Request) => {
     const conds: SQL[] = [];
     const { search } = pageParams(req.query);
-    if (search && o.searchCols?.length) conds.push(or(...o.searchCols.map((c) => ilike(c, `%${search}%`)))!);
+    const s = o.searchCols?.length ? textSearch(search, o.searchCols, o.searchRelated) : undefined;
+    if (s) conds.push(s);
     for (const [k, col] of Object.entries(o.filters ?? {})) {
       const v = req.query[k];
       if (typeof v === 'string' && v !== '') conds.push(eq(col, v === 'true' ? true : v === 'false' ? false : v));

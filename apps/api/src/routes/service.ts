@@ -2,7 +2,8 @@ import { Router, type Request } from 'express';
 import { and, desc, eq, gte, ilike, inArray, lte, or, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
-import { amcContracts, attachments, deliveryChallans, salesOrderItems, salesOrders, serviceReports, sites, ticketUpdates, tickets, users } from '../db/schema';
+import { amcContracts, attachments, clients, deliveryChallans, salesOrderItems, salesOrders, serviceReports, sites, ticketUpdates, tickets, users } from '../db/schema';
+import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { addDays, fmtDateTime, istDate } from '../lib/dates';
 import { saveBuffer } from '../lib/files';
@@ -56,7 +57,7 @@ r.get('/tickets', requirePerm('tickets:view'), async (req, res) => {
     qs(req.query.clientId) ? eq(tickets.clientId, qs(req.query.clientId)!) : undefined,
     qs(req.query.type) ? eq(tickets.type, qs(req.query.type)!) : undefined,
     qs(req.query.priority) ? eq(tickets.priority, qs(req.query.priority)!) : undefined,
-    search ? or(ilike(tickets.number, `%${search}%`), ilike(tickets.title, `%${search}%`)) : undefined,
+    textSearch(search, [tickets.number, tickets.title], [rel(tickets.clientId, clients, clients.id, clients.name), rel(tickets.siteId, sites, sites.id, sites.name, sites.city), rel(tickets.orderId, salesOrders, salesOrders.id, salesOrders.number)]),
   ].filter((x): x is SQL => !!x);
   const where = conds.length ? and(...conds) : undefined;
   const [data, total] = await Promise.all([
@@ -371,7 +372,7 @@ r.get('/service-reports', requirePerm('service_reports:view'), async (req, res) 
     qs(req.query.siteId) ? eq(serviceReports.siteId, qs(req.query.siteId)!) : undefined,
     qs(req.query.ticketId) ? eq(serviceReports.ticketId, qs(req.query.ticketId)!) : undefined,
     qs(req.query.technicianId) ? eq(serviceReports.technicianId, qs(req.query.technicianId)!) : undefined,
-    search ? ilike(serviceReports.number, `%${search}%`) : undefined,
+    textSearch(search, [serviceReports.number], [rel(serviceReports.siteId, sites, sites.id, sites.name), rel(serviceReports.ticketId, tickets, tickets.id, tickets.number, tickets.title)]),
   ].filter((x): x is SQL => !!x);
   const where = conds.length ? and(...conds) : undefined;
   const [data, total] = await Promise.all([
