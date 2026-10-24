@@ -1557,3 +1557,15 @@ test('date filters: from / to / a particular date on tickets, service reports, p
   assert.equal(rec.clients.length, 0);
   assert.ok((await ok('admin', 'GET', `/tickets?status=&from=${today}&to=${today}`)).total >= 1, 'tickets raised today');
 });
+
+test('site page: everything under one site — orders, quotes, POs, bills, receipts, tickets, service, requisitions; tabs follow rights', async () => {
+  const o = await ok('admin', 'GET', `/sites/${ctx.site.id}/overview`);
+  assert.equal(o.site.id, ctx.site.id); assert.equal(o.site.client.id, ctx.client.id);
+  const listed = (await ok('admin', 'GET', `/orders?siteId=${ctx.site.id}&pageSize=500`)).data;
+  assert.equal(o.orders.length, listed.length, 'every order of the site');
+  assert.ok(o.quotations.length >= 1 && o.invoices.length >= 1 && o.tickets.length >= 1 && o.serviceReports.length >= 1 && o.requisitions.length >= 1);
+  assert.ok(o.summary.orderValue > 0 && o.summary.billed > 0);
+  const t = await ok('tech', 'GET', `/sites/${ctx.site.id}/overview`).catch(() => null);
+  if (t) assert.ok(!t.invoices.length && !t.receipts.length && !t.summary.billed, 'technician does not see billing on the site page');
+  assert.equal((await call('admin', 'GET', '/sites/00000000-0000-0000-0000-000000000000/overview')).status, 404);
+});

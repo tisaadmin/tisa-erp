@@ -100,7 +100,7 @@ export function ClientDetail() {
         {tab === 'sites' && (
           <>
             {can('sites:create') && <div className="px-4 pb-2"><Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => siteEd.open()}>Add site</Button></div>}
-            <Table rows={c.sites} onRow={(s: any) => can('sites:edit') && siteEd.open(s)} cols={[
+            <Table rows={c.sites} to={(s: any) => `/sites/${s.id}`} cols={[
               { key: 'name', label: 'Site', render: (s: any) => <>{s.name}<div className="text-xs text-slate-400">{s.code}</div></> },
               { key: 'address', label: 'Address', render: (s: any) => [s.address, s.city].filter(Boolean).join(', ') || '—' },
               { key: 'contact', label: 'Contact', render: (s: any) => <>{s.contactName ?? '—'}<div className="text-xs text-slate-400">{s.phone}</div></> },
@@ -126,7 +126,8 @@ export function SitesPage() {
   const fields: FieldDef[] = [{ name: 'clientId', label: 'Client', type: 'combo', options: clientOpts, required: true, createOnly: true }, ...siteFields];
   return (
     <MasterPage<any> entity="sites" title="Sites" singular="Site" path="/sites" perm="sites" fields={fields} defaults={{ geofenceMeters: 300, active: true }}
-      subtitle="Every client can have one or many sites — tickets, AMCs, deliveries and attendance are tracked per site."
+      subtitle="Every client can have one or many sites. Open a site to see everything at it — orders, purchase, deliveries, billing and service."
+      to={(r) => `/sites/${r.id}`}
       filters={(q, set) => <Combo className="w-64" options={clientOpts} value={q.clientId} onChange={(v) => set('clientId', v)} placeholder="All clients" />}
       extraActions={(q) => <ExportButton path="/sites-export.xlsx" query={q} />}
       cols={[

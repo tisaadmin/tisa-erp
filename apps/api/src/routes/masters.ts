@@ -1,10 +1,10 @@
 import { Router, type Response } from 'express';
 import ExcelJS from 'exceljs';
-import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
 import {
-  amcContracts, clients, invoices, items, leadActivities, leads, salesOrders, sites, stockMovements, systemCategories, tickets, vendors,
+  amcContracts, attachments, clients, deliveryChallans, goodsReceipts, invoices, items, leadActivities, leads, paymentReceipts, purchaseOrders, quotations, requisitions, salesOrders, serviceReports, sites, stockMovements, systemCategories, tickets, vendorBills, vendors,
 } from '../db/schema';
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
@@ -32,6 +32,61 @@ const clientSchema = z.object({
   stateName: opt, stateCode: opt, pincode: opt, contactName: opt, phone: opt, email: opt,
   paymentTermsDays: z.coerce.number().int().min(0).default(30), creditLimit: z.coerce.number().nullish(), notes: opt, active: z.boolean().default(true),
   customFields: z.record(z.string(), z.unknown()).optional(),
+});
+
+/**
+ * Everything at one site — the site is the master: its orders, quotations, purchase, deliveries, billing, receipts, vendor bills,
+ * tickets, service reports, AMCs, requisitions and photos. Each section only for people who may see that module.
+ */
+r.get('/sites/:id/overview', requirePerm('sites:view'), async (req, res) => {
+  const site = await db.query.sites.findFirst({ where: eq(sites.id, req.params.id), with: { client: true } });
+  if (!site) throw notFound('Site');
+  const sid = site.id;
+  const may = (p: string) => can(req.user, p);
+  const L = 300;
+  const orders = may('orders:view') ? await db.query.salesOrders.findMany({ where: eq(salesOrders.siteId, sid), orderBy: [desc(salesOrders.date)], limit: L,
+    columns: { id: true, number: true, date: true, status: true, total: true, taxable: true, clientPoNo: true, isProject: true, sourceData: true, projectInchargeId: true } }) : [];
+  const orderIds = may('orders:view') ? (await db.select({ id: salesOrders.id }).from(salesOrders).where(eq(salesOrders.siteId, sid))).map((o) => o.id) : [];
+  const [quotes, pos, challans, invs, tks, srs, amcs, reqs, photos] = await Promise.all([
+    may('quotations:view') ? db.query.quotations.findMany({ where: eq(quotations.siteId, sid), orderBy: [desc(quotations.date)], limit: L, columns: { id: true, number: true, date: true, subject: true, status: true, total: true } }) : [],
+    may('purchase_orders:view') ? db.query.purchaseOrders.findMany({
+      where: or(eq(purchaseOrders.deliverToSiteId, sid), orderIds.length ? inArray(purchaseOrders.salesOrderId, orderIds) : undefined),
+      orderBy: [desc(purchaseOrders.date)], limit: L, columns: { id: true, number: true, date: true, status: true, total: true, salesOrderId: true },
+      with: { vendor: { columns: { id: true, name: true } } },
+    }) : [],
+    may('challans:view') ? db.query.deliveryChallans.findMany({ where: eq(deliveryChallans.siteId, sid), orderBy: [desc(deliveryChallans.date)], limit: L,
+      columns: { id: true, number: true, date: true, status: true, type: true, orderId: true } }) : [],
+    may('invoices:view') ? db.query.invoices.findMany({ where: and(eq(invoices.siteId, sid), ne(invoices.status, 'CANCELLED')), orderBy: [desc(invoices.date)], limit: L,
+      columns: { id: true, number: true, date: true, type: true, status: true, total: true, amountPaid: true, raBillNo: true, orderId: true, dueDate: true } }) : [],
+    may('tickets:view') ? db.query.tickets.findMany({ where: eq(tickets.siteId, sid), orderBy: [desc(tickets.createdAt)], limit: L,
+      columns: { id: true, number: true, title: true, status: true, priority: true, type: true, createdAt: true }, with: { assignedTo: { columns: { id: true, name: true } } } }) : [],
+    may('service_reports:view') ? db.query.serviceReports.findMany({ where: eq(serviceReports.siteId, sid), orderBy: [desc(serviceReports.visitDate)], limit: L,
+      columns: { id: true, number: true, visitDate: true, status: true }, with: { technician: { columns: { id: true, name: true } } } }) : [],
+    may('amc:view') ? db.query.amcContracts.findMany({ where: eq(amcContracts.siteId, sid), orderBy: [desc(amcContracts.startDate)] }) : [],
+    may('requisitions:view') ? db.query.requisitions.findMany({ where: eq(requisitions.siteId, sid), orderBy: [desc(requisitions.createdAt)], limit: L,
+      columns: { id: true, number: true, type: true, status: true, priority: true, createdAt: true, description: true }, with: { raisedBy: { columns: { name: true } } } }) : [],
+    db.query.attachments.findMany({ where: and(eq(attachments.siteId, sid), isNotNull(attachments.latitude)), orderBy: [desc(attachments.createdAt)], limit: 60 }),
+  ]);
+  const poIds = pos.map((p) => p.id);
+  const [grns, vbills, receipts] = await Promise.all([
+    may('grn:view') && poIds.length ? db.query.goodsReceipts.findMany({ where: inArray(goodsReceipts.poId, poIds), orderBy: [desc(goodsReceipts.date)], limit: L,
+      columns: { id: true, number: true, date: true, poId: true }, with: { vendor: { columns: { name: true } } } }) : [],
+    may('vendor_bills:view') && (poIds.length || orderIds.length) ? db.query.vendorBills.findMany({
+      where: and(ne(vendorBills.status, 'CANCELLED'), or(poIds.length ? inArray(vendorBills.poId, poIds) : undefined, orderIds.length ? inArray(vendorBills.orderId, orderIds) : undefined)),
+      orderBy: [desc(vendorBills.billDate)], limit: L, columns: { id: true, number: true, billNo: true, billDate: true, status: true, total: true, amountPaid: true }, with: { vendor: { columns: { name: true } } } }) : [],
+    may('payments:view') && invs.length ? db.query.paymentReceipts.findMany({ where: inArray(paymentReceipts.invoiceId, invs.map((i) => i.id)), orderBy: [desc(paymentReceipts.date)], limit: L }) : [],
+  ]);
+  const issued = invs.filter((i) => i.status !== 'DRAFT');
+  const billed = issued.reduce((a, i) => a + i.total, 0), received = issued.reduce((a, i) => a + i.amountPaid, 0);
+  res.json({
+    site, orders, quotations: quotes, purchaseOrders: pos, goodsReceipts: grns, vendorBills: vbills, challans, invoices: invs, receipts, tickets: tks, serviceReports: srs, amcs, requisitions: reqs, photos,
+    summary: {
+      orderValue: orders.filter((o) => !['CANCELLED', 'MERGED'].includes(o.status)).reduce((a, o) => a + o.total, 0), billed, received, outstanding: billed - received,
+      purchase: pos.filter((p) => !['CANCELLED', 'REJECTED'].includes(p.status)).reduce((a, p) => a + p.total, 0),
+      vendorBilled: vbills.reduce((a, b) => a + b.total, 0), openTickets: tks.filter((t) => ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'ON_HOLD'].includes(t.status)).length,
+      openRequisitions: reqs.filter((r) => ['PENDING', 'APPROVED', 'IN_PROGRESS'].includes(r.status)).length,
+    },
+  });
 });
 
 r.get('/clients/:id/overview', requirePerm('clients:view'), async (req, res) => {

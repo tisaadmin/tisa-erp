@@ -57,7 +57,7 @@ export function AttendancePage() {
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'today', label: 'Today' }, { value: 'log', label: 'Log' }, { value: 'muster', label: 'Monthly muster' }, { value: 'leaves', label: 'Leaves' }]} />
       {(tab === 'today' || tab === 'log') && (
         <Card pad={false}>
-          {tab === 'log' && <div className="flex gap-2 border-b border-slate-100 p-3"><DateFilter value={range} onChange={(v) => setRange({ ...range, from: v.from || today(), to: v.to || today(), dateMode: v.dateMode })} /></div>}
+          {tab === 'log' && <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3"><DateFilter value={range} onChange={(v) => setRange({ ...range, from: v.from || today(), to: v.to || today(), dateMode: v.dateMode })} /></div>}
           <Table rows={log.data} exportAs={{ name: 'attendance' }} empty="No attendance marked" cols={[
             { key: 'user', label: 'Employee', render: (r: any) => <>{r.user.name}<div className="text-xs text-slate-400">{r.user.employeeCode}</div></> },
             ...(tab === 'log' ? [{ key: 'date', label: 'Date', render: (r: any) => fmtDate(r.date) }] : []),

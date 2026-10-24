@@ -1,3 +1,4 @@
+import { SiteDetail } from './pages/SiteDetail';
 import { RaImportPage } from './pages/RaImport';
 import { CostingSettingsPage } from './components/QuoteCosting';
 import { Navigate, Route, Routes } from 'react-router-dom';
@@ -33,7 +34,7 @@ export default function App() {
         <Route path="clients" element={<ClientsPage />} />
         <Route path="clients/:id" element={<ClientDetail />} />
         <Route path="sites" element={<SitesPage />} />
-        <Route path="sites/:id" element={<SitesPage />} />
+        <Route path="sites/:id" element={<SiteDetail />} />
         <Route path="quotations" element={<QuotationsPage />} />
         <Route path="quotations/new" element={<QuotationEditor />} />
         <Route path="quotations/:id" element={<QuotationDetail />} />
