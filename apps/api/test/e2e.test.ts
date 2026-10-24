@@ -1421,13 +1421,17 @@ test('RA bill from the client sheet: order from the BOQ, previous quantities as 
 
   const body = (doc: any, extra: any = {}) => ({
     newClient: { name: doc.clientName, gstin: doc.clientGstin }, site: { mode: 'new', name: doc.project }, orderId: null, raNo: doc.raNo, gstRate: doc.gstRate,
-    lines: doc.lines.map((l: any) => ({ ...l, include: true })), ...extra,
+    lines: doc.lines.map((l: any, i: number) => ({ ...l, include: true, ...(i === 0 ? { itemId: ctx.cam.id } : { newItem: { type: 'PRODUCT', categoryId: ctx.cam.categoryId, name: 'RA test outdoor bullet camera' } }) })), ...extra,
   });
   assert.equal((await call('tech', 'POST', `/ra-imports/${p.id}/commit`, body(p.doc))).status, 403);
+  assert.ok(p.items[0].suggestions.length >= 0 && p.items.length === 2, 'item suggestions per sheet line');
+  const noItem = await call('admin', 'POST', `/ra-imports/${p.id}/commit`, { ...body(p.doc), lines: p.doc.lines.map((l: any) => ({ ...l, include: true })) });
+  assert.equal(noItem.status, 400); assert.match(noItem.data.error, /inventory item/);
   const done = await ok('admin', 'POST', `/ra-imports/${p.id}/commit`, body(p.doc));
   assert.equal(done.orderCreated, true); assert.equal(done.openingTaxable, prevExpected);
   const o = await ok('admin', 'GET', `/orders/${done.orderId}`);
   assert.equal(o.taxable, 10 * 16200 + 6 * 10000); assert.equal(o.items[0].deliveredQty, 10); assert.equal(o.items[0].installedQty, 10);
+  assert.equal(o.items[0].itemId, ctx.cam.id); assert.ok(o.items[1].itemId, 'new item added to inventory and linked'); assert.equal(done.itemsCreated, 1);
   const inv = await ok('admin', 'GET', `/invoices/${done.invoiceId}`);
   assert.equal(inv.type, 'RUNNING_BILL'); assert.equal(inv.taxable, 4 * 3240 + 6 * 1620); assert.match(inv.notes, /RA Bill No\. 020/);
   // billing status: earlier RA bills count as billed
@@ -1443,7 +1447,9 @@ test('RA bill from the client sheet: order from the BOQ, previous quantities as 
   // next month: RA 021 sheet matches the same order by Sr. No. — previous now includes RA 020 (already in the ERP), current = handover
   const p2 = await ok('accounts', 'POST', '/ra-imports/parse', undefined, await make([[[10, 0], [10, 0], [6, 0], [0, 10]], [[6, 0], [0, 0], [0, 0], [0, 0]]]));
   assert.equal(p2.orderId, done.orderId, 'the project order is found by its lines');
-  const d2 = await ok('accounts', 'POST', `/ra-imports/${p2.id}/commit`, { ...body(p2.doc), newClient: null, clientId: o.client.id, site: { mode: 'existing', siteId: o.site.id }, orderId: done.orderId, raNo: '021' });
+  const linked = p2.orders.find((x: any) => x.id === done.orderId).linked;
+  assert.equal(linked['1.1'], ctx.cam.id, 'next sheet shows the items already linked on the order');
+  const d2 = await ok('accounts', 'POST', `/ra-imports/${p2.id}/commit`, { ...body(p2.doc), lines: p2.doc.lines.map((l: any) => ({ ...l, include: true, itemId: linked[l.key] })), newClient: null, clientId: o.client.id, site: { mode: 'existing', siteId: o.site.id }, orderId: done.orderId, raNo: '021' });
   assert.equal(d2.orderCreated, false); assert.equal(d2.openings, 0, 'nothing new billed outside the ERP');
   assert.equal((await ok('accounts', 'GET', `/invoices/${d2.invoiceId}`)).taxable, 10 * 810);
   // a break-up that does not add up is refused

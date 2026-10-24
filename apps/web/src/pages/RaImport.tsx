@@ -10,14 +10,16 @@ import { Badge, Button, Card, Field, Input, KV, PageHeader, Select, cx } from '.
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { inr, qty, STAGE_LABEL, toInputDate } from '../lib/format';
-import { useClients } from '../lib/hooks';
+import { useCategories, useClients, useItems } from '../lib/hooks';
 
 type Stage = { stage: string; label: string; percent: number; rate: number | null; prevQty: number; currQty: number; cumQty: number; prevAmt: number | null; currAmt: number | null };
-type Line = { key: string; section: string | null; group: string | null; description: string; unit: string | null; qty: number; rate: number; remark: string | null; stages: Stage[]; include?: boolean };
+type Line = { key: string; section: string | null; group: string | null; description: string; unit: string | null; qty: number; rate: number; remark: string | null; stages: Stage[]; include?: boolean;
+  /** inventory item for this line — mandatory */ itemId?: string | null; newItem?: { type: 'PRODUCT' | 'ACCESSORY' | 'SERVICE'; categoryId: string | null; name: string } | null };
+type ItemSug = { key: string; suggestions: { id: string; name: string; sku: string; brand: string | null; unit: string; score: number }[]; type: 'PRODUCT' | 'SERVICE'; categoryId: string | null };
 type Doc = { clientName: string | null; clientGstin: string | null; project: string | null; raNo: string | null; billMonth: string | null; gstRate: number | null; lines: Line[]; skipped: string[]; warnings: string[]; totals: { prev: number; curr: number; cum: number } };
-type OrderSug = { id: string; number: string; date: string; taxable: number; site: { id: string; name: string } | null; title: string | null; matchedLines: number; lines: number };
+type OrderSug = { id: string; number: string; date: string; taxable: number; site: { id: string; name: string } | null; title: string | null; matchedLines: number; lines: number; linked: Record<string, string> };
 type Sug = { clients: { id: string; name: string; code: string; gstin: string | null; reason: string }[]; clientId: string | null; orders: OrderSug[]; orderId: string | null; sites: { id: string; name: string; code: string; address: string | null }[]; siteId: string | null };
-type Parsed = Sug & { id: string; fileName: string; doc: Doc };
+type Parsed = Sug & { id: string; fileName: string; doc: Doc; items: ItemSug[] };
 const STAGES = ['ADVANCE', 'DELIVERY', 'INSTALLATION', 'TESTING', 'COMMISSIONING', 'HANDOVER'];
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -25,6 +27,11 @@ export function RaImportPage() {
   const nav = useNavigate();
   const { can } = useAuth();
   const clients = useClients();
+  const itemsQ = useItems();
+  const cats = useCategories();
+  const itemOpts = useMemo(() => (itemsQ.data?.data ?? []).map((i) => ({ value: i.id, label: i.name, sub: [i.sku, i.brand, (i as any).model].filter(Boolean).join(' · ') })), [itemsQ.data]);
+  const catOpts = (cats.data?.data ?? []).map((c) => ({ value: c.id, label: c.name }));
+  const itemName = (id?: string | null) => (itemsQ.data?.data ?? []).find((i) => i.id === id)?.name ?? null;
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [p, setP] = useState<Parsed | null>(null);
@@ -49,7 +56,10 @@ export function RaImportPage() {
     try {
       const fd = new FormData(); fd.append('file', file);
       const r = await api<Parsed>('/ra-imports/parse', { form: fd });
-      setP(r); setLines(r.doc.lines.map((l) => ({ ...l, include: true })));
+      // a strong match is pre-selected; anything else must be picked
+      const sugOf = new Map(r.items.map((x) => [x.key, x]));
+      const linked = r.orders.find((o) => o.id === r.orderId)?.linked ?? {};
+      setP(r); setLines(r.doc.lines.map((l) => { const g = sugOf.get(l.key); const best = g?.suggestions[0]; return { ...l, include: true, itemId: linked[l.key] ?? (best && best.score >= 0.9 ? best.id : null), newItem: null }; }));
       setSug(r); setClientId(r.clientId); setClientMode(r.clientId || r.clients.length ? 'existing' : 'new');
       setNewClient({ name: r.doc.clientName ?? '', gstin: r.doc.clientGstin ?? '' });
       setOrderId(r.orderId); setSiteId(r.siteId); setSiteName(r.doc.project ?? '');
@@ -67,6 +77,12 @@ export function RaImportPage() {
     } catch (e) { toast.error((e as Error).message); }
   };
   const order = sug?.orders.find((o) => o.id === orderId) ?? null;
+  const linkedMap = order?.linked ?? {};
+  const pickOrder = (id: string | null) => {
+    setOrderId(id);
+    const lk = sug?.orders.find((o) => o.id === id)?.linked ?? {};
+    setLines((ls) => ls.map((l) => (lk[l.key] ? { ...l, itemId: lk[l.key], newItem: null } : l)));
+  };
   // an existing order brings its own site
   const effSiteMode = order ? 'order' : siteMode;
 
@@ -77,7 +93,9 @@ export function RaImportPage() {
   const stageAmt = (l: Line, s: Stage, q: number) => r2((l.rate * s.percent * q) / 100);
   const prevTotal = r2(inc.reduce((a, l) => a + l.stages.reduce((b, s) => b + (s.prevAmt ?? stageAmt(l, s, s.prevQty)), 0), 0));
   const currTotal = r2(inc.reduce((a, l) => a + l.stages.reduce((b, s) => b + stageAmt(l, s, s.currQty), 0), 0));
+  const noItem = lines.filter((l) => l.include && !l.itemId && !(l.newItem && l.newItem.categoryId && l.newItem.name.trim().length >= 2));
   const problems = [
+    noItem.length > 0 && `Pick the inventory item for ${noItem.length} line${noItem.length > 1 ? 's' : ''} (${noItem.slice(0, 5).map((l) => l.key).join(', ')}${noItem.length > 5 ? '…' : ''})`,
     clientMode === 'existing' && !clientId && 'Choose the client (or add it as a new client)',
     clientMode === 'new' && newClient.name.trim().length < 2 && 'Enter the client name',
     !order && siteMode === 'existing' && !siteId && 'Choose the site, or add the project as a new site',
@@ -96,7 +114,7 @@ export function RaImportPage() {
           clientId: clientMode === 'existing' ? clientId : null, newClient: clientMode === 'new' ? newClient : null,
           site: order ? (order.site ? { mode: 'existing', siteId: order.site.id } : { mode: 'none' }) : siteMode === 'existing' ? { mode: 'existing', siteId } : siteMode === 'new' ? { mode: 'new', name: siteName } : { mode: 'none' },
           orderId, raNo: hdr.raNo || null, billDate: hdr.billDate || undefined, gstRate: hdr.gstRate, createBill: hdr.createBill,
-          lines: lines.map((l) => ({ key: l.key, include: !!l.include, description: l.description, unit: l.unit || 'Nos', qty: l.qty, rate: l.rate, stages: l.stages.map((s) => ({ stage: s.stage, percent: Number(s.percent), prevQty: s.prevQty, prevAmt: s.prevAmt, currQty: s.currQty })) })),
+          lines: lines.map((l) => ({ key: l.key, include: !!l.include, itemId: l.itemId ?? null, newItem: !l.itemId && l.newItem ? { type: l.newItem.type, categoryId: l.newItem.categoryId, name: l.newItem.name } : null, description: l.description, unit: l.unit || 'Nos', qty: l.qty, rate: l.rate, stages: l.stages.map((s) => ({ stage: s.stage, percent: Number(s.percent), prevQty: s.prevQty, prevAmt: s.prevAmt, currQty: s.currQty })) })),
         },
       });
       toast.success(`${r.orderCreated ? `Order ${r.orderNumber} made from the sheet` : `Order ${r.orderNumber}`} · ${inr(r.openingTaxable)} recorded as billed earlier${r.invoiceId ? ` · draft RA bill ${inr(r.billTotal)}` : ''}`);
@@ -104,7 +122,8 @@ export function RaImportPage() {
     } catch (e) { toast.error((e as Error).message); } finally { setSaving(false); }
   };
 
-  const shown = showAll ? lines : lines.filter((l) => l.stages.some((s) => s.prevQty || s.currQty) || !l.include);
+  // lines still needing an inventory item are always shown
+  const shown = showAll ? lines : lines.filter((l) => l.stages.some((s) => s.prevQty || s.currQty) || !l.include || (!l.itemId && !l.newItem));
   let lastSection: string | null = null;
   return (
     <div className="space-y-4">
@@ -151,7 +170,7 @@ export function RaImportPage() {
                 </div>
                 <div>
                   <Field label="Project order">
-                    <Select value={orderId ?? ''} onChange={(e) => setOrderId(e.target.value || null)} placeholder={can('orders:create') ? 'Make a new order from this sheet' : 'Choose the order…'}
+                    <Select value={orderId ?? ''} onChange={(e) => pickOrder(e.target.value || null)} placeholder={can('orders:create') ? 'Make a new order from this sheet' : 'Choose the order…'}
                       options={(sug?.orders ?? []).map((o) => ({ value: o.id, label: `${o.number}${o.site ? ` · ${o.site.name}` : ''} — ${o.matchedLines}/${p.doc.lines.length} lines match` }))} />
                   </Field>
                   {order && order.matchedLines < lines.filter((l) => l.include).length && <p className="mt-1 text-xs text-amber-700">{order.matchedLines} of the sheet's lines are on {order.number} (by Sr. No.). Lines that are not will be refused — untick them or make a new order.</p>}
@@ -177,7 +196,7 @@ export function RaImportPage() {
             actions={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show items with nothing billed yet</label>}>
             <div className="overflow-x-auto">
               <table className="tbl min-w-[1250px]">
-                <thead><tr><th className="w-8" /><th className="w-16">Sr.</th><th className="min-w-72">Item</th><th className="w-20 text-right">Qty</th><th className="w-28 text-right">Rate</th>
+                <thead><tr><th className="w-8" /><th className="w-16">Sr.</th><th className="min-w-72">Item (client BOQ)</th><th className="min-w-72">Inventory item <span className="text-red-500">*</span></th><th className="w-20 text-right">Qty</th><th className="w-28 text-right">Rate</th>
                   <th className="min-w-44">Break-up</th><th className="min-w-20 text-right">%</th><th className="min-w-24 text-right">Previous</th><th className="min-w-24 text-right">Current</th><th className="min-w-24 text-right">Cumulative</th><th className="min-w-32 text-right">This bill</th></tr></thead>
                 <tbody>
                   {shown.map((l) => {
@@ -186,7 +205,7 @@ export function RaImportPage() {
                     const bad = sumPct(l) !== 100;
                     return (
                       <Fragment key={l.key}>
-                        {head && <tr className="bg-slate-50"><td colSpan={11} className="py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">{head}</td></tr>}
+                        {head && <tr className="bg-slate-50"><td colSpan={12} className="py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">{head}</td></tr>}
                         {l.stages.map((s, k) => (
                           <tr key={s.stage + k} className={cx(!l.include && 'opacity-45', k < l.stages.length - 1 && '[&>td]:border-b-0')}>
                             {k === 0 && <>
@@ -194,6 +213,8 @@ export function RaImportPage() {
                               <td rowSpan={l.stages.length} className="align-top pt-3 text-slate-500">{l.key}</td>
                               <td rowSpan={l.stages.length} className="align-top"><div className="line-clamp-3 text-sm" title={l.description}>{l.group ? <span className="text-slate-400">{l.group} — </span> : null}{l.description}</div>
                                 {bad && <div className="mt-1 flex items-center gap-1 text-xs text-red-600"><AlertTriangle className="size-3" />break-up {sumPct(l)}% — must be 100%</div>}</td>
+                              <td rowSpan={l.stages.length} className="align-top"><ItemPick l={l} locked={!!linkedMap[l.key]} lockedName={itemName(linkedMap[l.key])} sug={p.items.find((x) => x.key === l.key)} itemOpts={itemOpts} catOpts={catOpts} canCreate={can('items:create')}
+                                onChange={(patch) => setLine(i, patch)} /></td>
                               <td rowSpan={l.stages.length} className="num align-top pt-3">{qty(l.qty)} {l.unit}</td>
                               <td rowSpan={l.stages.length} className="num align-top pt-3">{inr(l.rate)}</td>
                             </>}
@@ -234,6 +255,36 @@ export function RaImportPage() {
           <p className="text-right text-xs text-slate-400">The bill is created as a draft — check it, then issue it from the invoice page. <Link className="underline" to="/invoices">Invoices</Link></p>
         </>
       )}
+    </div>
+  );
+}
+
+/** Mandatory inventory item for a sheet line: an existing item (suggestions offered), or — for Stores — a new item. */
+function ItemPick({ l, locked, lockedName, sug, itemOpts, catOpts, canCreate, onChange }: {
+  l: Line; locked: boolean; lockedName: string | null; sug?: ItemSug; itemOpts: { value: string; label: string; sub?: string }[]; catOpts: { value: string; label: string }[]; canCreate: boolean;
+  onChange: (patch: Partial<Line>) => void;
+}) {
+  if (locked) return <div className="pt-2 text-sm"><CheckCircle2 className="mr-1 inline size-4 text-emerald-600" />{lockedName ?? 'Linked on the order'}<div className="text-xs text-slate-400">as on the order</div></div>;
+  const adding = !l.itemId && !!l.newItem;
+  const title = l.description.split('\n')[0].slice(0, 120);
+  return (
+    <div className="space-y-1">
+      {!adding && <>
+        <Combo options={itemOpts} value={l.itemId ?? null} onChange={(v) => onChange({ itemId: v, newItem: null })} placeholder="Search inventory…" className={cx(!l.itemId && l.include && '[&_.input]:border-amber-400')} />
+        {!l.itemId && sug && sug.suggestions.length > 0 && <div className="flex flex-wrap gap-1">{sug.suggestions.slice(0, 3).map((s) => (
+          <button key={s.id} type="button" onClick={() => onChange({ itemId: s.id, newItem: null })} className="max-w-full truncate rounded-full border border-slate-200 px-2 py-0.5 text-left text-xs text-slate-600 hover:bg-slate-50" title={s.name}>
+            {s.name} <span className="text-slate-400">· {Math.round(s.score * 100)}%</span></button>))}</div>}
+        {canCreate && !l.itemId && <button type="button" className="text-xs text-brand-700 underline" onClick={() => onChange({ itemId: null, newItem: { type: sug?.type ?? 'PRODUCT', categoryId: sug?.categoryId ?? null, name: title } })}>Not in inventory — add as new item</button>}
+        {!canCreate && !l.itemId && <p className="text-[11px] text-slate-400">Not in inventory? Ask Stores to add it.</p>}
+      </>}
+      {adding && <div className="space-y-1 rounded-md border border-amber-200 bg-amber-50/60 p-2">
+        <Input value={l.newItem!.name} onChange={(e) => onChange({ newItem: { ...l.newItem!, name: e.target.value } })} placeholder="Item name for inventory" />
+        <div className="grid grid-cols-2 gap-1">
+          <Select value={l.newItem!.categoryId ?? ''} onChange={(e) => onChange({ newItem: { ...l.newItem!, categoryId: e.target.value || null } })} options={catOpts} placeholder="System…" className={cx(!l.newItem!.categoryId && 'border-amber-400')} />
+          <Select value={l.newItem!.type} onChange={(e) => onChange({ newItem: { ...l.newItem!, type: e.target.value as 'PRODUCT' | 'ACCESSORY' | 'SERVICE' } })} options={[{ value: 'PRODUCT', label: 'Product' }, { value: 'ACCESSORY', label: 'Accessory' }, { value: 'SERVICE', label: 'Service' }]} />
+        </div>
+        <button type="button" className="text-xs text-slate-500 underline" onClick={() => onChange({ newItem: null })}>Pick an existing item instead</button>
+      </div>}
     </div>
   );
 }
