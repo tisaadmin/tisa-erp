@@ -23,7 +23,7 @@ import { can, requirePerm } from '../middleware/auth';
 import { parseRaBill, type ParsedRaBill } from '../import/raBill';
 import { orderBillingStatus, STAGES } from '../services/billing';
 import { getCompany } from '../services/company';
-import { createSalesOrder } from '../services/orders';
+import { createSalesOrder, recalcOrder } from '../services/orders';
 import { createRunningBill } from './billing';
 
 const r = Router();
@@ -235,6 +235,17 @@ r.post('/ra-imports/:id/commit', perm, async (req, res) => {
       return { l, it: it! };
     });
     if (missing.length) throw badRequest(`${missing.length} line${missing.length > 1 ? 's' : ''} of the sheet ${missing.length > 1 ? 'are' : 'is'} not on order ${orderNumber}: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''} — untick ${missing.length > 1 ? 'them' : 'it'}, or make a new order from the sheet`);
+    // the sheet's order (BOQ) quantity is more than the order line: raise it — for orders made from the client's sheet, or by people who may edit orders
+    const order = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, orderId), columns: { sourceData: true } });
+    const mayRaise = (order?.sourceData as { system?: string } | null)?.system === 'RA sheet' || can(req.user, 'orders:edit');
+    let raised = 0;
+    for (const p of pairs) {
+      if (!(p.l.qty > p.it.qty + 1e-9)) continue;
+      if (!mayRaise) throw badRequest(`${p.l.key}: order quantity ${p.l.qty} on the sheet but ${p.it.qty} on ${orderNumber} — ask for the extra quantity on the order (needs approval), or ask someone who may edit orders to upload`);
+      await tx.update(salesOrderItems).set({ qty: p.l.qty }).where(eq(salesOrderItems.id, p.it.id));
+      p.it.qty = p.l.qty; raised++;
+    }
+    if (raised) await recalcOrder(tx, orderId);
     for (const { l, it } of pairs) {
       if (Math.abs(it.rate - l.rate) > 0.01) throw badRequest(`${l.key}: rate ${l.rate} on the sheet but ${it.rate} on ${orderNumber}`);
       if (!it.sourceKey) await tx.update(salesOrderItems).set({ sourceKey: l.key }).where(eq(salesOrderItems.id, it.id));
@@ -278,7 +289,7 @@ r.post('/ra-imports/:id/commit', perm, async (req, res) => {
       invoice = { id: inv.id, total: inv.total };
     }
     const summary = {
-      orderId, orderNumber, orderCreated: created, invoiceId: invoice?.id ?? null, billTotal: invoice?.total ?? 0, billLines: billLines.length,
+      orderId, orderNumber, orderCreated: created, qtyRaised: raised, invoiceId: invoice?.id ?? null, billTotal: invoice?.total ?? 0, billLines: billLines.length,
       itemsCreated: distinct.length, openings: openingRows.length, openingTaxable: r2(openingRows.reduce((a, o) => a + Number(o.taxable), 0)), lines: lines.length,
     };
     await tx.update(importJobs).set({ status: 'DONE', summary }).where(eq(importJobs.id, job.id));

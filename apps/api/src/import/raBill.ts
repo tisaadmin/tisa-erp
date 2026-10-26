@@ -18,10 +18,14 @@ export type RaLine = {
   section: string | null; group: string | null;
   description: string; unit: string | null; qty: number; rate: number;
   remark: string | null; stages: RaStage[];
+  /** false when the sheet has no order (BOQ) quantity for the line and the cumulative quantity was used */
+  qtyFromSheet?: boolean;
 };
 export type ParsedRaBill = {
   clientName: string | null; clientGstin: string | null; project: string | null; raNo: string | null; billMonth: string | null;
   gstRate: number | null; lines: RaLine[]; skipped: string[]; warnings: string[];
+  /** heading of the column the order (BOQ) quantities were read from; null = not found */
+  qtyColumn?: string | null;
   totals: { prev: number; curr: number; cum: number };
 };
 
@@ -36,6 +40,8 @@ const numOf = (v: ExcelJS.CellValue): number | null => {
 };
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
 const r2 = (n: number) => Math.round(n * 100) / 100;
+/** "Description", "Item Description", "Description of Work", "Particulars", "Name of Item" */
+const DESC_RE = /^(item\s*)?(description|particulars)|^name\s*of\s*(the\s*)?item|^description\s*of/i;
 const GSTIN_RE = /\b(\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/g;
 
 export async function parseRaBill(buf: Buffer, fileName: string, ownGstin?: string | null, ownName?: string | null): Promise<ParsedRaBill> {
@@ -49,7 +55,7 @@ export async function parseRaBill(buf: Buffer, fileName: string, ownGstin?: stri
     w.eachRow((row, r) => {
       if (ws) return;
       const texts = (row.values as ExcelJS.CellValue[]).map((v) => clean(cellText(v)).toLowerCase());
-      if (texts.some((t) => /^(description|particulars)/.test(t)) && texts.some((t) => /^previous/.test(t)) && texts.some((t) => /^current/.test(t))) { ws = w; hdrRow = r; }
+      if (texts.some((t) => DESC_RE.test(t)) && texts.some((t) => /^previous/.test(t)) && texts.some((t) => /^current/.test(t))) { ws = w; hdrRow = r; }
     });
     if (ws) break;
   }
@@ -70,17 +76,36 @@ export async function parseRaBill(buf: Buffer, fileName: string, ownGstin?: stri
     for (const r of [hdrRow + 1, hdrRow + 2]) for (let c = start; c <= Math.min(width, start + 2); c++) if (/^(qty|quantity)/i.test(txt(r, c))) return c;
     return start;
   };
+  /**
+   * The order (BOQ) quantity: a quantity column left of Previous — "Total", "Qty", "BOQ Qty", "Order / Tender / Contract / WO / PO Qty",
+   * "Qty as per BOQ", or a heading over two rows ("BOQ" over "Qty"). Never the Unit, Rate or Amount column.
+   */
+  const boqQtyCol = () => {
+    const limit = Math.min(prevC ?? Infinity, currC ?? Infinity, cumC ?? Infinity);
+    const head = (c: number) => [hdrRow, hdrRow + 1, hdrRow + 2].map((r) => txt(r, c)).filter(Boolean).join(' ').toLowerCase();
+    const strong = /\b(boq|order|ordered|tender|contract|wo|po|work\s*order|agreement|original|estimated|sanctioned|awarded|total)\b.*\b(qty|quantity)\b|\b(qty|quantity)\b.*\b(boq|order|tender|contract|wo|po|agreement)\b|^total(\s+(qty|quantity))?$/;
+    const weak = /^(qty|quantity|qnty|qty\.)\b/;
+    const cand: number[] = [];
+    for (let c = 1; c < Math.min(width + 1, limit); c++) {
+      const h = head(c);
+      if (!h || /rate|amount|amt|value|unit\b|uom|description|particular|remark|make|brand/.test(h.replace(/\b(qty|quantity)\b.*/, ''))) continue;
+      if (strong.test(h)) return c;
+      if (weak.test(h)) cand.push(c);
+    }
+    return cand[0] ?? null;
+  };
   const cols = {
-    sr: find(/^(sr\.?|sl\.?|s\.?)\s*no\.?$|^item\s*no/i, [hdrRow]),
-    desc: find(/^(description|particulars)/i, [hdrRow])!,
+    sr: find(/^(sr|sl|s)\.?\s*(no|n)\.?$|^sr\.?$|^no\.?$|^item(\s*no\.?)?$|^#$|^serial/i, [hdrRow]) ?? find(/^(sr|sl|s)\.?\s*(no|n)\.?$/i, [hdrRow + 1]),
+    desc: find(DESC_RE, [hdrRow])!,
     unit: find(/^(unit|uom)$/i, [hdrRow]),
-    qty: (() => { const t = find(/^(total|qty|quantity|boq\s*qty)$/i, [hdrRow]); return t != null && t < (prevC ?? Infinity) ? t : null; })(),
+    qty: boqQtyCol(),
     rate: find(/rate/i, [hdrRow]),
     remark: find(/^remarks?$/i),
     prev: qtyUnder(prevC), curr: qtyUnder(currC), cum: qtyUnder(cumC),
   };
   const amtCol = (q: number | null) => (q != null && /amount|amt|value|rs/i.test(`${txt(hdrRow + 1, q + 1)} ${txt(hdrRow + 2, q + 1)}`) ? q + 1 : null);
   const prevAmtC = amtCol(cols.prev), currAmtC = amtCol(cols.curr);
+  const qtyColFound = cols.qty != null;
   if (cols.prev == null || cols.curr == null) throw badRequest('Could not find the Previous / Current quantity columns');
 
   // ── header block above the table: company, project, bill no., month
@@ -119,6 +144,7 @@ export async function parseRaBill(buf: Buffer, fileName: string, ownGstin?: stri
   const finish = () => {
     if (!cur) return;
     const maxCum = Math.max(0, ...cur.stages.map((s) => s.cumQty));
+    cur.qtyFromSheet = cur.qty > 0 || !(maxCum > 0);
     if (!(cur.qty > 0)) cur.qty = maxCum;
     // no quantity and nothing billed: a rate-only item (rate agreed; quantity added later on approval) — kept with quantity 0
     if (!(cur.qty > 0) && !cur.stages.some((s) => s.prevQty || s.currQty)) { if (!(cur.rate > 0)) { skipped.push(`${cur.key} ${cur.description.split('\n')[0].slice(0, 60)}`); cur = null; return; } rateOnly.push(cur.key); }
@@ -225,10 +251,14 @@ export async function parseRaBill(buf: Buffer, fileName: string, ownGstin?: stri
 
   if (rateOnly.length) warnings.push(`${rateOnly.length} rate-only item${rateOnly.length > 1 ? 's' : ''} (rate agreed, no quantity yet): ${rateOnly.slice(0, 12).join(', ')}${rateOnly.length > 12 ? '…' : ''} — kept on the order with quantity 0; add quantities later with approval`);
   if (skipped.length) warnings.push(`${skipped.length} BOQ item${skipped.length > 1 ? 's have' : ' has'} no quantity, no rate and nothing billed — left out: ${skipped.slice(0, 6).join('; ')}${skipped.length > 6 ? '…' : ''}`);
+  const noQty = lines.filter((l) => l.qtyFromSheet === false && l.qty > 0).map((l) => l.key);
+  if (!qtyColFound) warnings.unshift('The order (BOQ) quantity column was not found in the sheet — each item\'s order quantity is set to the cumulative quantity so far. Correct the Order qty column before saving (or name the column "BOQ Qty" in the sheet).');
+  else if (noQty.length) warnings.push(`${noQty.length} item${noQty.length > 1 ? 's have' : ' has'} no order (BOQ) quantity in the sheet — the cumulative quantity is used: ${noQty.slice(0, 12).join(', ')}${noQty.length > 12 ? '…' : ''}`);
   if (gstRate == null) warnings.push('No GST line (CGST / SGST / IGST @ x%) was found — 18% is used');
 
   return {
     clientName: clientName?.replace(/\s+/g, ' ') ?? null, clientGstin, project: project?.replace(/\s+/g, ' ') ?? null, raNo, billMonth,
     gstRate, lines, skipped, warnings, totals,
+    qtyColumn: qtyColFound ? [hdrRow, hdrRow + 1].map((r) => txt(r, cols.qty!)).filter(Boolean).join(' ') : null,
   };
 }

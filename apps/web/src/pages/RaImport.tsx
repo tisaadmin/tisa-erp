@@ -13,10 +13,10 @@ import { inr, qty, STAGE_LABEL, toInputDate } from '../lib/format';
 import { useCategories, useClients, useItems } from '../lib/hooks';
 
 type Stage = { stage: string; label: string; percent: number; rate: number | null; prevQty: number; currQty: number; cumQty: number; prevAmt: number | null; currAmt: number | null };
-type Line = { key: string; section: string | null; group: string | null; description: string; unit: string | null; qty: number; rate: number; remark: string | null; stages: Stage[]; include?: boolean;
+type Line = { key: string; section: string | null; group: string | null; description: string; unit: string | null; qty: number; rate: number; remark: string | null; stages: Stage[]; include?: boolean; qtyFromSheet?: boolean;
   /** inventory item for this line — mandatory */ itemId?: string | null; newItem?: { type: 'PRODUCT' | 'ACCESSORY' | 'SERVICE'; categoryId: string | null; name: string } | null };
 type ItemSug = { key: string; suggestions: { id: string; name: string; sku: string; brand: string | null; unit: string; score: number }[]; type: 'PRODUCT' | 'SERVICE'; categoryId: string | null };
-type Doc = { clientName: string | null; clientGstin: string | null; project: string | null; raNo: string | null; billMonth: string | null; gstRate: number | null; lines: Line[]; skipped: string[]; warnings: string[]; totals: { prev: number; curr: number; cum: number } };
+type Doc = { clientName: string | null; clientGstin: string | null; project: string | null; raNo: string | null; billMonth: string | null; gstRate: number | null; lines: Line[]; skipped: string[]; warnings: string[]; totals: { prev: number; curr: number; cum: number }; qtyColumn?: string | null };
 type OrderSug = { id: string; number: string; date: string; taxable: number; site: { id: string; name: string } | null; title: string | null; matchedLines: number; lines: number; linked: Record<string, string> };
 type Sug = { clients: { id: string; name: string; code: string; gstin: string | null; reason: string }[]; clientId: string | null; orders: OrderSug[]; orderId: string | null; sites: { id: string; name: string; code: string; address: string | null }[]; siteId: string | null };
 type Parsed = Sug & { id: string; fileName: string; doc: Doc; items: ItemSug[] };
@@ -194,9 +194,10 @@ export function RaImportPage() {
 
           <Card title={`Items (${inc.length} of ${lines.length} included)`} pad={false}
             actions={<label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> Show items with nothing billed yet</label>}>
+            <p className={cx('border-b border-slate-100 px-4 py-2 text-xs', p.doc.qtyColumn ? 'text-slate-500' : 'bg-amber-50 text-amber-800')}>{p.doc.qtyColumn ? `Order qty read from the sheet's "${p.doc.qtyColumn}" column · Previous = billed in earlier RA bills · Current = this RA bill · Cumulative = supplied / installed till now` : 'Order qty column not found in the sheet — enter the order (BOQ) quantities (amber boxes)'}</p>
             <div className="overflow-x-auto">
               <table className="tbl min-w-[1250px]">
-                <thead><tr><th className="w-8" /><th className="w-16">Sr.</th><th className="min-w-72">Item (client BOQ)</th><th className="min-w-72">Inventory item <span className="text-red-500">*</span></th><th className="w-20 text-right">Qty</th><th className="w-28 text-right">Rate</th>
+                <thead><tr><th className="w-8" /><th className="w-16">Sr.</th><th className="min-w-72">Item (client BOQ)</th><th className="min-w-72">Inventory item <span className="text-red-500">*</span></th><th className="min-w-28 text-right" title="Order (BOQ) quantity — what the client ordered in all">Order qty</th><th className="w-28 text-right">Rate</th>
                   <th className="min-w-44">Break-up</th><th className="min-w-20 text-right">%</th><th className="min-w-24 text-right">Previous</th><th className="min-w-24 text-right">Current</th><th className="min-w-24 text-right">Cumulative</th><th className="min-w-32 text-right">This bill</th></tr></thead>
                 <tbody>
                   {shown.map((l) => {
@@ -215,7 +216,10 @@ export function RaImportPage() {
                                 {bad && <div className="mt-1 flex items-center gap-1 text-xs text-red-600"><AlertTriangle className="size-3" />break-up {sumPct(l)}% — must be 100%</div>}</td>
                               <td rowSpan={l.stages.length} className="align-top"><ItemPick l={l} locked={!!linkedMap[l.key]} lockedName={itemName(linkedMap[l.key])} sug={p.items.find((x) => x.key === l.key)} itemOpts={itemOpts} catOpts={catOpts} canCreate={can('items:create')}
                                 onChange={(patch) => setLine(i, patch)} /></td>
-                              <td rowSpan={l.stages.length} className="num align-top pt-3">{qty(l.qty)} {l.unit}</td>
+                              <td rowSpan={l.stages.length} className="align-top pt-2">
+                                <input type="number" min={0} step="any" aria-label={`Order qty ${l.key}`} title={l.qtyFromSheet === false ? 'Not in the sheet — set to the cumulative quantity. Enter the order (BOQ) quantity.' : 'Order (BOQ) quantity from the sheet'}
+                                  className={cx('input py-0.5 text-right text-sm', l.qtyFromSheet === false && 'border-amber-400 bg-amber-50')} value={l.qty} onChange={(e) => setLine(i, { qty: Number(e.target.value) || 0, qtyFromSheet: true })} />
+                                <div className="mt-0.5 text-right text-[11px] text-slate-400">{l.unit}{l.qtyFromSheet === false ? ' · check' : ''}</div></td>
                               <td rowSpan={l.stages.length} className="num align-top pt-3">{inr(l.rate)}</td>
                             </>}
                             <td><select className="input py-0.5 text-sm" value={s.stage} onChange={(e) => setStage(i, k, { stage: e.target.value })}>{STAGES.map((x) => <option key={x} value={x}>{STAGE_LABEL[x].replace('Against ', '')}</option>)}</select>

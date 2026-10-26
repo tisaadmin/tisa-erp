@@ -1569,3 +1569,45 @@ test('site page: everything under one site — orders, quotes, POs, bills, recei
   if (t) assert.ok(!t.invoices.length && !t.receipts.length && !t.summary.billed, 'technician does not see billing on the site page');
   assert.equal((await call('admin', 'GET', '/sites/00000000-0000-0000-0000-000000000000/overview')).status, 404);
 });
+
+test('RA bill sheet: order (BOQ) quantity read from differently named columns; missing → flagged and editable; raises the order on re-upload', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const make = (hdr: (string | null)[], hdr2: (string | null)[], rows: { sr: any; desc: string; qty: number | null; rate: number; st: [number, number][] }[], qtyCol: boolean) => {
+    const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('RA 7');
+    ws.getCell('A1').value = 'CLIENT NAME: BOQ QTY TEST LLP'; ws.getCell('A2').value = 'PROJECT: BOQ TEST SITE';
+    ws.getRow(4).values = hdr; ws.getRow(5).values = hdr2;
+    let r = 6;
+    for (const it of rows) {
+      ws.getRow(r++).values = qtyCol ? [it.sr, it.desc, 'Nos', it.qty, it.rate, (it.qty ?? 0) * it.rate] : [it.sr, it.desc, 'Nos', it.rate];
+      const split = [[70, 'Against supply'], [30, 'Against installation']] as const;
+      split.forEach(([pc, label], k) => { const [pv, cu] = it.st[k]; const rate = (it.rate * pc) / 100; ws.getRow(r++).values = qtyCol ? [null, `${pc}% ${label}`, null, null, rate, null, pv, pv * rate, cu, cu * rate, pv + cu, (pv + cu) * rate] : [null, `${pc}% ${label}`, null, rate, pv, pv * rate, cu, cu * rate, pv + cu, (pv + cu) * rate]; });
+    }
+    ws.getRow(r++).values = [null, 'CGST @ 9%'];
+    return wb.xlsx.writeBuffer().then((b) => { const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(b as ArrayBuffer)]), 'RA 7.xlsx'); return fd; });
+  };
+  const rows = [{ sr: 'A1', desc: 'Addressable smoke detector', qty: 120, rate: 1780, st: [[60, 10], [20, 5]] as [number, number][] }, { sr: 'A2', desc: 'Manual call point', qty: 30, rate: 2150, st: [[10, 0], [0, 4]] as [number, number][] }];
+  // "S.No | Item Description | Unit | BOQ / Qty | Rate | Amount | Previous | Current | Cumulative"
+  const p = await ok('accounts', 'POST', '/ra-imports/parse', undefined, await make(
+    ['S.No', 'Item Description', 'Unit', 'BOQ', 'Rate', 'Amount', 'Previous', null, 'Current', null, 'Cumulative'],
+    [null, null, null, 'Qty', null, null, 'Qty', 'Amount', 'Qty', 'Amount', 'Qty', 'Amount'], rows, true));
+  assert.deepEqual(p.doc.lines.map((l: any) => [l.key, l.qty, l.qtyFromSheet]), [['A1', 120, true], ['A2', 30, true]], 'BOQ quantity and Sr. No. read');
+  assert.equal(p.doc.qtyColumn, 'BOQ Qty');
+  assert.deepEqual(p.doc.lines[0].stages.map((s: any) => [s.prevQty, s.currQty, s.cumQty]), [[60, 10, 70], [20, 5, 25]]);
+  const body = (doc: any, extra: any = {}) => ({ newClient: { name: doc.clientName, gstin: null }, site: { mode: 'new', name: doc.project }, orderId: null, raNo: '7', gstRate: 18,
+    lines: doc.lines.map((l: any) => ({ ...l, include: true, itemId: ctx.cam.id })), ...extra });
+  const done = await ok('admin', 'POST', `/ra-imports/${p.id}/commit`, body(p.doc, { createBill: false }));
+  const o = await ok('admin', 'GET', `/orders/${done.orderId}`);
+  assert.deepEqual(o.items.map((i: any) => [i.qty, i.deliveredQty, i.installedQty]), [[120, 70, 25], [30, 10, 4]], 'order qty from the BOQ; delivered / installed = cumulative');
+
+  // no quantity column: order qty = cumulative, flagged; the user corrects it and the order is raised on upload against it
+  const p2 = await ok('accounts', 'POST', '/ra-imports/parse', undefined, await make(
+    ['Sr. No.', 'Description', 'Unit', 'Rate', 'Previous', null, 'Current', null, 'Cumulative'],
+    [null, null, null, null, 'Qty', 'Amount', 'Qty', 'Amount', 'Qty', 'Amount'], rows, false));
+  assert.equal(p2.doc.qtyColumn, null); assert.ok(p2.doc.warnings[0].includes('order (BOQ) quantity column was not found'));
+  assert.deepEqual(p2.doc.lines.map((l: any) => [l.qty, l.qtyFromSheet]), [[70, false], [10, false]]);
+  const lines2 = p2.doc.lines.map((l: any, i: number) => ({ ...l, include: true, itemId: ctx.cam.id, qty: i === 0 ? 150 : 30 }));
+  const d2 = await ok('admin', 'POST', `/ra-imports/${p2.id}/commit`, { ...body(p2.doc), newClient: null, clientId: o.client.id, site: { mode: 'existing', siteId: o.site.id }, orderId: done.orderId, createBill: false, lines: lines2 });
+  assert.equal(d2.qtyRaised, 1);
+  const o2 = await ok('admin', 'GET', `/orders/${done.orderId}`);
+  assert.deepEqual(o2.items.map((i: any) => i.qty), [150, 30]); assert.equal(o2.taxable, 150 * 1780 + 30 * 2150, 'order value follows the raised quantity');
+});
