@@ -7,7 +7,7 @@ import { PaymentTermsEditor, Totals, totalsOf, type Term } from '../components/L
 import { Badge, Button, Card, Field, Input, KV, PageHeader, Select, Textarea, cx } from '../components/ui';
 import { api } from '../lib/api';
 import { inr } from '../lib/format';
-import { useCategories, useClients, useItems } from '../lib/hooks';
+import { useCategories, useClients, useGet, useItems } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { stateOpts } from './Masters';
 import { ProjectSwitch, useCompanyState } from './Sales';
@@ -42,6 +42,10 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
   const { can } = useAuth();
   const [target, setTarget] = useState<'ORDER' | 'QUOTE'>(mode === 'quote' || !can('orders:create') ? 'QUOTE' : 'ORDER');
   const asQuote = target === 'QUOTE';
+  // quotation: our purchase rate + vendor per line (internal costing) — for people who may see costs
+  const showCost = asQuote && can('quotations:costing');
+  const vendorsQ = useGet<{ id: string; name: string; city: string | null }[]>(showCost ? '/quotations-costing/vendors' : null);
+  const vendorOpts = useMemo(() => (vendorsQ.data ?? []).map((v) => ({ value: v.id, label: v.name, sub: v.city ?? undefined })), [vendorsQ.data]);
   const [offSheets, setOffSheets] = useState<string[]>([]);
   const companyState = useCompanyState();
   const clients = useClients();
@@ -117,11 +121,25 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
   };
 
   const set = (i: number, patch: Partial<ImpLine>) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  /** lines with an inventory item but no purchase rate in the sheet: our last purchase rate (and vendor), else the item's purchase price */
+  const fillCosts = async (ids: string[]) => {
+    const want = [...new Set(ids)].filter(Boolean);
+    if (!want.length) return;
+    try {
+      const h = await api<Record<string, { lastRate: number | null; vendorId: string | null; vendor: string | null; masterRate: number }>>(`/quotations-costing/purchase-history?ids=${want.join(',')}`);
+      setLines((ls) => ls.map((l) => { const x = l.itemId ? h[l.itemId] : undefined; return x && l.costRate == null ? { ...l, costRate: x.lastRate ?? (x.masterRate || null), costVendor: x.vendor ?? l.costVendor ?? null } : l; }));
+    } catch { /* costs stay blank */ }
+  };
+  useEffect(() => {
+    if (showCost && p) fillCosts(lines.filter((l) => l.itemId && l.costRate == null).map((l) => l.itemId!));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCost, p?.id]);
   const chooseItem = (i: number, id: string | null) => {
     const it = items.data?.data.find((x) => x.id === id) ?? lines[i].suggestions.find((x) => x.id === id);
     if (!it) { set(i, { itemId: null }); return; }
     const l = lines[i];
     set(i, { action: 'match', itemId: it.id, unit: it.unit, gstRate: it.gstRate, hsnSac: it.hsnSac ?? l.hsnSac, rate: l.rate || it.salePrice });
+    if (showCost && l.costRate == null) fillCosts([it.id]);
   };
 
   const included = lines.filter((l) => l.include && !(l.sheet && offSheets.includes(l.sheet)));
@@ -328,13 +346,13 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
               <table className="tbl min-w-[1250px]">
                 <thead>
                   <tr><th className="w-8" /><th className="w-12">Sr.</th><th className="min-w-60">Description (from file)</th><th className="w-[19rem]">Inventory item</th>
-                    <th className="w-24 min-w-20 text-right">Qty</th><th className="w-20 min-w-20">Unit</th><th className="w-28 min-w-28 text-right">Rate</th><th className="w-24 min-w-20 text-right">GST %</th><th className="w-28 text-right">Taxable</th></tr>
+                    <th className="w-24 min-w-20 text-right">Qty</th><th className="w-20 min-w-20">Unit</th><th className="w-28 min-w-28 text-right">Rate</th>{showCost && <th className="w-56 min-w-56 text-right" title="Our purchase rate and the vendor — internal costing, not shown to the client">Purchase rate · vendor</th>}<th className="w-24 min-w-20 text-right">GST %</th><th className="w-28 text-right">Taxable</th></tr>
                 </thead>
                 <tbody>
                   {lines.map((l, i) => (l.sheet && offSheets.includes(l.sheet) ? null : (
                     <Fragment key={l.key}>
                     {(l.section || l.sheet) && (l.section !== lines[i - 1]?.section || l.sheet !== lines[i - 1]?.sheet) && (
-                      <tr className="bg-slate-50"><td colSpan={9} className="py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">{[l.sheet, l.section].filter(Boolean).join(' · ')}</td></tr>
+                      <tr className="bg-slate-50"><td colSpan={showCost ? 10 : 9} className="py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">{[l.sheet, l.section].filter(Boolean).join(' · ')}</td></tr>
                     )}
                     <tr className={cx(!l.include && 'opacity-45')}>
                       <td className="pt-3"><input type="checkbox" checked={l.include} onChange={(e) => set(i, { include: e.target.checked })} title="Include this line" /></td>
@@ -375,9 +393,14 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
                         {((l.deliveredQty ?? 0) > 0 || (l.billedQty ?? 0) > 0) && <div className="mt-0.5 text-right text-[11px] leading-tight text-amber-700" title="Already done in the old ERP">{(l.deliveredQty ?? 0) > 0 && <div>dlv {l.deliveredQty}</div>}{(l.billedQty ?? 0) > 0 && <div>billed {l.billedQty}</div>}</div>}</td>
                       <td><input className="input" value={l.unit} onChange={(e) => set(i, { unit: e.target.value })} /></td>
                       <td><input type="number" min={0} step="any" className={cx('input text-right', l.include && !l.rate && 'border-amber-400')} value={l.rate} onChange={(e) => set(i, { rate: Number(e.target.value) })} /></td>
+                      {showCost && <td>
+                        <input type="number" min={0} step="any" aria-label={`Purchase rate ${l.key}`} placeholder="Purchase rate" className={cx('input text-right', l.include && l.action !== 'text' && l.costRate == null && 'border-amber-300')} value={l.costRate ?? ''} onChange={(e) => set(i, { costRate: e.target.value === '' ? null : Number(e.target.value) })} />
+                        <div className="mt-1"><Combo options={vendorOpts} value={vendorOpts.find((v) => v.label.toLowerCase() === (l.costVendor ?? '').toLowerCase())?.value ?? null} text={l.costVendor} placeholder="Vendor…" allowCustom onChange={(_v, o) => set(i, { costVendor: o?.label ?? null })} /></div>
+                        {l.costRate != null && l.rate > 0 && <div className={cx('mt-0.5 text-right text-[11px]', l.rate - l.costRate < 0 ? 'text-red-600' : 'text-slate-400')}>margin {Math.round(((l.rate - l.costRate) / l.rate) * 1000) / 10}%</div>}
+                      </td>}
                       <td><select className="input text-right" value={l.gstRate} onChange={(e) => set(i, { gstRate: Number(e.target.value) })}>{[0, 5, 12, 18, 28, 40].map((g) => <option key={g} value={g}>{g}</option>)}</select></td>
                       <td className="num pt-3">{inr(l.qty * l.rate * (1 - (l.discountPct || 0) / 100))}
-                        {l.costRate != null && <div className="mt-0.5 text-[11px] font-normal text-slate-400" title="Purchase rate from the sheet — goes to the quotation's internal costing">cost {inr(l.costRate)}{l.costVendor ? ` · ${l.costVendor}` : ''}</div>}</td>
+                        {!showCost && l.costRate != null && <div className="mt-0.5 text-[11px] font-normal text-slate-400" title="Purchase rate from the sheet — goes to the quotation's internal costing">cost {inr(l.costRate)}{l.costVendor ? ` · ${l.costVendor}` : ''}</div>}</td>
                     </tr>
                     </Fragment>
                   )))}
@@ -386,6 +409,14 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
             </div>
             <div className="flex flex-wrap items-start justify-between gap-4 border-t border-slate-100 p-4">
               <div className="space-y-1 text-sm">
+                {showCost && (() => {
+                  const inc = included.filter((l) => !(l.sheet && offSheets.includes(l.sheet)));
+                  const sell = inc.reduce((a, l) => a + l.qty * l.rate * (1 - (l.discountPct || 0) / 100), 0);
+                  const cost = inc.reduce((a, l) => a + l.qty * (l.costRate ?? 0), 0);
+                  const noCost = inc.filter((l) => l.action !== 'text' && l.costRate == null && l.qty > 0).length;
+                  return <p className="text-slate-600">Material cost <b>{inr(cost)}</b> · gross margin on these lines <b className={sell - cost < 0 ? 'text-red-600' : ''}>{inr(sell - cost)}{sell > 0 ? ` (${Math.round(((sell - cost) / sell) * 1000) / 10}%)` : ''}</b>
+                    {noCost > 0 && <span className="text-amber-700"> · {noCost} line{noCost > 1 ? 's' : ''} without a purchase rate</span>}<span className="block text-xs text-slate-400">Internal — saved to the quotation's costing, never printed for the client.</span></p>;
+                })()}
                 {zeroRate > 0 && <p className="text-amber-700">{zeroRate} included line{zeroRate > 1 ? 's have' : ' has'} no rate (₹0). Enter rates, or leave them at 0 for parts that are covered by the main line's price.</p>}
                 {p.duplicate?.summaryOnly && p.duplicate.soValue != null && p.duplicate.soValue > 0 && <p className={cx(Math.abs(t.total - p.duplicate.soValue) < 1 ? 'text-emerald-700' : 'text-amber-800')}>
                   FFH order value incl. GST: <b>{inr(p.duplicate.soValue)}</b> · this order: <b>{inr(t.total)}</b>{Math.abs(t.total - p.duplicate.soValue) < 1 ? ' — matches' : ` — difference ${inr(t.total - p.duplicate.soValue)} (check GST % on the lines)`}</p>}
