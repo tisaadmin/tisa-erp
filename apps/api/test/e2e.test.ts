@@ -1639,3 +1639,35 @@ test('RA sheet saved with inventory items to link later: order line linked after
   const issued = await ok('accounts', 'POST', `/invoices/${done.invoiceId}/issue`, {});
   assert.equal(issued.status, 'ISSUED');
 });
+
+test('remove test data: only the picked records and what was raised against them; conflicts refused; numbering continues from a set number', async () => {
+  const found = await ok('admin', 'GET', '/records/test-data/search?q=link later');
+  const cl = found.find((x: any) => x.kind === 'client' && x.label === 'LINK LATER BUILDERS');
+  assert.ok(cl, 'test client found by name');
+  assert.equal((await call('tech', 'POST', '/records/test-data/preview', { clientIds: [cl.id] })).status, 403);
+  const before = (await ok('admin', 'GET', `/orders?clientId=${ctx.client.id}&pageSize=500`)).total;
+  const pv = await ok('admin', 'POST', '/records/test-data/preview', { clientIds: [cl.id] });
+  assert.equal(pv.conflicts.length, 0);
+  assert.equal(pv.items.orders.length, 1); assert.equal(pv.items.invoices.length, 1); assert.equal(pv.items.sites.length, 1);
+  assert.equal(pv.items.invoices[0].status, 'ISSUED', 'issued bills of test orders go too');
+  // a quotation that became a real order (not picked) is refused
+  const real = await ok('admin', 'GET', `/orders/${ctx.order.id}`);
+  const pq = await ok('admin', 'POST', '/records/test-data/preview', { quotationIds: [real.quotation.id] });
+  assert.ok(pq.conflicts.length >= 1);
+  assert.equal((await call('admin', 'POST', '/records/test-data/remove', { quotationIds: [real.quotation.id], confirm: 'DELETE' })).status, 409);
+  assert.equal((await call('admin', 'POST', '/records/test-data/remove', { clientIds: [cl.id] })).status, 400, 'needs DELETE typed');
+  const done = await ok('admin', 'POST', '/records/test-data/remove', { clientIds: [cl.id], confirm: 'DELETE' });
+  assert.equal(done.clients, 1); assert.equal(done.invoices, 1);
+  assert.equal((await call('admin', 'GET', `/invoices/${pv.items.invoices[0].id}`)).status, 404);
+  assert.equal((await ok('admin', 'GET', `/orders?clientId=${ctx.client.id}&pageSize=500`)).total, before, 'real client untouched');
+
+  // numbering: cannot go back over numbers in use; can jump ahead
+  const series = await ok('admin', 'GET', '/records/numbering');
+  const inv = series.find((x: any) => x.key === 'INVOICE');
+  assert.ok(inv.highestUsed >= 1);
+  assert.equal((await call('admin', 'PUT', '/records/numbering/INVOICE', { next: inv.highestUsed })).status, 400);
+  await ok('admin', 'PUT', '/records/numbering/INVOICE', { next: 731 });
+  const d = await ok('accounts', 'POST', '/invoices', { type: 'SERVICE', clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ description: 'Visit', qty: 1, rate: 100, gstRate: 18, hsnSac: '998719' }] });
+  const iss = await ok('accounts', 'POST', `/invoices/${d.id}/issue`, {});
+  assert.match(iss.number, /\/0731$/);
+});

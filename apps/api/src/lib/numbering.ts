@@ -8,7 +8,7 @@ export const SERIES = {
   RECEIPT: 'RCT', TICKET: 'TKT', SERVICE_REPORT: 'SR', REQUISITION: 'REQ', EXPENSE: 'EXP', AMC: 'AMC', ACCESSORY: 'ACS', VENDOR_BILL: 'VB', VENDOR_PAYMENT: 'VP',
 } as const;
 export type SeriesKey = keyof typeof SERIES;
-const COMPANY_PREFIX = process.env.DOC_PREFIX ?? 'TTS';
+export const COMPANY_PREFIX = process.env.DOC_PREFIX ?? 'TTS';
 
 /**
  * Atomically allocate the next document number for the financial year, e.g. TTS/INV/26-27/0042.

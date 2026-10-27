@@ -1,6 +1,6 @@
 import {
   Bell, Boxes, ListChecks, Upload, Building2, Camera, ClipboardCheck, ClipboardList, FileSignature, FileText, Gauge, HandCoins, LifeBuoy, LogOut, MapPin, Menu,
-  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText, HardHat, Calculator } from 'lucide-react';
+  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText, HardHat, Calculator, Hash } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -58,6 +58,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
     { to: '/settings/workflow', label: 'Workflow Rules', icon: <Workflow />, perm: 'settings:view' },
     { to: '/settings/costing', label: 'Costing Rates', icon: <Calculator />, perm: 'settings:view' },
     { to: '/settings/cleanup', label: 'Duplicates & Clean-up', icon: <GitMerge />, perm: 'records:delete' },
+    { to: '/settings/test-data', label: 'Test Data & Numbering', icon: <Hash />, perm: 'records:delete' },
     { to: '/settings/import', label: 'Data Import', icon: <Upload />, perm: 'settings:edit' },
   ] },
 ];

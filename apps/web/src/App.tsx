@@ -13,6 +13,7 @@ import { ChallanDetail, ChallansPage, NewChallan, OrderDetail, OrderEditor, Orde
 import { OrderImportPage } from './pages/OrderImport';
 import { OrderBulkImportPage } from './pages/OrderBulkImport';
 import { CleanupPage } from './pages/Cleanup';
+import { TestDataPage } from './pages/TestData';
 import { AccessorySheetDetail, AccessorySheetsPage, AccessoryTemplatesPage } from './pages/Accessories';
 import { GrnDetail, GrnsPage, PoDetail, PoEditor, PurchaseOrdersPage } from './pages/Purchase';
 import { VendorBillDetail, VendorBillEditor, VendorBillsPage } from './pages/VendorBills';
@@ -89,6 +90,7 @@ export default function App() {
         <Route path="settings/workflow" element={<WorkflowPage />} />
         <Route path="settings/costing" element={<CostingSettingsPage />} />
         <Route path="settings/cleanup" element={<CleanupPage />} />
+        <Route path="settings/test-data" element={<TestDataPage />} />
         <Route path="accessories" element={<AccessorySheetsPage />} />
         <Route path="accessories/templates" element={<AccessoryTemplatesPage />} />
         <Route path="accessories/:id" element={<AccessorySheetDetail />} />

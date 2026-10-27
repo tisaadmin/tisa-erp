@@ -12,13 +12,16 @@ import type { PgColumn, PgTable } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import { db, type DbOrTx } from '../db';
 import {
-  accessorySheetLines, accessorySheets, amcContracts, attachments, attendance, clients, deliveryChallanItems, deliveryChallans, expenseLines,
+  accessorySheetLines, accessorySheets, amcContracts, expenseClaims, numberSeries, paymentReceipts, vendorBills, vendorPayments, attachments, attendance, clients, deliveryChallanItems, deliveryChallans, expenseLines,
   goodsReceiptItems, goodsReceipts, invoiceItems, invoices, itemAccessories, items, leads, purchaseOrderItems, purchaseOrders, quotationItems,
   quotations, requisitionItems, requisitions, salesOrderItems, salesOrders, serviceReports, sites, stockMovements, tickets, vendors,
 } from '../db/schema';
 import { audit } from '../lib/audit';
 import { badRequest, HttpError, notFound } from '../lib/http';
 import { requirePerm } from '../middleware/auth';
+import { collect, describe, removeAll } from '../services/testData';
+import { COMPANY_PREFIX, SERIES, type SeriesKey } from '../lib/numbering';
+import { financialYear } from '../lib/dates';
 
 const r = Router();
 const perm = requirePerm('records:delete');
@@ -217,3 +220,98 @@ r.get('/records/duplicates', perm, async (req, res) => {
 });
 
 export default r;
+
+// ═══════════════════════ Remove test data (picked records only) ═══════════════════════
+
+const rootsSchema = z.object({
+  clientIds: z.array(z.string()).default([]), orderIds: z.array(z.string()).default([]),
+  quotationIds: z.array(z.string()).default([]), invoiceIds: z.array(z.string()).default([]),
+});
+
+/** Find records to pick: clients by name / code, orders / quotations / invoices by number or client name. */
+r.get('/records/test-data/search', perm, async (req, res) => {
+  const q = String(req.query.q ?? '').trim();
+  if (q.length < 2) return res.json([]);
+  const like = `%${q.toLowerCase().replace(/[^a-z0-9]+/g, '')}%`;
+  const sq = (c: PgColumn) => sql`regexp_replace(lower(coalesce(${c}::text,'')),'[^a-z0-9]+','','g') like ${like}`;
+  const [cl, os, qs, is] = await Promise.all([
+    db.select({ id: clients.id, label: clients.name, sub: clients.code }).from(clients).where(sql`${sq(clients.name)} or ${sq(clients.code)}`).limit(15),
+    db.select({ id: salesOrders.id, label: salesOrders.number, sub: clients.name, date: salesOrders.date, value: salesOrders.total, status: salesOrders.status }).from(salesOrders).innerJoin(clients, eq(clients.id, salesOrders.clientId)).where(sql`${sq(salesOrders.number)} or ${sq(clients.name)}`).limit(25),
+    db.select({ id: quotations.id, label: quotations.number, sub: clients.name, date: quotations.date, value: quotations.total, status: quotations.status }).from(quotations).leftJoin(clients, eq(clients.id, quotations.clientId)).where(sql`${sq(quotations.number)} or ${sq(clients.name)}`).limit(25),
+    db.select({ id: invoices.id, label: invoices.number, sub: clients.name, date: invoices.date, value: invoices.total, status: invoices.status }).from(invoices).innerJoin(clients, eq(clients.id, invoices.clientId)).where(sql`${sq(invoices.number)} or ${sq(clients.name)}`).limit(25),
+  ]);
+  res.json([...cl.map((x) => ({ ...x, kind: 'client' })), ...os.map((x) => ({ ...x, kind: 'order' })), ...qs.map((x) => ({ ...x, kind: 'quotation' })), ...is.map((x) => ({ ...x, kind: 'invoice' }))]);
+});
+
+r.post('/records/test-data/preview', perm, async (req, res) => {
+  const roots = rootsSchema.parse(req.body);
+  const { sets, conflicts, stockMoves } = await collect(db, roots);
+  res.json({ items: await describe(db, sets), conflicts, stockMoves });
+});
+
+r.post('/records/test-data/remove', perm, async (req, res) => {
+  const roots = rootsSchema.parse(req.body);
+  if (req.body?.confirm !== 'DELETE') throw badRequest('Type DELETE to confirm');
+  const out = await db.transaction(async (tx) => {
+    const { sets, conflicts } = await collect(tx, roots);
+    if (conflicts.length) throw new HttpError(409, conflicts.join(' · '), { conflicts });
+    const what = await describe(tx, sets);
+    const removed = await removeAll(tx, sets);
+    return { removed, what };
+  });
+  audit(req, 'remove_test_data', 'records', null, { roots, removed: out.removed, numbers: Object.fromEntries(Object.entries(out.what).map(([k, v]) => [k, (v as { label: string | null }[]).map((x) => x.label)])) });
+  res.json(out.removed);
+});
+
+// ═══════════════════════ Document numbering (this financial year) ═══════════════════════
+
+const SERIES_DOCS: Partial<Record<SeriesKey, { label: string; table: PgTable; col: PgColumn }>> = {
+  INVOICE: { label: 'Tax invoices & RA bills', table: invoices, col: invoices.number },
+  PROFORMA: { label: 'Proforma invoices', table: invoices, col: invoices.number },
+  RECEIPT: { label: 'Payment receipts', table: paymentReceipts, col: paymentReceipts.number },
+  ORDER: { label: 'Order forms', table: salesOrders, col: salesOrders.number },
+  QUOTATION: { label: 'Quotations', table: quotations, col: quotations.number },
+  CHALLAN: { label: 'Delivery challans', table: deliveryChallans, col: deliveryChallans.number },
+  PURCHASE_ORDER: { label: 'Purchase orders', table: purchaseOrders, col: purchaseOrders.number },
+  GRN: { label: 'Goods receipts', table: goodsReceipts, col: goodsReceipts.number },
+  VENDOR_BILL: { label: 'Vendor bills', table: vendorBills, col: vendorBills.number },
+  VENDOR_PAYMENT: { label: 'Vendor payments', table: vendorPayments, col: vendorPayments.number },
+  AMC: { label: 'AMC contracts', table: amcContracts, col: amcContracts.number },
+  TICKET: { label: 'Service tickets', table: tickets, col: tickets.number },
+  SERVICE_REPORT: { label: 'Service reports', table: serviceReports, col: serviceReports.number },
+  REQUISITION: { label: 'Requisitions', table: requisitions, col: requisitions.number },
+  ACCESSORY: { label: 'Accessory sheets', table: accessorySheets, col: accessorySheets.number },
+  EXPENSE: { label: 'Expense claims', table: expenseClaims, col: expenseClaims.number },
+};
+const fyStem = (key: SeriesKey, fy: string) => `${COMPANY_PREFIX}/${SERIES[key]}/${fy}/`;
+async function highestUsed(tx: DbOrTx, key: SeriesKey, fy: string) {
+  const d = SERIES_DOCS[key]!;
+  const stem = fyStem(key, fy);
+  const rows = await tx.select({ n: d.col }).from(d.table).where(sql`${d.col} like ${`${stem}%`}`);
+  return rows.reduce((m, x) => Math.max(m, Number(String(x.n).slice(stem.length).match(/^\d+/)?.[0] ?? 0)), 0);
+}
+
+r.get('/records/numbering', perm, async (req, res) => {
+  const fy = financialYear(new Date());
+  const rows = await db.select().from(numberSeries).where(eq(numberSeries.fy, fy));
+  const out = [];
+  for (const key of Object.keys(SERIES_DOCS) as SeriesKey[]) {
+    const used = await highestUsed(db, key, fy);
+    const next = rows.find((x) => x.key === key)?.next ?? 1;
+    out.push({ key, label: SERIES_DOCS[key]!.label, fy, highestUsed: used, next, example: `${fyStem(key, fy)}${String(next).padStart(4, '0')}` });
+  }
+  res.json(out);
+});
+
+/** Set the next number of a series for this financial year (e.g. continue the invoice numbering of the books kept before the ERP). */
+r.put('/records/numbering/:key', perm, async (req, res) => {
+  const key = z.enum(Object.keys(SERIES_DOCS) as [SeriesKey, ...SeriesKey[]]).parse(req.params.key);
+  const { next } = z.object({ next: z.coerce.number().int().min(1).max(999999) }).parse(req.body);
+  const fy = financialYear(new Date());
+  const used = await highestUsed(db, key, fy);
+  if (next <= used) throw badRequest(`${SERIES_DOCS[key]!.label}: number ${used} is already used this year — the next number must be ${used + 1} or more (remove test documents first to go lower)`);
+  await db.insert(numberSeries).values({ key, fy, prefix: SERIES[key], next })
+    .onConflictDoUpdate({ target: [numberSeries.key, numberSeries.fy], set: { next } });
+  audit(req, 'set_numbering', 'number_series', key, { fy, next });
+  res.json({ key, fy, next, example: `${fyStem(key, fy)}${String(next).padStart(4, '0')}` });
+});
