@@ -1,3 +1,4 @@
+import { closeSocket } from './realtime';
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 import { api, session } from './api';
 
@@ -24,6 +25,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const s = session.get();
     if (s) api('/auth/logout', { body: { refreshToken: s.refreshToken } }).catch(() => {});
     session.set(null);
+    closeSocket();
     setUser(null);
   }, []);
 

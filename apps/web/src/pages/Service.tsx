@@ -1,3 +1,4 @@
+import { RecordTeam } from '../components/RecordTeam';
 import { Clock, FileDown, MapPin, Plus, Send } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -161,6 +162,7 @@ export function TicketDetail() {
       <Modal open={!!statusTo} onClose={() => setStatusTo(null)} title={`Mark ${label(statusTo?.status)}`} footer={<><Button onClick={() => setStatusTo(null)}>Cancel</Button><Button variant="primary" loading={changeStatus.isPending} onClick={() => changeStatus.mutate(undefined)}>Update</Button></>}>
         <Field label="Note"><Textarea value={statusTo?.note ?? ''} onChange={(e) => setStatusTo({ ...statusTo!, note: e.target.value })} /></Field>
       </Modal>
+      <RecordTeam entityType="TICKET" entityId={t.id} label={`Ticket ${t.number} — ${t.site?.name ?? ''}`} />
     </div>
   );
 }

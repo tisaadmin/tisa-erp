@@ -1,3 +1,4 @@
+import { RecordTeam } from '../components/RecordTeam';
 import { Calendar, FileDown, MapPin, Phone, Plus, UserPlus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
@@ -115,6 +116,7 @@ export function ClientDetail() {
       </Card>
       <EditorModal title="client" fields={cCfg.fields} ed={clientEd} />
       <EditorModal title="site" fields={sCfg.fields} ed={siteEd} />
+      <RecordTeam entityType="CLIENT" entityId={c.id} label={`Client ${c.name}`} />
     </div>
   );
 }

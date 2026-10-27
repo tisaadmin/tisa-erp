@@ -14,6 +14,8 @@ import { OrderImportPage } from './pages/OrderImport';
 import { OrderBulkImportPage } from './pages/OrderBulkImport';
 import { CleanupPage } from './pages/Cleanup';
 import { TestDataPage } from './pages/TestData';
+import { TaskDetail, TasksPage } from './pages/Tasks';
+import { MessagesPage } from './pages/Messages';
 import { AccessorySheetDetail, AccessorySheetsPage, AccessoryTemplatesPage } from './pages/Accessories';
 import { GrnDetail, GrnsPage, PoDetail, PoEditor, PurchaseOrdersPage } from './pages/Purchase';
 import { VendorBillDetail, VendorBillEditor, VendorBillsPage } from './pages/VendorBills';
@@ -66,6 +68,10 @@ export default function App() {
         <Route path="grns/:id" element={<GrnDetail />} />
         <Route path="inventory" element={<InventoryPage />} />
         <Route path="vendors" element={<VendorsPage />} />
+        <Route path="tasks" element={<TasksPage />} />
+        <Route path="tasks/:id" element={<TaskDetail />} />
+        <Route path="messages" element={<MessagesPage />} />
+        <Route path="messages/:id" element={<MessagesPage />} />
         <Route path="tickets" element={<TicketsPage />} />
         <Route path="tickets/new" element={<NewTicket />} />
         <Route path="tickets/:id" element={<TicketDetail />} />

@@ -353,6 +353,23 @@ const EXCEPTION_LABEL: Record<string, string> = {
   'orders:without_quote': 'Order Forms → Without quote', 'purchase_orders:without_order': 'Purchase Orders → Without order', 'challans:without_order': 'Challans → Without order',
 };
 
+/** Who may message whom in Messages. */
+function TeamMessagingCard({ canEdit }: { canEdit: boolean }) {
+  const q = useGet<{ messaging: 'ALL' | 'DEPARTMENT' }>('/settings/team');
+  const save = useAction((messaging: string) => api('/settings/team', { method: 'PUT', body: { messaging } }), { success: 'Saved', invalidate: [['/settings/team']] });
+  const cur = q.data?.messaging;
+  return (
+    <Card title="Team messaging">
+      <p className="text-sm text-slate-600">Who can start a chat with whom in Messages (web and app). Record discussions (on an order, ticket …) are open to everyone who works on that record.</p>
+      <div className="mt-3 space-y-2 text-sm">
+        {([['ALL', 'Everyone can message everyone'], ['DEPARTMENT', 'Own department only — plus department heads and Management (who can message everyone)']] as const).map(([v, l]) => (
+          <label key={v} className="flex items-center gap-2"><input type="radio" disabled={!canEdit || save.isPending} checked={cur === v} onChange={() => save.mutate(v)} />{l}</label>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
 /** POs below this total (incl. GST) go to the purchase team without approval. */
 function SmallPoCard({ canEdit }: { canEdit: boolean }) {
   const q = useGet<{ poNoApprovalBelow: number }>('/settings/purchase');
@@ -399,6 +416,7 @@ export function WorkflowPage() {
         )}
       </Card>
       <SmallPoCard canEdit={can('settings:edit')} />
+      <TeamMessagingCard canEdit={can('settings:edit')} />
       <Card title="Accessories approval">
         <p className="text-sm text-slate-600">Accessory sheets are approved by roles with <b>Accessories → Approve</b> (Roles &amp; Access). Nobody can approve a sheet they prepared.</p>
       </Card>

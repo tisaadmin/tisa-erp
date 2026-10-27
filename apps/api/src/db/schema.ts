@@ -76,6 +76,8 @@ export const companySettings = pgTable('company_settings', {
   workdayStart: text().notNull().default('09:30'),
   /** Which steps must follow an earlier one (see services/workflow.ts) */
   workflowRules: jsonb().$type<Record<string, boolean>>().notNull().default({}),
+  /** team tools: who may message whom (ALL = everyone; DEPARTMENT = own department, department heads and Management) */
+  teamConfig: jsonb().$type<{ messaging?: 'ALL' | 'DEPARTMENT' }>().notNull().default({}),
   /** official email domains that may sign in (sub-domains included); other addresses only if the Super Admin allows them per user */
   loginDomains: text().array().notNull().default(['tisa.in']),
   /** rate card for quotation costing: manpower roles (₹/man-day), transport presets, service cost % of project value */
@@ -987,6 +989,81 @@ export const approvalLogs = pgTable('approval_logs', {
   createdAt: createdAt(),
 }, (t) => [index().on(t.entityType, t.entityId)]);
 
+// ───────────────────────────── Team: tasks & messages ─────────────────────────────
+
+/** A piece of work given to one or more people — optionally about a record (order, ticket, client …). */
+export const tasks = pgTable('tasks', {
+  id: id(),
+  number: text().notNull().unique(), // TSK0001
+  title: text().notNull(),
+  description: text(),
+  priority: text().notNull().default('MEDIUM'), // LOW, MEDIUM, HIGH
+  status: text().notNull().default('OPEN'), // OPEN, IN_PROGRESS, DONE, CANCELLED
+  dueAt: ts(),
+  /** the record it is about (ORDER, QUOTATION, PURCHASE_ORDER, TICKET, CLIENT, SITE, LEAD, INVOICE …) */
+  entityType: text(),
+  entityId: text(),
+  entityLabel: text(),
+  createdById: text().notNull().references(() => users.id),
+  completedAt: ts(),
+  completedById: text(),
+  remindedAt: ts(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [index().on(t.status), index().on(t.entityType, t.entityId), index().on(t.createdById)]);
+
+export const taskAssignees = pgTable('task_assignees', {
+  id: id(),
+  taskId: text().notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+  userId: text().notNull().references(() => users.id),
+}, (t) => [uniqueIndex().on(t.taskId, t.userId), index().on(t.userId)]);
+
+/** Comments and status changes on a task (photos via attachments with entityType TASK). */
+export const taskUpdates = pgTable('task_updates', {
+  id: id(),
+  taskId: text().notNull().references(() => tasks.id, { onDelete: 'cascade' }),
+  userId: text().notNull(),
+  status: text(),
+  note: text(),
+  attachmentId: text(),
+  createdAt: createdAt(),
+}, (t) => [index().on(t.taskId)]);
+
+/** A chat: one-to-one (DIRECT), a named group (GROUP), or the thread of a record (RECORD — an order, ticket …). */
+export const conversations = pgTable('conversations', {
+  id: id(),
+  kind: text().notNull(), // DIRECT, GROUP, RECORD
+  title: text(),
+  /** DIRECT: the two user ids sorted and joined — one chat per pair */
+  directKey: text().unique(),
+  entityType: text(),
+  entityId: text(),
+  createdById: text().notNull(),
+  lastMessageAt: ts(),
+  createdAt: createdAt(),
+}, (t) => [index().on(t.entityType, t.entityId)]);
+
+export const conversationMembers = pgTable('conversation_members', {
+  id: id(),
+  conversationId: text().notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+  userId: text().notNull().references(() => users.id),
+  lastReadAt: ts(),
+  muted: boolean().notNull().default(false),
+  isAdmin: boolean().notNull().default(false),
+  joinedAt: createdAt(),
+}, (t) => [uniqueIndex().on(t.conversationId, t.userId), index().on(t.userId)]);
+
+export const messages = pgTable('messages', {
+  id: id(),
+  conversationId: text().notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+  userId: text().notNull(),
+  body: text(),
+  /** photo / file sent with the message (attachments, entityType MESSAGE) */
+  attachmentId: text(),
+  deletedAt: ts(),
+  createdAt: createdAt(),
+}, (t) => [index().on(t.conversationId, t.createdAt)]);
+
 export const notifications = pgTable('notifications', {
   id: id(),
   userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -1141,3 +1218,20 @@ export const expenseClaimsRel = relations(expenseClaims, ({ one, many }) => ({
 }));
 export const expenseLinesRel = relations(expenseLines, ({ one }) => ({ claim: one(expenseClaims, { fields: [expenseLines.claimId], references: [expenseClaims.id] }) }));
 export const leaveRel = relations(leaveRequests, ({ one }) => ({ user: one(users, { fields: [leaveRequests.userId], references: [users.id] }) }));
+
+export const tasksRel = relations(tasks, ({ one, many }) => ({
+  createdBy: one(users, { fields: [tasks.createdById], references: [users.id] }),
+  assignees: many(taskAssignees),
+  updates: many(taskUpdates),
+}));
+export const taskAssigneesRel = relations(taskAssignees, ({ one }) => ({
+  task: one(tasks, { fields: [taskAssignees.taskId], references: [tasks.id] }),
+  user: one(users, { fields: [taskAssignees.userId], references: [users.id] }),
+}));
+export const taskUpdatesRel = relations(taskUpdates, ({ one }) => ({ task: one(tasks, { fields: [taskUpdates.taskId], references: [tasks.id] }) }));
+export const conversationsRel = relations(conversations, ({ many }) => ({ members: many(conversationMembers), messages: many(messages) }));
+export const conversationMembersRel = relations(conversationMembers, ({ one }) => ({
+  conversation: one(conversations, { fields: [conversationMembers.conversationId], references: [conversations.id] }),
+  user: one(users, { fields: [conversationMembers.userId], references: [users.id] }),
+}));
+export const messagesRel = relations(messages, ({ one }) => ({ conversation: one(conversations, { fields: [messages.conversationId], references: [conversations.id] }) }));

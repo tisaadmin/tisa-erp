@@ -6,7 +6,7 @@ import { db } from '../db';
 import { approverFor, manages, teamIds } from '../lib/team';
 import { myProjectOrderIds, projectMaterialStatus, projectSummaries } from '../services/projectStatus';
 import { classifyProjectLines, decideExcess, projectRequestable } from '../services/projectRequisitions';
-import { attachments, attendance, auditLogs, departments, projectMembers, salesOrders, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
+import { attachments, attendance, conversationMembers, auditLogs, departments, projectMembers, salesOrders, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { rel, searchWords, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { istDate, istTime, dayRange } from '../lib/dates';
@@ -277,6 +277,11 @@ r.get('/site-photos', requirePerm('sites:view'), async (req, res) => {
 r.get('/files/:id', async (req, res) => {
   const a = await db.query.attachments.findFirst({ where: eq(attachments.id, req.params.id) });
   if (!a) throw notFound('File');
+  // chat files: only the chat's members
+  if (a.entityType === 'MESSAGE' && a.entityId) {
+    const m = await db.query.conversationMembers.findFirst({ where: and(eq(conversationMembers.conversationId, a.entityId), eq(conversationMembers.userId, req.user.id)) });
+    if (!m && a.uploadedById !== req.user.id) throw notFound('File');
+  }
   const p = absPath(a.path);
   if (!fs.existsSync(p)) throw notFound('File');
   res.setHeader('Content-Type', a.mimeType);

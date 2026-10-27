@@ -27,7 +27,7 @@ export async function nextNumber(tx: DbOrTx, key: SeriesKey, date = new Date()):
 }
 
 /** Simple sequential master codes (CL0001, ST0001, LD0001, VN0001). */
-export async function nextCode(tx: DbOrTx, key: 'CLIENT' | 'SITE' | 'LEAD' | 'VENDOR' | 'ITEM', prefix: string): Promise<string> {
+export async function nextCode(tx: DbOrTx, key: 'CLIENT' | 'SITE' | 'LEAD' | 'VENDOR' | 'ITEM' | 'TASK', prefix: string): Promise<string> {
   const [row] = await tx
     .insert(numberSeries)
     .values({ key, fy: 'ALL', prefix, next: 2 })
@@ -37,7 +37,7 @@ export async function nextCode(tx: DbOrTx, key: 'CLIENT' | 'SITE' | 'LEAD' | 'VE
 }
 
 /** Reserve `count` consecutive master codes in one round trip (used by bulk import). */
-export async function reserveCodes(tx: DbOrTx, key: 'CLIENT' | 'SITE' | 'LEAD' | 'VENDOR' | 'ITEM', prefix: string, count: number): Promise<string[]> {
+export async function reserveCodes(tx: DbOrTx, key: 'CLIENT' | 'SITE' | 'LEAD' | 'VENDOR' | 'ITEM' | 'TASK', prefix: string, count: number): Promise<string[]> {
   if (count <= 0) return [];
   const [row] = await tx
     .insert(numberSeries)

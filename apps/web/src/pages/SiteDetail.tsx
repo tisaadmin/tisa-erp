@@ -1,3 +1,4 @@
+import { RecordTeam } from '../components/RecordTeam';
 /**
  * Site page — the site is the master record: everything sold, bought, delivered, billed and serviced there, in one place.
  */
@@ -134,6 +135,7 @@ export function SiteDetail() {
       </Card>
       {lightbox && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6" onClick={() => setLightbox(null)}><img src={lightbox} alt="" className="max-h-full max-w-full rounded" /></div>}
       <EditorModal ed={ed} title="site" fields={sCfg.fields} />
+      <RecordTeam entityType="SITE" entityId={s.id} label={`Site ${s.name}`} />
     </div>
   );
 }

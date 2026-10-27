@@ -1,12 +1,12 @@
 import {
   Bell, Boxes, ListChecks, Upload, Building2, Camera, ClipboardCheck, ClipboardList, FileSignature, FileText, Gauge, HandCoins, LifeBuoy, LogOut, MapPin, Menu,
-  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText, HardHat, Calculator, Hash } from 'lucide-react';
+  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText, HardHat, Calculator, Hash, ListTodo, MessagesSquare } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { io } from 'socket.io-client';
 import { toast } from 'sonner';
-import { api, apiBase, session } from '../lib/api';
+import { api } from '../lib/api';
+import { getSocket, useLive } from '../lib/realtime';
 import { useAuth } from '../lib/auth';
 import { fmtDateTime } from '../lib/format';
 import { useAction, useGet } from '../lib/hooks';
@@ -14,7 +14,7 @@ import { Button, Modal, cx } from './ui';
 
 type NavItem = { to: string; label: string; icon: ReactNode; perm: string };
 const NAV: { group: string; items: NavItem[] }[] = [
-  { group: 'Overview', items: [{ to: '/', label: 'Dashboard', icon: <Gauge />, perm: 'dashboard:view' }] },
+  { group: 'Overview', items: [{ to: '/', label: 'Dashboard', icon: <Gauge />, perm: 'dashboard:view' }, { to: '/tasks', label: 'Tasks', icon: <ListTodo />, perm: '' }, { to: '/messages', label: 'Messages', icon: <MessagesSquare />, perm: '' }] },
   { group: 'CRM', items: [
     { to: '/leads', label: 'Leads', icon: <Target />, perm: 'leads:view' },
     { to: '/clients', label: 'Clients', icon: <Building2 />, perm: 'clients:view' },
@@ -73,16 +73,16 @@ function Notifications() {
   const readAll = useAction(() => api('/notifications/read-all', { body: {} }), { invalidate: [['/notifications']] });
 
   useEffect(() => {
-    const s = session.get();
-    if (!s) return;
-    const sock = io(apiBase || undefined, { auth: { token: s.accessToken }, transports: ['websocket', 'polling'] });
-    sock.on('notification', (n: Notif) => {
+    const sock = getSocket();
+    if (!sock) return;
+    const onNote = (n: Notif) => {
       qc.invalidateQueries({ queryKey: ['/notifications'] });
       toast(n.title, { description: n.body, action: n.link ? { label: 'Open', onClick: () => nav(n.link!) } : undefined });
       if ('Notification' in window && Notification.permission === 'granted' && document.hidden) new Notification(n.title, { body: n.body });
-    });
+    };
+    sock.on('notification', onNote);
     if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
-    return () => { sock.disconnect(); };
+    return () => { sock.off('notification', onNote); };
   }, [qc, nav]);
 
   const unread = q.data?.unread ?? 0;
@@ -138,6 +138,25 @@ function Notifications() {
   );
 }
 
+/** Messages icon with the unread count (live). */
+function ChatButton() {
+  const qc = useQueryClient();
+  const nav = useNavigate();
+  const loc = useLocation();
+  const q = useGet<{ unread: number }>('/chats/unread', undefined, { refetchInterval: 120_000 });
+  useLive<{ mine?: boolean; user?: string; body?: string | null; conversationId?: string }>('message', (m) => {
+    qc.invalidateQueries({ queryKey: ['/chats/unread'] });
+    if (!m.mine && !loc.pathname.startsWith('/messages')) toast(m.user ?? 'New message', { description: m.body ?? 'Photo / file', action: { label: 'Open', onClick: () => nav(`/messages/${m.conversationId}`) } });
+  });
+  const n = q.data?.unread ?? 0;
+  return (
+    <Link to="/messages" className="relative rounded-full p-2 text-slate-600 hover:bg-slate-100" aria-label="Messages">
+      <MessagesSquare className="size-5" />
+      {n > 0 && <span className="absolute top-0.5 right-0.5 min-w-4 rounded-full bg-brand-600 px-1 text-[10px] leading-4 font-bold text-white">{n > 99 ? '99+' : n}</span>}
+    </Link>
+  );
+}
+
 export default function Layout() {
   const { user, logout, can } = useAuth();
   const [mobileNav, setMobileNav] = useState(false);
@@ -152,7 +171,7 @@ export default function Layout() {
       </Link>
       <div className="flex-1 space-y-4 overflow-y-auto px-3 pb-6">
         {NAV.map((g) => {
-          const items = g.items.filter((i) => can(i.perm));
+          const items = g.items.filter((i) => !i.perm || can(i.perm));
           if (!items.length) return null;
           return (
             <div key={g.group}>
@@ -184,6 +203,7 @@ export default function Layout() {
           <button className="rounded p-1.5 hover:bg-slate-100 lg:hidden" onClick={() => setMobileNav(true)} aria-label="Menu"><Menu className="size-5" /></button>
           <div className="hidden text-sm text-slate-500 lg:block"><FileText className="mr-1 inline size-4" />Signed in as <b className="text-slate-700">{user?.name}</b> · {user?.roleName}</div>
           <div className="flex items-center gap-2">
+            <ChatButton />
             <Notifications />
             <button onClick={logout} className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-slate-600 hover:bg-slate-100"><LogOut className="size-4" /> Sign out</button>
           </div>

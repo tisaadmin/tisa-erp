@@ -1,3 +1,4 @@
+import { RecordTeam } from '../components/RecordTeam';
 import { FileDown, Plus, Receipt, Truck, Upload } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -185,6 +186,7 @@ export function QuotationDetail() {
           <div><div className="label">Payment schedule (drives running bills)</div><PaymentTermsEditor terms={conv.paymentTerms} onChange={(paymentTerms) => setConv({ ...conv, paymentTerms })} /></div>
         </div>}
       </Modal>
+      <RecordTeam entityType="QUOTATION" entityId={q.id} label={`Quotation ${q.number}${q.client ? ` — ${q.client.name}` : ''}`} />
     </div>
   );
 }
@@ -435,6 +437,7 @@ export function OrderDetail() {
           </table>
         </div>
       </Modal>
+      <RecordTeam entityType="ORDER" entityId={o.id} label={`Order ${o.number} — ${o.client.name}`} />
     </div>
   );
 }

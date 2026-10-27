@@ -37,6 +37,8 @@ export const MODULES = {
   reports: ['view'],
   /** delete & merge master records (clean-up of duplicates) — Super Admin only by default */
   records: ['delete'],
+  /** view_all: see everyone's tasks (Management); team heads always see their team's */
+  tasks: ['view_all'],
 } as const;
 
 export type Module = keyof typeof MODULES;

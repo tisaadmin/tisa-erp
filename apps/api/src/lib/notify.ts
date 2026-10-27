@@ -11,7 +11,7 @@ const expo = new Expo({ accessToken: env.EXPO_ACCESS_TOKEN });
 export type NotifyPayload = {
   title: string;
   body?: string;
-  type: 'REQUISITION' | 'EXPENSE' | 'TICKET' | 'SERVICE_REPORT' | 'APPROVAL' | 'ATTENDANCE' | 'SYSTEM' | 'LEAVE';
+  type: 'REQUISITION' | 'EXPENSE' | 'TICKET' | 'SERVICE_REPORT' | 'APPROVAL' | 'ATTENDANCE' | 'SYSTEM' | 'LEAVE' | 'TASK' | 'MESSAGE';
   link?: string;
   entityType?: string;
   entityId?: string;
@@ -44,4 +44,14 @@ export async function notifyPermission(permission: string, payload: NotifyPayloa
   // Super admins only get it if nobody else holds the permission, to avoid flooding the owner.
   const fallback = ids.length ? [] : rows.filter((r) => r.perms.includes('*')).map((r) => r.id);
   await notifyUsers([...ids, ...fallback], payload, exceptUserId);
+}
+
+/** Phone push only (no entry in the notifications list) — used for chat messages. */
+export async function pushOnly(userIds: string[], push: { title: string; body?: string; data?: Record<string, unknown> }) {
+  const ids = [...new Set(userIds)];
+  if (!ids.length) return;
+  const targets = await db.select({ token: users.pushToken }).from(users).where(and(inArray(users.id, ids), eq(users.active, true)));
+  const msgs: ExpoPushMessage[] = targets.map((t) => t.token).filter((t): t is string => !!t && Expo.isExpoPushToken(t))
+    .map((to) => ({ to, title: push.title, body: push.body, sound: 'default', data: push.data }));
+  for (const chunk of expo.chunkPushNotifications(msgs)) expo.sendPushNotificationsAsync(chunk).catch((e) => console.warn('push failed', e?.message));
 }

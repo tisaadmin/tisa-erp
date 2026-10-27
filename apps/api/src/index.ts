@@ -20,6 +20,7 @@ import importRoutes from './routes/imports';
 import orderImportRoutes from './routes/orderImports';
 import accessoryRoutes from './routes/accessories';
 import inboxRoutes from './routes/inbox';
+import teamRoutes, { remindDueTasks } from './routes/team';
 import recordRoutes from './routes/records';
 import vendorBillRoutes from './routes/vendorBills';
 import masterRoutes from './routes/masters';
@@ -47,7 +48,7 @@ export function createApp() {
 
   const api = express.Router();
   api.use(authenticate);
-  for (const r of [adminRoutes, masterRoutes, salesRoutes, purchaseRoutes, billingRoutes, serviceRoutes, fieldRoutes, expenseRoutes, notificationRoutes, dashboardRoutes, importRoutes, orderImportRoutes, accessoryRoutes, recordRoutes, vendorBillRoutes, raImportRoutes, orderQtyRoutes, inboxRoutes]) api.use(r);
+  for (const r of [adminRoutes, masterRoutes, salesRoutes, purchaseRoutes, billingRoutes, serviceRoutes, fieldRoutes, expenseRoutes, notificationRoutes, dashboardRoutes, importRoutes, orderImportRoutes, accessoryRoutes, recordRoutes, vendorBillRoutes, raImportRoutes, orderQtyRoutes, inboxRoutes, teamRoutes]) api.use(r);
   app.use('/api', api);
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Not found')));
 
@@ -69,4 +70,6 @@ if (require.main === module) {
   const server = http.createServer(createApp());
   initRealtime(server);
   server.listen(env.PORT, () => console.log(`Tisa ERP API listening on :${env.PORT}`));
+  // task due reminders
+  setInterval(() => { remindDueTasks().catch((e) => console.warn('task reminders failed', e?.message)); }, 5 * 60_000);
 }

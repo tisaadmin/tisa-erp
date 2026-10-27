@@ -1811,3 +1811,68 @@ test('approvals inbox: everything waiting for the caller, with how to approve / 
   await ok('director', 'POST', it2.reject.path, { ...it2.reject.body, [it2.reject.field]: 'Get a better rate' });
   assert.equal((await ok('admin', 'GET', `/purchase-orders/${po2.id}`)).status, 'DRAFT');
 });
+
+test('tasks: give work to people (about a record), they start / comment / finish; only the people on it (and Management) see it; due reminders', async () => {
+  const sales = await ok('sales', 'GET', '/auth/me');
+  const tech = await ok('tech', 'GET', '/auth/me');
+  assert.ok(sales.id && tech.id);
+  const past = new Date(Date.now() - 3600000).toISOString();
+  const t = await ok('director', 'POST', '/tasks', { title: 'Collect the signed PO from Apex', priority: 'HIGH', dueAt: past, assigneeIds: [sales.id, tech.id], entityType: 'ORDER', entityId: ctx.order.id, entityLabel: 'Order' });
+  assert.match(t.number, /^TSK\d{4}$/);
+  const mine = await ok('tech', 'GET', '/tasks?scope=mine');
+  assert.ok(mine.some((x: any) => x.id === t.id && x.link === `/orders/${ctx.order.id}`));
+  assert.ok((await ok('tech', 'GET', '/tasks/summary')).overdue >= 1);
+  assert.equal((await call('accounts', 'GET', `/tasks/${t.id}`)).status, 403, 'not on the task');
+  assert.equal((await call('tech', 'POST', `/tasks/${t.id}/status`, { status: 'CANCELLED' })).status, 403, 'only the giver cancels');
+  await ok('tech', 'POST', `/tasks/${t.id}/status`, { status: 'IN_PROGRESS', note: 'Going today' });
+  await ok('sales', 'POST', `/tasks/${t.id}/comments`, { note: 'Client asked for Friday' });
+  await ok('sales', 'POST', `/tasks/${t.id}/status`, { status: 'DONE' });
+  const full = await ok('director', 'GET', `/tasks/${t.id}`);
+  assert.equal(full.status, 'DONE'); assert.ok(full.updates.length >= 4); assert.equal(full.canEdit, true);
+  const notes = await ok('director', 'GET', '/notifications');
+  assert.ok((notes.data ?? notes).some((n: any) => n.type === 'TASK' && /done/.test(n.title)), 'giver told when done');
+  assert.ok((await ok('director', 'GET', `/tasks?scope=record&entityType=ORDER&entityId=${ctx.order.id}&status=all`)).some((x: any) => x.id === t.id), 'listed on the order');
+  // reminder for a task falling due
+  const t2 = await ok('director', 'POST', '/tasks', { title: 'Call the vendor about delivery', dueAt: new Date(Date.now() + 10 * 60000).toISOString(), assigneeIds: [sales.id] });
+  const { remindDueTasks } = await import('../src/routes/team');
+  assert.ok((await remindDueTasks()) >= 1);
+  assert.equal(await remindDueTasks(), 0, 'reminded once');
+  assert.ok(((await ok('sales', 'GET', '/notifications')).data ?? []).some((n: any) => n.entityId === t2.id && /Due/.test(n.title)));
+});
+
+test('messages: one-to-one (same chat every time), groups, record threads; unread counts; only members read; department-only setting', async () => {
+  const people = await ok('sales', 'GET', '/team/people');
+  const tech = await ok('tech', 'GET', '/auth/me');
+  assert.ok(people.some((p: any) => p.id === tech.id));
+  const dm = await ok('sales', 'POST', '/chats/direct', { userId: tech.id });
+  assert.equal((await ok('sales', 'POST', '/chats/direct', { userId: tech.id })).id, dm.id, 'one chat per pair');
+  await ok('sales', 'POST', `/chats/${dm.id}/messages`, { body: 'Are you at Wagle today?' });
+  assert.equal((await ok('tech', 'GET', '/chats/unread')).unread >= 1, true);
+  const list = await ok('tech', 'GET', '/chats');
+  const row = list.find((c: any) => c.id === dm.id);
+  assert.equal(row.unread, 1); assert.equal(row.last.text, 'Are you at Wagle today?'); assert.ok(row.title);
+  await ok('tech', 'POST', `/chats/${dm.id}/read`, {});
+  assert.equal((await ok('tech', 'GET', '/chats')).find((c: any) => c.id === dm.id).unread, 0);
+  assert.equal((await call('accounts', 'GET', `/chats/${dm.id}/messages`)).status, 403, 'outsiders cannot read');
+  // a photo in the chat is only for its members
+  const png = await sharp({ create: { width: 4, height: 4, channels: 3, background: '#f00' } }).png().toBuffer();
+  const fd = new FormData(); fd.append('entityType', 'MESSAGE'); fd.append('files', new Blob([new Uint8Array(png)], { type: 'image/png' }), 'p.png');
+  const [att] = await ok('tech', 'POST', '/attachments', undefined, fd);
+  await ok('tech', 'POST', `/chats/${dm.id}/messages`, { attachmentId: att.id });
+  assert.equal((await call('accounts', 'GET', `/files/${att.id}`)).status, 404);
+  assert.equal((await call('sales', 'GET', `/files/${att.id}`)).status, 200);
+  // group + record thread
+  const g = await ok('director', 'POST', '/chats/group', { title: 'Projects team', memberIds: [tech.id] });
+  assert.ok((await ok('tech', 'GET', '/chats')).some((c: any) => c.id === g.id));
+  const th = await ok('sales', 'POST', '/chats/record', { entityType: 'ORDER', entityId: ctx.order.id, title: 'Order discussion' });
+  assert.equal((await ok('director', 'POST', '/chats/record', { entityType: 'ORDER', entityId: ctx.order.id, title: 'x' })).id, th.id, 'one thread per record');
+  const msgs = await ok('director', 'GET', `/chats/${th.id}/messages`);
+  assert.ok(Array.isArray(msgs));
+  // department-only messaging
+  await ok('admin', 'PUT', '/settings/team', { messaging: 'DEPARTMENT' });
+  const limited = await ok('tech', 'GET', '/team/people');
+  assert.ok(limited.length < people.length + 1, 'fewer people reachable');
+  const acc = people.find((p: any) => p.role === 'Accounts');
+  if (acc && !limited.some((p: any) => p.id === acc.id)) assert.equal((await call('tech', 'POST', '/chats/direct', { userId: acc.id })).status, 403);
+  await ok('admin', 'PUT', '/settings/team', { messaging: 'ALL' });
+});

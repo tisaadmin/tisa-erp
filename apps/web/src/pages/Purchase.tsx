@@ -1,3 +1,4 @@
+import { RecordTeam } from '../components/RecordTeam';
 import { FileDown, PackageCheck, Plus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -236,6 +237,7 @@ export function PoDetail() {
           <p className="text-xs text-slate-500">Accepted qty (received − rejected) is added to stock. Less than the PO is fine; up to 10% more comes in directly.</p>
         </div>}
       </Modal>
+      <RecordTeam entityType="PURCHASE_ORDER" entityId={po.id} label={`PO ${po.number} — ${po.vendor.name}`} />
     </div>
   );
 }
