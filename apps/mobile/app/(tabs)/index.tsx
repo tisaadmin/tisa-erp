@@ -6,14 +6,16 @@ import { api, filePart } from '../../src/lib/api';
 import { useAuth } from '../../src/lib/auth';
 import { fmtDate, fmtDateTime, fmtTime, label } from '../../src/lib/format';
 import { getFix, takePhoto } from '../../src/lib/geo';
-import { isManager } from '../../src/lib/manage';
+import { appMode } from '../../src/lib/manage';
 
 type Att = { checkInAt?: string; checkOutAt?: string; status: string; onSite: boolean; site?: { name: string } | null; distanceFromSite?: number; workMinutes?: number } | null;
 
-/** Management opens on the Overview; field staff on their day. */
+/** Management opens on the Overview, office staff on Work, field staff on their day. */
 export default function Home() {
-  const { can } = useAuth();
-  if (isManager(can)) return <Redirect href="/(tabs)/overview" />;
+  const { can, user } = useAuth();
+  const mode = appMode(user, can);
+  if (mode === 'manager') return <Redirect href="/(tabs)/overview" />;
+  if (mode === 'office') return <Redirect href="/(tabs)/work" />;
   return <FieldHome />;
 }
 

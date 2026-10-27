@@ -1,12 +1,59 @@
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useState } from 'react';
 import { Text, View } from 'react-native';
 import { ApprovalCard } from '../../../src/components/Approve';
-import { Badge, C, Card, Empty, Screen, s, useFetch } from '../../../src/components/ui';
-import { fmtDate, inr, label } from '../../../src/lib/format';
+import { Badge, Btn, C, Card, Chips, Empty, Field, Input, Screen, s, useFetch, useRun } from '../../../src/components/ui';
+import { api } from '../../../src/lib/api';
+import { useAuth } from '../../../src/lib/auth';
+import { fmtDate, inr, label, todayIso } from '../../../src/lib/format';
 import type { Inbox } from '../../../src/lib/manage';
 
-const PATH: Record<string, string> = { order: '/orders', quote: '/quotations', po: '/purchase-orders', invoice: '/invoices', grn: '/grns', challan: '/challans' };
-const NAME: Record<string, string> = { order: 'Order', quote: 'Quotation', po: 'Purchase order', invoice: 'Invoice', grn: 'Goods receipt', challan: 'Challan' };
+const PATH: Record<string, string> = { order: '/orders', quote: '/quotations', po: '/purchase-orders', invoice: '/invoices', grn: '/grns', challan: '/challans', vendorbill: '/vendor-bills' };
+const NAME: Record<string, string> = { order: 'Order', quote: 'Quotation', po: 'Purchase order', invoice: 'Invoice', grn: 'Goods receipt', challan: 'Challan', vendorbill: 'Vendor bill' };
+const MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'CHEQUE', 'CASH'];
+
+/** Money received (invoice) or paid (vendor bill) against a document. */
+function PayForm({ title, path, balance, onDone }: { title: string; path: string; balance: number; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [p, setP] = useState({ amount: String(Math.round(balance * 100) / 100), tdsAmount: '0', mode: 'NEFT', reference: '', date: todayIso() });
+  const { busy, run } = useRun();
+  if (!open) return <Btn icon="cash" title={title} onPress={() => setOpen(true)} />;
+  return (
+    <Card title={title}>
+      <Field label="Amount (₹)"><Input keyboardType="numeric" value={p.amount} onChangeText={(amount) => setP({ ...p, amount })} /></Field>
+      <Field label="TDS deducted (₹)"><Input keyboardType="numeric" value={p.tdsAmount} onChangeText={(tdsAmount) => setP({ ...p, tdsAmount })} /></Field>
+      <Field label="Mode"><Chips options={MODES} value={p.mode} onChange={(mode) => setP({ ...p, mode })} /></Field>
+      <Field label="UTR / cheque no."><Input value={p.reference} onChangeText={(reference) => setP({ ...p, reference })} /></Field>
+      <Field label="Date (YYYY-MM-DD)"><Input value={p.date} onChangeText={(date) => setP({ ...p, date })} /></Field>
+      <Text style={s.muted}>Balance {inr(balance)}. Amount + TDS settles it.</Text>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Btn style={{ flex: 1 }} variant="secondary" title="Cancel" onPress={() => setOpen(false)} />
+        <Btn style={{ flex: 1 }} variant="success" title="Save" busy={busy} disabled={!(Number(p.amount) > 0)} onPress={() => run(async () => {
+          await api(path, { body: { amount: Number(p.amount), tdsAmount: Number(p.tdsAmount) || 0, mode: p.mode, reference: p.reference || null, date: p.date } });
+          setOpen(false); onDone();
+        }, 'Payment recorded')} />
+      </View>
+    </Card>
+  );
+}
+
+/** Quick status steps by department: quote sent / won / lost, PO sent to the vendor. */
+function StatusSteps({ kind, x, onDone }: { kind: string; x: any; onDone: () => void }) {
+  const { can } = useAuth();
+  const { busy, run } = useRun();
+  const steps: [string, string, string, any][] = [];
+  if (kind === 'quote' && can('quotations:edit')) {
+    if (['DRAFT', 'APPROVED'].includes(x.status)) steps.push(['Mark sent to client', `/quotations/${x.id}/status`, 'SENT', 'primary']);
+    if (x.status === 'SENT') { steps.push(['Client accepted', `/quotations/${x.id}/status`, 'ACCEPTED', 'success']); steps.push(['Lost', `/quotations/${x.id}/status`, 'REJECTED', 'secondary']); }
+  }
+  if (kind === 'po' && can('purchase_orders:edit') && x.status === 'APPROVED') steps.push(['Mark sent to vendor', `/purchase-orders/${x.id}/send`, '', 'primary']);
+  if (!steps.length) return null;
+  return (
+    <View style={{ flexDirection: 'row', gap: 8 }}>
+      {steps.map(([t, path, status, v]) => <Btn key={t} style={{ flex: 1 }} variant={v} title={t} busy={busy} onPress={() => run(async () => { await api(path, { body: status ? { status } : {} }); onDone(); })} />)}
+    </View>
+  );
+}
 
 function KV({ rows }: { rows: [string, string | number | null | undefined][] }) {
   return (
@@ -21,6 +68,7 @@ function KV({ rows }: { rows: [string, string | number | null | undefined][] }) 
 /** Any document on the phone: header, lines, totals — and approve / send back when it is waiting for you. */
 export default function Doc() {
   const { kind, id } = useLocalSearchParams<{ kind: string; id: string }>();
+  const { can } = useAuth();
   const d = useFetch<any>(PATH[kind] ? `${PATH[kind]}/${id}` : null);
   const inbox = useFetch<Inbox>('/approvals/inbox');
   const billing = useFetch<{ summary: { orderTaxable: number; billedTaxable: number; balanceTaxable: number; billedPct: number } }>(kind === 'order' ? `/orders/${id}/billing` : null);
@@ -31,7 +79,8 @@ export default function Doc() {
   const party = x?.client?.name ?? x?.vendor?.name ?? x?.lead?.name;
   const head: [string, any][] = !x ? [] : [
     ['Date', fmtDate(x.date)],
-    [kind === 'po' || kind === 'grn' ? 'Vendor' : 'Client', party],
+    [kind === 'po' || kind === 'grn' || kind === 'vendorbill' ? 'Vendor' : 'Client', party],
+    ["Supplier's bill", x.billNo ? `${x.billNo} · ${fmtDate(x.billDate)}` : null],
     ['Site', x.site?.name ?? x.deliverToSite?.name],
     ['Subject', x.subject],
     ['Order', x.salesOrder?.number ?? x.order?.number],
@@ -53,6 +102,9 @@ export default function Doc() {
           <Card title={`${NAME[kind]} ${x.number ?? ''}`} right={<Badge text={x.status} />}>
             <KV rows={head} />
           </Card>
+          <StatusSteps kind={kind} x={x} onDone={reload} />
+          {kind === 'invoice' && can('payments:create') && ['ISSUED', 'PARTIALLY_PAID'].includes(x.status) && <PayForm title="Record receipt" path={`/invoices/${x.id}/payments`} balance={Number(x.total) - Number(x.amountPaid ?? 0)} onDone={reload} />}
+          {kind === 'vendorbill' && can('vendor_bills:pay') && ['UNPAID', 'PARTIALLY_PAID'].includes(x.status) && <PayForm title="Record payment to vendor" path={`/vendor-bills/${x.id}/payments`} balance={Number(x.total) - Number(x.amountPaid ?? 0)} onDone={reload} />}
           {kind === 'order' && billing.data && (
             <Card title="Billing">
               <View style={{ height: 8, backgroundColor: '#f1f5f9', borderRadius: 4 }}><View style={{ width: `${Math.min(100, billing.data.summary.billedPct)}%`, height: 8, backgroundColor: C.brand, borderRadius: 4 }} /></View>
@@ -84,7 +136,12 @@ export default function Doc() {
           {x.total != null && (
             <Card title="Totals">
               <KV rows={[['Taxable', inr(x.taxable)], ['CGST', x.cgst ? inr(x.cgst) : null], ['SGST', x.sgst ? inr(x.sgst) : null], ['IGST', x.igst ? inr(x.igst) : null], ['Total', inr(x.total)],
-                ['Received', kind === 'invoice' ? inr(x.amountPaid) : null], ['Balance', kind === 'invoice' ? inr(Number(x.total) - Number(x.amountPaid ?? 0)) : null]]} />
+                [kind === 'vendorbill' ? 'Paid' : 'Received', ['invoice', 'vendorbill'].includes(kind) ? inr(x.amountPaid) : null], ['Balance', ['invoice', 'vendorbill'].includes(kind) ? inr(Number(x.total) - Number(x.amountPaid ?? 0)) : null]]} />
+            </Card>
+          )}
+          {!!x.payments?.length && (
+            <Card title={kind === 'vendorbill' ? 'Payments made' : 'Receipts'}>
+              {x.payments.map((p: any) => <Text key={p.id} style={s.muted}>{fmtDate(p.date)} · {label(p.mode)} {p.reference ?? ''} · {inr(p.amount)}{Number(p.tdsAmount) ? ` + TDS ${inr(p.tdsAmount)}` : ''}</Text>)}
             </Card>
           )}
         </>

@@ -5,7 +5,7 @@ import { Btn, Card, Chips, Field, Input, Row, Screen, s, useFetch, useRun } from
 import { api, getApiUrl } from '../../src/lib/api';
 import { useAuth } from '../../src/lib/auth';
 import { fmtDate, label, todayIso } from '../../src/lib/format';
-import { isManager } from '../../src/lib/manage';
+import { appMode } from '../../src/lib/manage';
 
 export default function More() {
   const { user, logout, can } = useAuth();
@@ -21,7 +21,7 @@ export default function More() {
       <Card style={{ padding: 0, gap: 0 }}>
         <Row icon="notifications" title="Notifications" onPress={() => router.push('/notifications')} />
         <Row icon="business" title="My projects" sub="Material delivered to site, accessories, requisitions" onPress={() => router.push('/projects')} />
-        {isManager(can) && <>
+        {appMode(user, can) !== 'field' && <>
           <Row icon="cube" title="Requisitions" sub="Site material and work requests" onPress={() => router.push('/(tabs)/requests')} />
           <Row icon="wallet" title="My expenses" onPress={() => router.push('/(tabs)/expenses')} />
         </>}

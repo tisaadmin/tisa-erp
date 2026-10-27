@@ -51,6 +51,9 @@ function Gate() {
       <Stack.Screen name="approvals" options={{ title: 'Approvals' }} />
       <Stack.Screen name="list/[kind]" options={{ title: '' }} />
       <Stack.Screen name="doc/[kind]/[id]" options={{ title: '' }} />
+      <Stack.Screen name="lead/[id]" options={{ title: 'Lead' }} />
+      <Stack.Screen name="lead/new" options={{ title: 'New lead' }} />
+      <Stack.Screen name="client/[id]" options={{ title: 'Client' }} />
     </Stack>
   );
 }

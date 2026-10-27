@@ -2,6 +2,16 @@
 export const isManager = (can: (p: string) => boolean) =>
   can('purchase_orders:approve') || can('quotations:approve') || can('grn:approve') || can('challans:approve') || can('orders:approve');
 
+/** Which workspace the app opens in: Management, office (back-office departments) or field (technicians). */
+export function appMode(user: { isFieldStaff: boolean } | null, can: (p: string) => boolean): 'manager' | 'office' | 'field' {
+  if (isManager(can)) return 'manager';
+  return user?.isFieldStaff ? 'field' : 'office';
+}
+
+/** Office staff who decide something (accounts, approvers, department heads) get the Approve tab too. */
+export const approvesSomething = (user: { teamSize?: number } | null, can: (p: string) => boolean) =>
+  isManager(can) || can('expenses:finance') || can('expenses:approve') || can('requisitions:approve') || can('leaves:approve') || can('accessories:approve') || (user?.teamSize ?? 0) > 0;
+
 export type InboxItem = {
   kind: string; id: string; number: string | null; title: string; sub: string; amount: number | null; date: string; by: string | null; note: string | null;
   lines: string[]; link: string;
@@ -18,9 +28,11 @@ export const KIND_LABEL: Record<string, string> = {
 /** web link → app screen (push notifications, inbox items) */
 export function appRouteFor(link?: string | null): string | null {
   if (!link) return null;
-  const m = link.match(/^\/(tickets|requisitions|expenses|purchase-orders|quotations|orders|invoices|grns|challans)\/([\w-]+)/);
+  const m = link.match(/^\/(tickets|requisitions|expenses|purchase-orders|quotations|orders|invoices|grns|challans|vendor-bills|leads|clients)\/([\w-]+)/);
   if (!m) return null;
-  const doc: Record<string, string> = { 'purchase-orders': 'po', quotations: 'quote', orders: 'order', invoices: 'invoice', grns: 'grn', challans: 'challan' };
+  const doc: Record<string, string> = { 'purchase-orders': 'po', quotations: 'quote', orders: 'order', invoices: 'invoice', grns: 'grn', challans: 'challan', 'vendor-bills': 'vendorbill' };
+  if (m[1] === 'leads') return `/lead/${m[2]}`;
+  if (m[1] === 'clients') return `/client/${m[2]}`;
   if (doc[m[1]]) return `/doc/${doc[m[1]]}/${m[2]}`;
   return { tickets: `/ticket/${m[2]}`, requisitions: `/requisition/${m[2]}`, expenses: '/approvals' }[m[1]] ?? null;
 }
