@@ -343,16 +343,16 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
                 <Select className="w-52" value="" onChange={(e) => e.target.value && setAllNewSystems(e.target.value)} options={catOpts} placeholder="Set all…" /></div>
             )} pad={false}>
             <div className="overflow-x-auto">
-              <table className="tbl min-w-[1250px]">
+              <table className="tbl min-w-[1150px]">
                 <thead>
                   <tr><th className="w-8" /><th className="w-12">Sr.</th><th className="min-w-60">Description (from file)</th><th className="w-[19rem]">Inventory item</th>
-                    <th className="w-24 min-w-20 text-right">Qty</th><th className="w-20 min-w-20">Unit</th><th className="w-28 min-w-28 text-right">Rate</th>{showCost && <th className="w-56 min-w-56 text-right" title="Our purchase rate and the vendor — internal costing, not shown to the client">Purchase rate · vendor</th>}<th className="w-24 min-w-20 text-right">GST %</th><th className="w-28 text-right">Taxable</th></tr>
+                    <th className="w-24 min-w-20 text-right">Qty</th><th className="w-20 min-w-20">Unit</th><th className={cx('text-right', showCost ? 'w-52 min-w-52' : 'w-28 min-w-28')}>{showCost ? <>Sale rate<div className="font-normal normal-case text-amber-700" title="Our purchase rate and the vendor — internal costing, not shown to the client">purchase rate · vendor</div></> : 'Rate'}</th><th className="w-24 min-w-20 text-right">GST %</th><th className="w-28 text-right">Taxable</th></tr>
                 </thead>
                 <tbody>
                   {lines.map((l, i) => (l.sheet && offSheets.includes(l.sheet) ? null : (
                     <Fragment key={l.key}>
                     {(l.section || l.sheet) && (l.section !== lines[i - 1]?.section || l.sheet !== lines[i - 1]?.sheet) && (
-                      <tr className="bg-slate-50"><td colSpan={showCost ? 10 : 9} className="py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">{[l.sheet, l.section].filter(Boolean).join(' · ')}</td></tr>
+                      <tr className="bg-slate-50"><td colSpan={9} className="py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">{[l.sheet, l.section].filter(Boolean).join(' · ')}</td></tr>
                     )}
                     <tr className={cx(!l.include && 'opacity-45')}>
                       <td className="pt-3"><input type="checkbox" checked={l.include} onChange={(e) => set(i, { include: e.target.checked })} title="Include this line" /></td>
@@ -392,12 +392,13 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
                       <td><input type="number" min={0} step="any" className="input text-right" value={l.qty} onChange={(e) => set(i, { qty: Number(e.target.value) })} />
                         {((l.deliveredQty ?? 0) > 0 || (l.billedQty ?? 0) > 0) && <div className="mt-0.5 text-right text-[11px] leading-tight text-amber-700" title="Already done in the old ERP">{(l.deliveredQty ?? 0) > 0 && <div>dlv {l.deliveredQty}</div>}{(l.billedQty ?? 0) > 0 && <div>billed {l.billedQty}</div>}</div>}</td>
                       <td><input className="input" value={l.unit} onChange={(e) => set(i, { unit: e.target.value })} /></td>
-                      <td><input type="number" min={0} step="any" className={cx('input text-right', l.include && !l.rate && 'border-amber-400')} value={l.rate} onChange={(e) => set(i, { rate: Number(e.target.value) })} /></td>
-                      {showCost && <td>
+                      <td><input type="number" min={0} step="any" aria-label={`Sale rate ${l.key}`} className={cx('input text-right', l.include && !l.rate && 'border-amber-400')} value={l.rate} onChange={(e) => set(i, { rate: Number(e.target.value) })} />
+                      {showCost && <div className="mt-1.5 rounded-md bg-amber-50/70 p-1.5">
+                        <div className="mb-0.5 text-[11px] font-medium text-amber-800">Purchase rate</div>
                         <input type="number" min={0} step="any" aria-label={`Purchase rate ${l.key}`} placeholder="Purchase rate" className={cx('input text-right', l.include && l.action !== 'text' && l.costRate == null && 'border-amber-300')} value={l.costRate ?? ''} onChange={(e) => set(i, { costRate: e.target.value === '' ? null : Number(e.target.value) })} />
                         <div className="mt-1"><Combo options={vendorOpts} value={vendorOpts.find((v) => v.label.toLowerCase() === (l.costVendor ?? '').toLowerCase())?.value ?? null} text={l.costVendor} placeholder="Vendor…" allowCustom onChange={(_v, o) => set(i, { costVendor: o?.label ?? null })} /></div>
                         {l.costRate != null && l.rate > 0 && <div className={cx('mt-0.5 text-right text-[11px]', l.rate - l.costRate < 0 ? 'text-red-600' : 'text-slate-400')}>margin {Math.round(((l.rate - l.costRate) / l.rate) * 1000) / 10}%</div>}
-                      </td>}
+                      </div>}</td>
                       <td><select className="input text-right" value={l.gstRate} onChange={(e) => set(i, { gstRate: Number(e.target.value) })}>{[0, 5, 12, 18, 28, 40].map((g) => <option key={g} value={g}>{g}</option>)}</select></td>
                       <td className="num pt-3">{inr(l.qty * l.rate * (1 - (l.discountPct || 0) / 100))}
                         {!showCost && l.costRate != null && <div className="mt-0.5 text-[11px] font-normal text-slate-400" title="Purchase rate from the sheet — goes to the quotation's internal costing">cost {inr(l.costRate)}{l.costVendor ? ` · ${l.costVendor}` : ''}</div>}</td>
