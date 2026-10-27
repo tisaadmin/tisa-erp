@@ -10,6 +10,7 @@ import type { Inbox } from '../../../src/lib/manage';
 
 const PATH: Record<string, string> = { order: '/orders', quote: '/quotations', po: '/purchase-orders', invoice: '/invoices', grn: '/grns', challan: '/challans', vendorbill: '/vendor-bills' };
 const NAME: Record<string, string> = { order: 'Order', quote: 'Quotation', po: 'Purchase order', invoice: 'Invoice', grn: 'Goods receipt', challan: 'Challan', vendorbill: 'Vendor bill' };
+const ENTITY: Record<string, string> = { order: 'ORDER', quote: 'QUOTATION', po: 'PURCHASE_ORDER', invoice: 'INVOICE', challan: 'CHALLAN' };
 const MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'CHEQUE', 'CASH'];
 
 /** Money received (invoice) or paid (vendor bill) against a document. */
@@ -103,6 +104,12 @@ export default function Doc() {
             <KV rows={head} />
           </Card>
           <StatusSteps kind={kind} x={x} onDone={reload} />
+          {ENTITY[kind] && (
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Btn style={{ flex: 1 }} variant="secondary" icon="chatbubbles" title="Discuss" onPress={() => api<{ id: string }>('/chats/record', { body: { entityType: ENTITY[kind], entityId: x.id, title: `${NAME[kind]} ${x.number ?? ''}${party ? ` — ${party}` : ''}` } }).then((c) => router.push(`/chat/${c.id}`)).catch(() => {})} />
+              <Btn style={{ flex: 1 }} variant="secondary" icon="checkbox" title="Add task" onPress={() => router.push({ pathname: '/task/new', params: { entityType: ENTITY[kind], entityId: x.id, label: `${NAME[kind]} ${x.number ?? ''}${party ? ` — ${party}` : ''}` } })} />
+            </View>
+          )}
           {kind === 'invoice' && can('payments:create') && ['ISSUED', 'PARTIALLY_PAID'].includes(x.status) && <PayForm title="Record receipt" path={`/invoices/${x.id}/payments`} balance={Number(x.total) - Number(x.amountPaid ?? 0)} onDone={reload} />}
           {kind === 'vendorbill' && can('vendor_bills:pay') && ['UNPAID', 'PARTIALLY_PAID'].includes(x.status) && <PayForm title="Record payment to vendor" path={`/vendor-bills/${x.id}/payments`} balance={Number(x.total) - Number(x.amountPaid ?? 0)} onDone={reload} />}
           {kind === 'order' && billing.data && (

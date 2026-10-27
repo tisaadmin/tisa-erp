@@ -28,10 +28,12 @@ export const KIND_LABEL: Record<string, string> = {
 /** web link → app screen (push notifications, inbox items) */
 export function appRouteFor(link?: string | null): string | null {
   if (!link) return null;
-  const m = link.match(/^\/(tickets|requisitions|expenses|purchase-orders|quotations|orders|invoices|grns|challans|vendor-bills|leads|clients)\/([\w-]+)/);
+  const m = link.match(/^\/(tickets|requisitions|expenses|purchase-orders|quotations|orders|invoices|grns|challans|vendor-bills|leads|clients|tasks|messages)\/([\w-]+)/);
   if (!m) return null;
   const doc: Record<string, string> = { 'purchase-orders': 'po', quotations: 'quote', orders: 'order', invoices: 'invoice', grns: 'grn', challans: 'challan', 'vendor-bills': 'vendorbill' };
   if (m[1] === 'leads') return `/lead/${m[2]}`;
+  if (m[1] === 'tasks') return `/task/${m[2]}`;
+  if (m[1] === 'messages') return `/chat/${m[2]}`;
   if (m[1] === 'clients') return `/client/${m[2]}`;
   if (doc[m[1]]) return `/doc/${doc[m[1]]}/${m[2]}`;
   return { tickets: `/ticket/${m[2]}`, requisitions: `/requisition/${m[2]}`, expenses: '/approvals' }[m[1]] ?? null;

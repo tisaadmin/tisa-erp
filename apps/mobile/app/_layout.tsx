@@ -10,7 +10,8 @@ import { SetPassword } from '../src/components/SetPassword';
 import { appRouteFor } from '../src/lib/manage';
 
 /** Maps a desktop link (/tickets/123, /purchase-orders/…) from a push notification to an app route. */
-function routeFor(link?: string, type?: string): string | null {
+function routeFor(link?: string, type?: string, chatId?: string): string | null {
+  if (type === 'MESSAGE' && chatId) return `/chat/${chatId}`;
   return appRouteFor(link) ?? (type === 'APPROVAL' ? '/(tabs)/approve' : null);
 }
 
@@ -26,8 +27,8 @@ function Gate() {
   }, [user, ready, seg, router]);
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((r) => {
-      const data = r.notification.request.content.data as { link?: string; type?: string } | undefined;
-      const to = routeFor(data?.link, data?.type);
+      const data = r.notification.request.content.data as { link?: string; type?: string; chatId?: string } | undefined;
+      const to = routeFor(data?.link, data?.type, data?.chatId);
       if (to) router.push(to as never);
     });
     return () => sub.remove();
@@ -54,6 +55,11 @@ function Gate() {
       <Stack.Screen name="lead/[id]" options={{ title: 'Lead' }} />
       <Stack.Screen name="lead/new" options={{ title: 'New lead' }} />
       <Stack.Screen name="client/[id]" options={{ title: 'Client' }} />
+      <Stack.Screen name="chat/[id]" options={{ title: 'Chat' }} />
+      <Stack.Screen name="chat/new" options={{ title: 'New chat' }} />
+      <Stack.Screen name="tasks" options={{ title: 'Tasks' }} />
+      <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
+      <Stack.Screen name="task/new" options={{ title: 'New task' }} />
     </Stack>
   );
 }

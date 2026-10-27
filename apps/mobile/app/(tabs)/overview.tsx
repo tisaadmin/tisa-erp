@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { Pressable, Text, View } from 'react-native';
 import { C, Card, Empty, Row, Screen, s, useFetch } from '../../src/components/ui';
+import { MyTasksCard } from '../../src/components/MyTasks';
 import { useAuth } from '../../src/lib/auth';
 import { fmtDate, inr } from '../../src/lib/format';
 import type { Inbox } from '../../src/lib/manage';
@@ -90,6 +91,7 @@ export default function Overview() {
         </Pressable>
       )}
 
+      <MyTasksCard />
       {!x && !d.error && <Empty text="Loading…" />}
       {!!d.error && <Empty text={d.error} />}
       {x && (

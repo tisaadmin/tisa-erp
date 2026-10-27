@@ -7,6 +7,7 @@ import { useAuth } from '../../src/lib/auth';
 import { fmtDate, fmtDateTime, fmtTime, label } from '../../src/lib/format';
 import { getFix, takePhoto } from '../../src/lib/geo';
 import { appMode } from '../../src/lib/manage';
+import { MyTasksCard } from '../../src/components/MyTasks';
 
 type Att = { checkInAt?: string; checkOutAt?: string; status: string; onSite: boolean; site?: { name: string } | null; distanceFromSite?: number; workMinutes?: number } | null;
 
@@ -76,6 +77,8 @@ function FieldHome() {
           </Pressable>
         ))}
       </View>
+
+      <MyTasksCard />
 
       <Card title="My open jobs" style={{ padding: 0, gap: 0 }}>
         {(tickets.data?.data ?? []).map((t) => (

@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { Pressable, Text, View } from 'react-native';
 import { Badge, C, Card, Row, Screen, s, useFetch } from '../../src/components/ui';
+import { MyTasksCard } from '../../src/components/MyTasks';
 import { useAuth } from '../../src/lib/auth';
 import { fmtDate, fmtTime, inr, todayIso } from '../../src/lib/format';
 import { approvesSomething, type Inbox } from '../../src/lib/manage';
@@ -61,6 +62,8 @@ export default function Work() {
           <Ionicons name="chevron-forward" size={18} color={C.muted} />
         </Pressable>
       )}
+
+      <MyTasksCard />
 
       {sales && <>
         <Section title="Sales" />
