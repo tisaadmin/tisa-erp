@@ -653,8 +653,14 @@ export const deliveryChallans = pgTable('delivery_challans', {
   transporter: text(),
   ewayBillNo: text(),
   location: text().notNull().default('MAIN'),
-  status: text().notNull().default('DISPATCHED'), // DISPATCHED, DELIVERED, CANCELLED
+  /** DISPATCHED, DELIVERED, CANCELLED; PENDING_APPROVAL when it sends more than the order (stock moves only once approved); REJECTED */
+  status: text().notNull().default('DISPATCHED'),
   receivedBy: text(),
+  /** why more than the order is being sent (asked when the challan needs approval) */
+  overQtyReason: text(),
+  approvedById: text(),
+  approvedAt: ts(),
+  rejectReason: text(),
   notes: text(),
   sourceRef: text(), // imported from the old ERP (history — no stock or delivered qty was moved)
   createdById: text(),
@@ -675,6 +681,8 @@ export const deliveryChallanItems = pgTable('delivery_challan_items', {
   useAltDescription: boolean().notNull().default(false),
   unit: text().notNull().default('Nos'),
   qty: qty().notNull(),
+  /** part of qty beyond what the order (or its accessories list) still has to send — needed the approval */
+  excessQty: qty().notNull().default(0),
   serialNos: text(),
 });
 

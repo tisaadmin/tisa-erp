@@ -53,8 +53,9 @@ export type OrderLineBilling = {
  *  - INSTALLATION: qty marked installed on the order line
  */
 function eligible(stage: MilestoneStage, line: { qty: number; deliveredQty: number; installedQty: number }) {
-  if (stage === 'DELIVERY') return line.deliveredQty;
-  if (stage === 'INSTALLATION') return line.installedQty;
+  // material sent beyond the order (approved extra on a challan) is not billable beyond the ordered quantity
+  if (stage === 'DELIVERY') return Math.min(line.qty, line.deliveredQty);
+  if (stage === 'INSTALLATION') return Math.min(line.qty, line.installedQty);
   return line.qty;
 }
 

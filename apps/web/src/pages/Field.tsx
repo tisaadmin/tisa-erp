@@ -217,7 +217,8 @@ export function RequisitionDetail() {
     ['quotations:create', 'Make quotation', `/quotations/new${q}`], ['purchase_orders:create', 'Raise PO', `/purchase-orders/new${q}`],
     ['challans:create', 'Delivery challan', `/challans/new${q}`], ['invoices:create', 'Invoice', `/invoices/new${q}`],
   ];
-  const canConvert = convert.filter(([p]) => can(p));
+  // a PO needs the project's sales order; a challan needs the order or a service ticket
+  const canConvert = convert.filter(([p]) => can(p) && (p !== 'purchase_orders:create' || !!r.orderId) && (p !== 'challans:create' || !!r.orderId || !!r.ticketId));
   return (
     <div className="space-y-4">
       <PageHeader back="/requisitions" title={<>{r.number} <Status s={r.status} /></>} subtitle={`${label(r.type)} · ${r.client?.name ?? 'client not assigned'}${r.site ? ` · ${r.site.name}` : ''}`}

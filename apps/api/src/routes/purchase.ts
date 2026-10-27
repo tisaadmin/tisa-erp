@@ -149,8 +149,8 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
   }
   await checkPoParties(d);
   // an approved requisition is authority enough for a PO, like an order form
-  if (!d.salesOrderId && !d.requisitionId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be raised against an order form or an approved requisition — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
-  else if (d.salesOrderId) await requireAccessoryList(d.salesOrderId, req.user);
+  if (!d.salesOrderId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be raised against a sales order — choose the order form (a project requisition brings its order along). POs without an order are not allowed.');
+  else await requireAccessoryList(d.salesOrderId, req.user);
   if (d.salesOrderId) await requireOrderItemsOnly(d.salesOrderId, d.lines, req.user);
   const { interState } = await poContext(d.vendorId);
   const company = await getCompany();
@@ -178,8 +178,12 @@ r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, r
   const ex0 = await db.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id), columns: { salesOrderId: true } });
   if (!ex0) throw notFound('Purchase order');
   await checkPoParties(d, ex0.salesOrderId);
-  if (!d.salesOrderId && !d.requisitionId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be linked to an order form or an approved requisition — choose the sales order (or ask for the "PO without order" permission for stock purchases)');
-  else if (d.salesOrderId) await requireAccessoryList(d.salesOrderId, req.user);
+  if (d.requisitionId && !d.salesOrderId) {
+    const rq0 = await db.query.requisitions.findFirst({ where: eq(requisitions.id, d.requisitionId), columns: { orderId: true } });
+    if (rq0?.orderId) d.salesOrderId = rq0.orderId;
+  }
+  if (!d.salesOrderId) await enforceRule('poRequiresOrder', req.user, 'A purchase order must be raised against a sales order — choose the order form (a project requisition brings its order along). POs without an order are not allowed.');
+  else await requireAccessoryList(d.salesOrderId, req.user);
   if (d.salesOrderId) await requireOrderItemsOnly(d.salesOrderId, d.lines, req.user, req.params.id);
   const { interState } = await poContext(d.vendorId);
   const po = await db.transaction(async (tx) => {
@@ -220,6 +224,8 @@ r.post('/purchase-orders/:id/:action', async (req, res) => {
   const po = await db.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id) });
   if (!po) throw notFound('Purchase order');
   if (!PO_FROM[action].includes(po.status)) throw badRequest(`Cannot ${action} a PO in ${po.status} state`);
+  // a draft made before the rule (no sales order) cannot go ahead without one
+  if (['submit', 'approve'].includes(action) && !po.salesOrderId) await enforceRule('poRequiresOrder', req.user, `PO ${po.number} has no sales order — edit it and choose the order form first`);
   if (action === 'cancel') {
     const received = await db.$count(goodsReceipts, and(eq(goodsReceipts.poId, po.id), eq(goodsReceipts.status, 'POSTED')));
     if (received) throw badRequest('Goods already received against this PO — close it instead');

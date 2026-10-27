@@ -54,7 +54,8 @@ export function PoEditor() {
   const [soId, setSoId] = useState<string | null>(sp.get('salesOrderId'));
   const accStatus = useGet<{ required: boolean; ready: boolean; sheet: { id: string; number: string; status: string } | null; toBuy: { itemId: string | null; description: string; unit: string; qty: number; rate: number }[] }>(soId && !sheetId ? `/orders/${soId}/accessories` : null);
   const { can } = useAuth();
-  const orderRequired = !!rules.data?.find((r) => r.key === 'poRequiresOrder')?.enabled && !can('purchase_orders:without_order');
+  // no role can skip this rule — only switching it off in Workflow rules allows a PO without an order
+  const orderRequired = !!rules.data?.find((r) => r.key === 'poRequiresOrder')?.enabled;
   const accBlocked = !!accStatus.data && !accStatus.data.ready && !can('purchase_orders:without_accessories');
   const [d, setD] = useState({ vendorId: null as string | null, salesOrderId: sp.get('salesOrderId'), deliverToSiteId: null as string | null, date: toInputDate(new Date()), expectedDate: '', terms: '', notes: '', lines: [emptyLine()] as Line[] });
   type Allowed = { itemIds: string[]; restricted: boolean; lines: { key: string; itemId: string | null; qty: number; ordered: number; remaining: number }[] };
@@ -120,7 +121,7 @@ export function PoEditor() {
     <div className="space-y-4">
       <RequisitionBanner req={rq.req} />
       <PageHeader back="/purchase-orders" title={id ? `Edit ${existing.data.number}` : 'New purchase order'}
-        actions={<><Button disabled={accBlocked} loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" disabled={accBlocked} loading={save.isPending} onClick={() => save.mutate(true)}>Submit for approval</Button></>} />
+        actions={<><Button disabled={accBlocked || (orderRequired && !d.salesOrderId)} loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" disabled={accBlocked || (orderRequired && !d.salesOrderId)} loading={save.isPending} onClick={() => save.mutate(true)}>Submit for approval</Button></>} />
       {accBlocked && (
         <div className="rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800">
           This order needs an approved <b>accessories &amp; consumables list</b> before material can be ordered{accStatus.data?.sheet ? <> — {accStatus.data.sheet.number} is {accStatus.data.sheet.status.toLowerCase().replace('_', ' ')}</> : ''}.{' '}
@@ -130,7 +131,7 @@ export function PoEditor() {
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
           <Field label="Vendor" required><Combo options={(vendors.data?.data ?? []).map((v) => ({ value: v.id, label: v.name }))} value={d.vendorId} onChange={(v) => setD({ ...d, vendorId: v })} /></Field>
-          <Field label="Against sales order" required={orderRequired && !orderLocked} hint={orderLocked ? 'Raised from this order — cannot be changed' : orderRequired ? 'Required — POs are raised against an order form' : undefined}>
+          <Field label="Against sales order" required={orderRequired && !orderLocked} hint={orderLocked ? 'Raised from this order — cannot be changed' : orderRequired ? 'Required — every PO is raised against a sales order' : undefined}>
             {orderLocked ? <div className="input truncate bg-slate-50 text-slate-700">{selOrder.data ? `${selOrder.data.number} · ${selOrder.data.client?.name ?? ''}` : '…'}</div>
               : <Combo options={(orders.data?.data ?? []).map((o) => ({ value: o.id, label: o.number, sub: o.client?.name }))} value={d.salesOrderId} onChange={(v) => { setD({ ...d, salesOrderId: v, deliverToSiteId: null }); setSoId(v); }} />}
           </Field>

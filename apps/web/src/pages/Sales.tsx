@@ -1,6 +1,7 @@
 import { FileDown, Plus, Receipt, Truck, Upload } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { Combo } from '../components/Combo';
 import { emptyLine, LineItemsEditor, PaymentTermsEditor, Totals, type Line, type Term } from '../components/LineItems';
 import { RequisitionBanner, useRequisition } from '../components/FromRequisition';
@@ -446,9 +447,10 @@ export function ChallansPage() {
   const list = useGet<Page<any>>('/challans', q);
   return (
     <div>
-      <PageHeader title="Delivery challans" actions={can('challans:create') && <Link to="/challans/new"><Button variant="primary" icon={<Plus className="size-4" />}>New challan</Button></Link>} />
+      <PageHeader title="Delivery challans" subtitle="Supply challans are made from the sales order (order → Delivery challan)" actions={can('challans:create') && <Link to="/challans/new"><Button icon={<Plus className="size-4" />}>Returnable / job-work challan</Button></Link>} />
       <Card pad={false}>
-        <div className="border-b border-slate-100 p-3"><SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} /></div>
+        <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3"><SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} />
+          <Select className="w-52" value={(q as any).status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 } as any)} placeholder="All statuses" options={[{ value: 'PENDING_APPROVAL', label: 'Waiting for approval' }, { value: 'DISPATCHED', label: 'Dispatched' }, { value: 'DELIVERED', label: 'Delivered' }, { value: 'REJECTED', label: 'Rejected' }, { value: 'CANCELLED', label: 'Cancelled' }]} /></div>
         <Table rows={list.data?.data} exportAs={{ name: 'delivery-challans', path: '/challans', query: q }} to={(r) => `/challans/${r.id}`} cols={[
           { key: 'number', label: 'Challan' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) }, { key: 'type', label: 'Type', render: (r) => label(r.type) },
           { key: 'client', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="text-xs text-slate-400">{r.site?.name}</div></> },
@@ -513,7 +515,9 @@ export function NewChallan() {
   const order = useGet<any>(orderId ? `/orders/${orderId}` : null);
   const requisitionId = orderId ? null : sp.get('requisitionId');
   const rq = useRequisition(requisitionId);
-  const [h, setH] = useState({ clientId: null as string | null, siteId: null as string | null, type: 'SUPPLY', vehicleNo: '', transporter: '', ewayBillNo: '', notes: '' });
+  // supply / site-transfer challans go against a sales order (or an approved service requisition); without one only returnable / job-work
+  const freeOnly = !orderId && !requisitionId;
+  const [h, setH] = useState({ clientId: null as string | null, siteId: null as string | null, type: freeOnly ? 'RETURNABLE' : 'SUPPLY', vehicleNo: '', transporter: '', ewayBillNo: '', notes: '', overQtyReason: '' });
   type DcLine = { orderItemId?: string; description: string; unit: string; pending?: number; qty: number; serialNos: string; itemId?: string | null; accessory?: boolean; hsnSac?: string | null; altDescription?: string; useAltDescription?: boolean };
   const [lines, setLines] = useState<DcLine[]>([]);
   const itemsQ = useItems();
@@ -526,7 +530,7 @@ export function NewChallan() {
     if (o && (proj.data || proj.isError)) {
       setH((x) => ({ ...x, clientId: o.clientId, siteId: o.siteId }));
       setLines([
-        ...o.items.filter((l: any) => l.qty - l.deliveredQty > 0).map((l: any) => ({ orderItemId: l.id, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, pending: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, qty: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, serialNos: '' })),
+        ...o.items.filter((l: any) => Number(l.qty) > 0).map((l: any) => { const pend = Math.max(0, Math.round((l.qty - l.deliveredQty) * 1000) / 1000); return { orderItemId: l.id, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, pending: pend, qty: pend, serialNos: '' }; }),
         ...(proj.data?.accessories ?? []).filter((a) => a.pending > 0).map((a) => ({ itemId: a.itemId, description: a.description, unit: a.unit, pending: a.pending, qty: 0, serialNos: '', accessory: true })),
       ]);
     }
@@ -537,19 +541,24 @@ export function NewChallan() {
     setLines(rq.lines('salePrice', true).map((l) => ({ itemId: l.itemId, description: l.description, unit: l.unit, pending: l.qty, qty: l.qty, serialNos: '' })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rq.ready]);
-  const save = useAction(() => api('/challans', { body: { ...h, orderId, requisitionId, lines: lines.filter((l) => l.qty > 0).map((l) => ({ orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos, hsnSac: l.hsnSac ?? hsnOf(l.itemId) ?? null, altDescription: l.altDescription || null, useAltDescription: !!(l.useAltDescription && l.altDescription?.trim()) })) } }),
-    { success: 'Challan created — stock updated', invalidate: [['/challans'], ['/orders'], ['/items']], onSuccess: (dc: any) => nav(`/challans/${dc.id}`) });
+  // more than the order (or its accessories list) still has to send → Management approval
+  const excess = (l: DcLine) => (orderId ? Math.max(0, Math.round((l.qty - (l.pending ?? 0)) * 1000) / 1000) : 0);
+  const overLines = lines.filter((l) => l.qty > 0 && excess(l) > 0);
+  const [extraPick, setExtraPick] = useState<string | null>(null);
+  const save = useAction(() => api('/challans', { body: { ...h, overQtyReason: overLines.length ? h.overQtyReason : null, orderId, requisitionId, lines: lines.filter((l) => l.qty > 0).map((l) => ({ orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos, hsnSac: l.hsnSac ?? hsnOf(l.itemId) ?? null, altDescription: l.altDescription || null, useAltDescription: !!(l.useAltDescription && l.altDescription?.trim()) })) } }),
+    { invalidate: [['/challans'], ['/orders'], ['/items']], onSuccess: (dc: any) => { toast.success(dc.status === 'PENDING_APPROVAL' ? 'Sent to Management for approval — stock moves once approved' : 'Challan created — stock updated'); nav(`/challans/${dc.id}`); } });
   if ((orderId && (!order.data || proj.isLoading)) || rq.loading) return <Spinner />;
   const accIdx = lines.findIndex((l) => l.accessory);
   return (
     <div className="space-y-4">
       <RequisitionBanner req={rq.req} />
       <PageHeader back={orderId ? `/orders/${orderId}` : '/challans'} title="New delivery challan" subtitle={order.data && `Against order ${order.data.number} · ${order.data.client.name}`}
-        actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Dispatch</Button>} />
+        actions={<Button variant="primary" loading={save.isPending} disabled={overLines.length > 0 && h.overQtyReason.trim().length < 3} onClick={() => save.mutate(undefined)}>{overLines.length ? 'Send for approval' : 'Dispatch'}</Button>} />
+      {freeOnly && <div className="rounded-md bg-sky-50 px-4 py-2 text-sm text-sky-800">Supply and site-transfer challans are made from the sales order (open the order → “Delivery challan”). Here you can make only <b>returnable</b> or <b>job-work</b> challans.</div>}
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
           {!orderId && <PartyPicker clientId={h.clientId} siteId={h.siteId} lockClient={!!rq.req?.clientId} lockSite={!!rq.req?.siteId} lockedFrom={rq.req ? `requisition ${rq.req.number}` : undefined} onChange={(v) => setH({ ...h, clientId: v.clientId, siteId: v.siteId })} />}
-          <Field label="Type"><Select value={h.type} onChange={(e) => setH({ ...h, type: e.target.value })} options={['SUPPLY', 'RETURNABLE', 'JOB_WORK', 'SITE_TRANSFER']} /></Field>
+          <Field label="Type"><Select value={h.type} onChange={(e) => setH({ ...h, type: e.target.value })} options={freeOnly ? ['RETURNABLE', 'JOB_WORK'] : ['SUPPLY', 'RETURNABLE', 'JOB_WORK', 'SITE_TRANSFER']} /></Field>
           <Field label="Vehicle no."><Input value={h.vehicleNo} onChange={(e) => setH({ ...h, vehicleNo: e.target.value })} /></Field>
           <Field label="Transporter"><Input value={h.transporter} onChange={(e) => setH({ ...h, transporter: e.target.value })} /></Field>
           <Field label="E-way bill no."><Input value={h.ewayBillNo} onChange={(e) => setH({ ...h, ewayBillNo: e.target.value })} /></Field>
@@ -566,7 +575,8 @@ export function NewChallan() {
                   <OwnDescription alt={l.altDescription} use={l.useAltDescription} onChange={(v) => setLine(i, v)} /></td>
                 <td className="align-top"><Input className="py-1 text-sm" aria-label="HSN/SAC" value={l.hsnSac ?? hsnOf(l.itemId) ?? ''} onChange={(e) => setLine(i, { hsnSac: e.target.value })} /></td>
                 <td className="num">{l.pending != null ? `${qty(l.pending)} ${l.unit}` : '—'}</td>
-                <td><Input type="number" min={0} max={l.pending} step="any" className="text-right" value={l.qty} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, qty: Number(e.target.value) } : x)))} /></td>
+                <td><Input type="number" min={0} step="any" className={cx('text-right', excess(l) > 0 && 'border-amber-400 bg-amber-50')} value={l.qty} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, qty: Number(e.target.value) } : x)))} />
+                  {excess(l) > 0 && <div className="mt-0.5 text-right text-[11px] text-amber-700">{qty(excess(l))} over the order — needs approval</div>}</td>
                 <td><Input value={l.serialNos} placeholder="Optional" onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, serialNos: e.target.value } : x)))} /></td>
                 {!orderId && <td><Button size="sm" variant="ghost" onClick={() => setLines(lines.filter((_, j) => j !== i))}>×</Button></td>}
               </tr>
@@ -574,8 +584,17 @@ export function NewChallan() {
           </tbody>
         </table>
         {!orderId && <div className="p-3"><Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setLines([...lines, { description: '', unit: 'Nos', qty: 1, serialNos: '' }])}>Add line</Button></div>}
-        {orderId && !lines.length && <div className="p-6 text-center text-sm text-slate-500">Everything on this order has been delivered.</div>}
+        {orderId && lines.length > 0 && lines.every((l) => (l.pending ?? 0) <= 0) && <div className="border-t border-slate-100 px-4 py-2 text-sm text-slate-500">Everything on this order has been delivered — anything sent now goes to Management for approval.</div>}
+        {orderId && <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 p-3 text-sm">
+          <span className="text-slate-500">Send an item that is not on this order (needs approval):</span>
+          <div className="w-80"><Combo options={(itemsQ.data?.data ?? []).map((it) => ({ value: it.id, label: it.name, sub: it.sku }))} value={extraPick} onChange={setExtraPick} placeholder="Search inventory…" /></div>
+          <Button size="sm" disabled={!extraPick} icon={<Plus className="size-3.5" />} onClick={() => { const it = itemsQ.data?.data.find((x) => x.id === extraPick); if (it) setLines([...lines, { itemId: it.id, description: it.name, unit: it.unit, pending: 0, qty: 1, serialNos: '', hsnSac: it.hsnSac ?? null }]); setExtraPick(null); }}>Add</Button>
+        </div>}
       </Card>
+      {overLines.length > 0 && <div className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+        <p><b>{overLines.length} line{overLines.length > 1 ? 's go' : ' goes'} beyond what the order still has to send</b> ({overLines.map((l) => `${l.description}: +${qty(excess(l))} ${l.unit}`).join('; ')}). The challan goes to Management for approval; stock and delivered quantities change only once it is approved.</p>
+        <Field label="Reason for the extra quantity" className="mt-2"><Input value={h.overQtyReason} onChange={(e) => setH({ ...h, overQtyReason: e.target.value })} placeholder="e.g. spares for site, client asked for more" /></Field>
+      </div>}
       <Card title="Remarks"><Textarea value={h.notes} onChange={(e) => setH({ ...h, notes: e.target.value })} placeholder="Narration for this challan — printed at the end of the DC" rows={3} /></Card>
     </div>
   );
@@ -587,21 +606,33 @@ export function ChallanDetail() {
   const { data: dc } = useGet<any>(`/challans/${id}`);
   const [recv, setRecv] = useState('');
   const delivered = useAction(() => api(`/challans/${id}/delivered`, { body: { receivedBy: recv } }), { success: 'Marked delivered', invalidate: [['/challans']] });
-  const cancel = useAction(() => api(`/challans/${id}/cancel`, { body: {} }), { success: 'Challan cancelled, stock returned', invalidate: [['/challans'], ['/orders']] });
+  const cancel = useAction(() => api(`/challans/${id}/cancel`, { body: {} }), { success: 'Challan cancelled', invalidate: [['/challans'], ['/orders']] });
+  const [rejectDc, setRejectDc] = useState<string | null>(null);
+  const approveDc = useAction(() => api(`/challans/${id}/approve`, { body: {} }), { success: 'Approved — stock updated, ready to dispatch', invalidate: [['/challans'], ['/orders'], ['/items']] });
+  const doRejectDc = useAction(() => api(`/challans/${id}/reject`, { body: { reason: rejectDc } }), { success: 'Challan rejected', invalidate: [['/challans']], onSuccess: () => setRejectDc(null) });
   if (!dc) return <Spinner />;
+  const pending = dc.status === 'PENDING_APPROVAL';
   return (
     <div className="space-y-4">
       <PageHeader back="/challans" title={<>{dc.number} <Status s={dc.status} /></>} subtitle={`${dc.client.name}${dc.site ? ` · ${dc.site.name}` : ''}`}
         actions={<>
-          <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/challans/${dc.id}/pdf`)}>PDF</Button>
+          {!['PENDING_APPROVAL', 'REJECTED'].includes(dc.status) && <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/challans/${dc.id}/pdf`)}>PDF</Button>}
+          {pending && can('challans:approve') && <><Button variant="success" loading={approveDc.isPending} onClick={() => approveDc.mutate(undefined)}>Approve</Button><Button variant="danger" onClick={() => setRejectDc('')}>Reject</Button></>}
           {dc.status === 'DISPATCHED' && can('challans:edit') && <><Input className="w-48" placeholder="Received by" value={recv} onChange={(e) => setRecv(e.target.value)} /><Button variant="success" loading={delivered.isPending} onClick={() => delivered.mutate(undefined)}>Mark delivered</Button></>}
-          {dc.order && dc.type === 'SUPPLY' && dc.status !== 'CANCELLED' && can('tickets:create') && <Link to={`/orders/${dc.order.id}?install=${dc.id}`}><Button>Assign installation</Button></Link>}
-          {dc.status !== 'CANCELLED' && can('challans:edit') && <Button variant="danger" loading={cancel.isPending} onClick={() => confirm('Cancel this challan and return stock?') && cancel.mutate(undefined)}>Cancel</Button>}
+          {dc.order && dc.type === 'SUPPLY' && ['DISPATCHED', 'DELIVERED'].includes(dc.status) && can('tickets:create') && <Link to={`/orders/${dc.order.id}?install=${dc.id}`}><Button>Assign installation</Button></Link>}
+          {dc.status !== 'CANCELLED' && can('challans:edit') && <Button variant="danger" loading={cancel.isPending} onClick={() => confirm(['PENDING_APPROVAL', 'REJECTED'].includes(dc.status) ? 'Cancel this challan?' : 'Cancel this challan and return stock?') && cancel.mutate(undefined)}>Cancel</Button>}
         </>} />
+      {pending && <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <b>Waiting for Management approval</b> — it sends more than the order still has to send ({dc.items.filter((l: any) => Number(l.excessQty) > 0).map((l: any) => `${l.description}: +${qty(l.excessQty)} ${l.unit}`).join('; ')}). Stock and delivered quantities change once approved; it can be printed then.{dc.overQtyReason && <> Reason: <i>{dc.overQtyReason}</i></>}</div>}
+      {dc.status === 'REJECTED' && <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">Rejected{dc.rejectReason ? ` — ${dc.rejectReason}` : ''}. Nothing left the store. Cancel it and make a new challan within the order.</div>}
+      <Modal open={rejectDc !== null} onClose={() => setRejectDc(null)} title="Reject challan" footer={<><Button onClick={() => setRejectDc(null)}>Back</Button><Button variant="danger" disabled={(rejectDc ?? '').trim().length < 3} loading={doRejectDc.isPending} onClick={() => doRejectDc.mutate(undefined)}>Reject</Button></>}>
+        <Field label="Reason"><Input value={rejectDc ?? ''} onChange={(e) => setRejectDc(e.target.value)} /></Field>
+      </Modal>
       <Card><KV cols={4} items={[['Date', fmtDate(dc.date)], ['Type', label(dc.type)], ['Remarks', dc.notes], ['Order', dc.order ? <Link className="text-brand-700" to={`/orders/${dc.order.id}`}>{dc.order.number}</Link> : null], ['Vehicle', dc.vehicleNo], ['Transporter', dc.transporter], ['E-way bill', dc.ewayBillNo], ['Received by', dc.receivedBy]]} /></Card>
       <Card title="Items" pad={false}>
         <Table rows={dc.items} cols={[{ key: 'description', label: 'Description', render: (l: any) => <>{l.description}{l.useAltDescription && l.altDescription && <div className="mt-0.5 text-xs text-brand-800"><span className="text-slate-400">Prints as:</span> {l.altDescription}</div>}</> },
-          { key: 'hsnSac', label: 'HSN/SAC', render: (l: any) => l.hsnSac ?? '—' }, { key: 'serialNos', label: 'Serial nos.', render: (l: any) => l.serialNos ?? '—' }, { key: 'qty', label: 'Qty', num: true, render: (l: any) => `${qty(l.qty)} ${l.unit}` }]} />
+          { key: 'hsnSac', label: 'HSN/SAC', render: (l: any) => l.hsnSac ?? '—' }, { key: 'serialNos', label: 'Serial nos.', render: (l: any) => l.serialNos ?? '—' },
+          { key: 'excessQty', label: 'Over the order', num: true, render: (l: any) => (Number(l.excessQty) > 0 ? <span className="text-amber-700">+{qty(l.excessQty)}</span> : '') }, { key: 'qty', label: 'Qty', num: true, render: (l: any) => `${qty(l.qty)} ${l.unit}` }]} />
       </Card>
     </div>
   );

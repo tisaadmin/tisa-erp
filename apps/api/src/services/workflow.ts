@@ -24,9 +24,9 @@ export const WORKFLOW_RULES = {
     exception: 'orders:without_quote', default: true,
   },
   poRequiresOrder: {
-    label: 'Purchase orders only against an order form',
-    help: 'Every PO must be linked to a sales order. Purchases for stock or the office need the exception permission.',
-    exception: 'purchase_orders:without_order', default: true,
+    label: 'Purchase orders only against a sales order',
+    help: 'Every PO must be linked to a sales order (a project requisition brings its order along). No role can skip this — only switching the rule off here allows a PO without an order.',
+    exception: null, default: true,
   },
   poRequiresAccessories: {
     label: 'Purchase orders only after the accessories & consumables list is approved',
@@ -39,9 +39,9 @@ export const WORKFLOW_RULES = {
     exception: 'purchase_orders:extra_items', default: true,
   },
   dcRequiresOrder: {
-    label: 'Supply delivery challans only against an order form',
-    help: 'Material sent to a client as supply must be dispatched against its order. Returnable, job-work and site-transfer challans are not affected.',
-    exception: 'challans:without_order', default: true,
+    label: 'Delivery challans only against a sales order, within its quantities',
+    help: 'Supply and site-transfer challans must be raised against the sales order (or an approved service requisition for a ticket). Sending more than the order (or its accessories list) still has to send needs Management approval — stock moves only once approved. Returnable and job-work challans are not affected. No role can skip this.',
+    exception: null, default: true,
   },
 } as const;
 export type WorkflowRule = keyof typeof WORKFLOW_RULES;
@@ -55,7 +55,8 @@ export async function workflowRules(): Promise<Record<WorkflowRule, boolean>> {
 export async function enforceRule(rule: WorkflowRule, user: AuthUser, message: string) {
   const rules = await workflowRules();
   if (!rules[rule]) return;
-  if (can(user, WORKFLOW_RULES[rule].exception)) return;
+  const ex = WORKFLOW_RULES[rule].exception as string | null;
+  if (ex && can(user, ex)) return;
   throw new HttpError(403, message);
 }
 

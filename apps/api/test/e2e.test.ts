@@ -628,23 +628,22 @@ test('bulk order import: many product-details files matched by SO number; ready 
   assert.equal(reopened.duplicate.number, by('261099701').order.number);
 });
 
-test('workflow rules: PO / challan need an order, orders need a quote; exceptions by permission; rules can be switched off', async () => {
+test('workflow rules: PO / challan need a sales order (no role can skip), orders need a quote; rules can be switched off', async () => {
   const rules = await ok('admin', 'GET', '/settings/workflow');
   assert.deepEqual(rules.map((r: any) => [r.key, r.enabled]), [['quoteRequiresApproval', true], ['quoteRequiresCosting', true], ['orderRequiresQuote', true], ['poRequiresOrder', true], ['poRequiresAccessories', false], ['poOnlyOrderItems', true], ['dcRequiresOrder', true]]);
   const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
-  // Purchase & Stores has the "PO without order" exception by default; Management (director) too; Sales has no PO rights at all
-  const orderless = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] });
-  assert.equal(orderless.status, 201, 'stores may buy for stock');
-  // take the exception away from the role → blocked
-  const roles = await ok('admin', 'GET', '/roles');
-  const storesRole = roles.find((r: any) => r.name === 'Purchase & Stores');
-  await ok('admin', 'PATCH', `/roles/${storesRole.id}`, { permissions: storesRole.permissions.filter((p: string) => p !== 'purchase_orders:without_order') });
-  const blocked = await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] });
-  assert.equal(blocked.status, 403); assert.match(blocked.data.error, /against an order form/);
+  // a PO without a sales order: blocked for everyone, even with the old "without order" permission
+  for (const who of ['stores', 'director', 'admin']) {
+    const blocked = await call(who, 'POST', '/purchase-orders', { vendorId: vendor.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] });
+    assert.equal(blocked.status, 403, `${who}: no PO without an order`); assert.match(blocked.data.error, /against a sales order/);
+  }
   assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] })).status, 201, 'linked to an order is fine');
-  // supply challan without an order: blocked; returnable is allowed
-  const sc = await call('stores', 'POST', '/challans', { clientId: ctx.client.id, type: 'SUPPLY', lines: [{ itemId: ctx.cam.id, qty: 1 }] });
-  assert.equal(sc.status, 403);
+  // supply / site-transfer challan without an order: blocked for everyone; returnable is allowed
+  for (const type of ['SUPPLY', 'SITE_TRANSFER']) assert.equal((await call('admin', 'POST', '/challans', { clientId: ctx.client.id, type, lines: [{ itemId: ctx.cam.id, description: 'cam', qty: 1 }] })).status, 403, type);
+  // switching the PO rule off (Settings → Workflow rules) is the only way round it
+  await ok('admin', 'PUT', '/settings/workflow', { poRequiresOrder: false });
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 201);
+  await ok('admin', 'PUT', '/settings/workflow', { poRequiresOrder: true });
   const ret = await call('stores', 'POST', '/challans', { clientId: ctx.client.id, siteId: ctx.site.id, type: 'RETURNABLE', lines: [{ itemId: ctx.cam.id, description: 'Demo camera on loan', qty: 1 }] });
   assert.equal(ret.status, 201, JSON.stringify(ret.data));
   // direct order: blocked for sales; switching the rule off allows it
@@ -653,7 +652,6 @@ test('workflow rules: PO / challan need an order, orders need a quote; exception
   await ok('admin', 'PUT', '/settings/workflow', { orderRequiresQuote: false });
   assert.equal((await call('sales', 'POST', '/orders', { clientId: ctx.client.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 201);
   await ok('admin', 'PUT', '/settings/workflow', { orderRequiresQuote: true });
-  await ok('admin', 'PATCH', `/roles/${storesRole.id}`, { permissions: storesRole.permissions });
 });
 
 test('accessories: templates per item → sheet calculated from the order → submit → approve (not by the preparer)', async () => {
@@ -1037,7 +1035,7 @@ test('accessories & consumables list is a required step between the order and it
 });
 
 test('requisitions: raised without a site, assigned later, then converted into quotation / PO / challan / invoice, all linked', async () => {
-  const r0 = await ok('tech', 'POST', '/requisitions', { type: 'MATERIAL', priority: 'HIGH', description: 'Need cameras for extension at new block', items: [{ itemId: ctx.cam.id, description: '2MP IP Dome', qty: 3, unit: 'Nos' }] });
+  const r0 = await ok('tech', 'POST', '/requisitions', { type: 'MATERIAL', priority: 'HIGH', ticketId: ctx.ticket.id, description: 'Need cameras for extension at new block', items: [{ itemId: ctx.cam.id, description: '2MP IP Dome', qty: 3, unit: 'Nos' }] });
   assert.equal(r0.siteId, null); assert.equal(r0.clientId, null);
   const unassigned = await ok('svc', 'GET', '/requisitions?unassigned=1');
   assert.ok(unassigned.data.some((x: any) => x.id === r0.id));
@@ -1057,15 +1055,9 @@ test('requisitions: raised without a site, assigned later, then converted into q
   // wrong client on a converted document → refused
   const otherClient = (await ok('admin', 'GET', '/clients?pageSize=200')).data.find((c: any) => c.id !== ctx.client.id);
   assert.equal((await call('accounts', 'POST', '/invoices', { clientId: otherClient.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 400);
-  // PO and supply challan without an order: the approved requisition is the authority
-  const roles = await ok('admin', 'GET', '/roles');
-  const storesRole = roles.find((x: any) => x.name === 'Purchase & Stores');
-  await ok('admin', 'PATCH', `/roles/${storesRole.id}`, { permissions: storesRole.permissions.filter((p: string) => p !== 'purchase_orders:without_order') });
+  // a PO needs a sales order — a service requisition is not enough; a challan for an approved service requisition (ticket) is allowed
   const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
-  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] })).status, 403);
-  const po = await ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] });
-  assert.equal(po.requisitionId, r0.id);
-  await ok('admin', 'PATCH', `/roles/${storesRole.id}`, { permissions: storesRole.permissions });
+  assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] })).status, 403);
   assert.equal((await call('stores', 'POST', '/challans', { clientId: ctx.client.id, siteId: ctx.site.id, type: 'SUPPLY', lines: [{ itemId: ctx.cam.id, description: 'cam', qty: 1 }] })).status, 403);
   await ok('stores', 'POST', '/challans', { clientId: ctx.client.id, siteId: ctx.site.id, type: 'SUPPLY', requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, description: 'cam', qty: 2 }] });
   r = await ok('svc', 'GET', `/requisitions/${r0.id}`);
@@ -1077,7 +1069,7 @@ test('requisitions: raised without a site, assigned later, then converted into q
   const inv = await ok('accounts', 'POST', '/invoices', { type: 'TAX_INVOICE', clientId: ctx.client.id, siteId: ctx.site.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] });
   assert.equal(inv.requisitionId, r0.id);
   r = await ok('svc', 'GET', `/requisitions/${r0.id}`);
-  assert.deepEqual(r.docs.map((d: any) => d.kind).sort(), ['Delivery challan', 'Delivery challan', 'Invoice', 'Purchase order', 'Quotation']);
+  assert.deepEqual(r.docs.map((d: any) => d.kind).sort(), ['Delivery challan', 'Delivery challan', 'Invoice', 'Quotation']);
 });
 
 test('departments: Super Admin sets up a Projects department with a head; the head approves leave, expenses and requisitions of its members only', async () => {
@@ -1677,7 +1669,7 @@ test('remove test data: only the picked records and what was raised against them
 });
 
 test('GRN: up to 10% over the PO is received directly; more needs Management approval (stock moves on approval); less is fine', async () => {
-  const po = await ok('admin', 'POST', '/purchase-orders', { vendorId: ctx.vendor.id, lines: [{ itemId: ctx.cam.id, qty: 10, rate: 1000, gstRate: 18 }] });
+  const po = await ok('admin', 'POST', '/purchase-orders', { vendorId: ctx.vendor.id, salesOrderId: ctx.order.id, lines: [{ itemId: ctx.cam.id, qty: 10, rate: 1000, gstRate: 18 }] });
   for (const a of ['submit', 'approve']) await call('admin', 'POST', `/purchase-orders/${po.id}/${a}`, {});
   const p = await ok('admin', 'GET', `/purchase-orders/${po.id}`);
   assert.ok(['APPROVED', 'SENT'].includes(p.status), `PO approved (${p.status})`);
@@ -1730,4 +1722,35 @@ test('DC and invoice lines: HSN, own description printed instead of the item whe
   assert.equal(i2.items[0].altDescription, 'PM visit Oct'); assert.equal(i2.items[0].hsnSac, '998713');
   await ok('accounts', 'POST', `/invoices/${inv.id}/issue`, {});
   assert.equal((await call('accounts', 'PATCH', `/invoices/${inv.id}/items/${i1.items[0].id}`, { altDescription: 'late' })).status, 400, 'issued: no changes');
+});
+
+test('challan: within the order goes out; more than the order needs a reason and Management approval — stock and delivered qty move only on approval; extra not billable', async () => {
+  const o = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 5, rate: 3000 }] });
+  const line = (await ok('admin', 'GET', `/orders/${o.id}`)).items[0];
+  const stock = async () => (await ok('admin', 'GET', '/items/stock')).find((x: any) => x.id === ctx.cam.id)?.onHand ?? (await ok('admin', 'GET', '/items/stock')).find((x: any) => x.id === ctx.cam.id)?.stock;
+  const s0 = await stock();
+  const dc1 = await ok('stores', 'POST', '/challans', { orderId: o.id, clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ orderItemId: line.id, qty: 3 }] });
+  assert.equal(dc1.status, 'DISPATCHED');
+  // 3 + 4 = 7 > 5: needs a reason, then waits for approval
+  const noReason = await call('stores', 'POST', '/challans', { orderId: o.id, clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ orderItemId: line.id, qty: 4 }] });
+  assert.equal(noReason.status, 400); assert.match(noReason.data.error, /approval/);
+  const dc2 = await ok('stores', 'POST', '/challans', { orderId: o.id, clientId: ctx.client.id, siteId: ctx.site.id, overQtyReason: 'Spares for site', lines: [{ orderItemId: line.id, qty: 4 }] });
+  assert.equal(dc2.status, 'PENDING_APPROVAL');
+  assert.equal((await ok('admin', 'GET', `/orders/${o.id}`)).items[0].deliveredQty, 3, 'not counted until approved');
+  assert.equal((await call('stores', 'GET', `/challans/${dc2.id}/pdf`)).status, 400, 'no printing before approval');
+  assert.equal((await call('stores', 'POST', `/challans/${dc2.id}/approve`, {})).status, 403, 'stores cannot approve');
+  const dcFull = await ok('admin', 'GET', `/challans/${dc2.id}`);
+  assert.equal(dcFull.items[0].excessQty, 2);
+  await ok('director', 'POST', `/challans/${dc2.id}/approve`, {});
+  assert.equal((await ok('admin', 'GET', `/challans/${dc2.id}`)).status, 'DISPATCHED');
+  assert.equal((await ok('admin', 'GET', `/orders/${o.id}`)).items[0].deliveredQty, 7);
+  const bs = await ok('admin', 'GET', `/orders/${o.id}/billing`);
+  assert.equal(bs.lines[0].stages[0].eligibleQty, 5, 'billing stops at the ordered quantity');
+  if (s0 != null) assert.equal(await stock(), s0 - 7);
+  // an item not on the order at all also needs approval; rejected → nothing moves
+  const dc3 = await ok('stores', 'POST', '/challans', { orderId: o.id, clientId: ctx.client.id, siteId: ctx.site.id, overQtyReason: 'extra NVR', lines: [{ itemId: ctx.nvr.id, description: 'NVR', qty: 1 }] });
+  assert.equal(dc3.status, 'PENDING_APPROVAL');
+  await ok('director', 'POST', `/challans/${dc3.id}/reject`, { reason: 'Not on the order' });
+  assert.equal((await ok('admin', 'GET', `/challans/${dc3.id}`)).status, 'REJECTED');
+  await ok('stores', 'POST', `/challans/${dc3.id}/cancel`, {});
 });

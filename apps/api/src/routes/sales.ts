@@ -1,9 +1,9 @@
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
 import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { isSuperAdminPerms } from '../lib/loginPolicy';
-import { db } from '../db';
+import { db, type Tx } from '../db';
 import {
   clients, departments, deliveryChallanItems, items, requisitions, vendors, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
 } from '../db/schema';
@@ -433,6 +433,8 @@ const dcSchema = z.object({
   orderId: opt, clientId: z.string(), siteId: opt, date: z.coerce.date().optional(),
   type: z.enum(['SUPPLY', 'RETURNABLE', 'JOB_WORK', 'SITE_TRANSFER']).default('SUPPLY'),
   vehicleNo: opt, transporter: opt, ewayBillNo: opt, location: z.string().default('MAIN'), notes: opt, requisitionId: opt,
+  /** needed when the challan sends more than the order still has to send (goes to Management for approval) */
+  overQtyReason: opt,
   lines: z.array(z.object({ orderItemId: opt, itemId: opt, description: opt, unit: opt, qty: z.coerce.number().positive(), serialNos: opt,
     hsnSac: opt, altDescription: opt, useAltDescription: z.boolean().optional() })).min(1),
 });
@@ -468,8 +470,11 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
     const rq0 = await db.query.requisitions.findFirst({ where: eq(requisitions.id, d.requisitionId), columns: { orderId: true } });
     if (rq0?.orderId) d.orderId = rq0.orderId;
   }
-  // an approved requisition is authority enough for a supply challan, like an order form
-  if (d.type === 'SUPPLY' && !d.orderId && !d.requisitionId) await enforceRule('dcRequiresOrder', req.user, 'A supply delivery challan must be raised against an order form or an approved requisition — open the order (or requisition) and use "Delivery challan" (returnable, job-work and site-transfer challans are allowed without one)');
+  // supply / site-transfer challans go against the sales order; the only other way is an approved service requisition (for a ticket)
+  if (['SUPPLY', 'SITE_TRANSFER'].includes(d.type) && !d.orderId) {
+    const rq1 = d.requisitionId ? await db.query.requisitions.findFirst({ where: eq(requisitions.id, d.requisitionId), columns: { ticketId: true } }) : null;
+    if (!rq1?.ticketId) await enforceRule('dcRequiresOrder', req.user, 'A delivery challan must be raised against the sales order — open the order and use "Delivery challan". (Only returnable and job-work challans, or material for an approved service requisition, go without one.)');
+  }
   const dc = await db.transaction(async (tx) => {
     const client = await tx.query.clients.findFirst({ where: eq(clients.id, d.clientId) });
     if (!client) throw badRequest('Client not found');
@@ -496,15 +501,13 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
       }
       const ol = l.orderItemId ? byId.get(l.orderItemId) : undefined;
       if (l.orderItemId && !ol) throw badRequest(`Line ${i + 1}: not part of the order`);
-      if (ol) {
-        const pending = r3(ol.qty - ol.deliveredQty);
-        if (l.qty > pending + 1e-9) throw badRequest(`Line ${i + 1} (${ol.description}): only ${pending} ${ol.unit} pending delivery`);
-      }
+      // more than the order still has to send: allowed only with Management approval
+      const excessQty = ol ? Math.max(0, r3(l.qty - Math.max(0, r3(ol.qty - ol.deliveredQty)))) : 0;
       const description = l.description ?? ol?.description;
       if (!description) throw badRequest(`Line ${i + 1} needs a description`);
       if (l.useAltDescription && !l.altDescription) throw badRequest(`Line ${i + 1}: write the description to print, or untick “print my description”`);
       return { orderItemId: ol?.id ?? null, itemId: l.itemId ?? ol?.itemId ?? null, description, hsnSac: l.hsnSac ?? ol?.hsnSac ?? null, altDescription: l.altDescription ?? null, useAltDescription: !!(l.useAltDescription && l.altDescription),
-        unit: l.unit ?? ol?.unit ?? 'Nos', qty: l.qty, serialNos: l.serialNos };
+        unit: l.unit ?? ol?.unit ?? 'Nos', qty: l.qty, excessQty, serialNos: l.serialNos };
     });
     // HSN from the item master where the line has none
     const needHsn = [...new Set(lines.filter((l) => !l.hsnSac && l.itemId).map((l) => l.itemId!))];
@@ -519,35 +522,77 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
       const acc = new Map(st.accessories.map((a) => [a.key, a]));
       const want = new Map<string, number>();
       for (const l of extra) want.set(materialKey(l), r3((want.get(materialKey(l)) ?? 0) + l.qty));
-      for (const [k, q] of want) {
-        const a = acc.get(k);
-        const name = extra.find((l) => materialKey(l) === k)!.description;
-        if (!a) throw badRequest(`"${name}" is not on order ${st.order.number} or its accessories & consumables list`);
-        if (q > a.pending + 1e-9) throw badRequest(`"${name}": ${q} on this challan, but only ${a.pending} ${a.unit} of the accessories list is still to be sent`);
+      // not on the order / accessories list, or beyond what is still to be sent: the excess needs approval
+      const left = new Map([...want.keys()].map((k) => [k, Math.max(0, acc.get(k)?.pending ?? 0)]));
+      for (const l of extra) {
+        const k = materialKey(l); const room = left.get(k) ?? 0;
+        const within = Math.min(room, l.qty);
+        left.set(k, r3(room - within));
+        l.excessQty = r3(l.qty - within);
       }
+    }
+    const over = lines.filter((l) => l.excessQty > 0);
+    if (over.length && !d.overQtyReason) {
+      throw badRequest(`More than the order still has to send — ${over.map((l) => `${l.description}: ${l.excessQty} ${l.unit} extra`).join('; ')}. Give the reason; the challan then goes to Management for approval (stock moves once approved).`);
     }
     const number = await nextNumber(tx, 'CHALLAN', d.date);
     const [dc] = await tx.insert(deliveryChallans).values({
       number, date: d.date ?? new Date(), type: d.type, orderId: d.orderId, clientId: d.clientId, siteId: d.siteId, vehicleNo: d.vehicleNo,
       transporter: d.transporter, ewayBillNo: d.ewayBillNo, location: d.location, notes: d.notes, createdById: req.user.id, requisitionId: rq?.id ?? null,
+      status: over.length ? 'PENDING_APPROVAL' : 'DISPATCHED', overQtyReason: over.length ? d.overQtyReason : null,
     }).returning();
     await tx.insert(deliveryChallanItems).values(lines.map((l) => ({ ...l, challanId: dc.id })));
-    if (rq) await markRequisitionUsed(tx, rq, { kind: 'Delivery challan', number }, req.user.id, lines.map((l) => ({ itemId: l.itemId, description: l.description, qty: l.qty })));
-    for (const l of lines) {
-      if (l.orderItemId) {
-        const ol = byId.get(l.orderItemId)!;
-        await tx.update(salesOrderItems).set({ deliveredQty: r3(ol.deliveredQty + l.qty) }).where(eq(salesOrderItems.id, ol.id));
-        ol.deliveredQty = r3(ol.deliveredQty + l.qty);
-      }
+    if (!over.length) await postChallan(tx, dc.id, req.user.id);
+    return { ...dc, over };
+  });
+  const { over, ...row } = dc;
+  if (over.length) {
+    await notifyPermission('challans:approve', { type: 'APPROVAL', title: `Challan ${row.number} needs approval — more than the order`, body: over.map((l) => `${l.description}: +${l.excessQty} ${l.unit}`).join('; '), link: `/challans/${row.id}`, entityType: 'challan', entityId: row.id }, req.user.id);
+  } else if (d.orderId && d.type === 'SUPPLY') await notifyProjectsHead(d.orderId, row.number, 'dispatched', req.user.id);
+  audit(req, 'create', 'challan', row.id, over.length ? { over: over.map((l) => ({ d: l.description, excess: l.excessQty })) } : undefined);
+  res.status(201).json(row);
+});
+
+/** Dispatch a challan: order delivered quantities, stock out, the requisition it was for. */
+async function postChallan(tx: Tx, dcId: string, userId: string) {
+  const dc = await tx.query.deliveryChallans.findFirst({ where: eq(deliveryChallans.id, dcId), with: { items: true } });
+  if (!dc) throw notFound('Delivery challan');
+  for (const l of dc.items) {
+    if (!l.orderItemId) continue;
+    const ol = await tx.query.salesOrderItems.findFirst({ where: eq(salesOrderItems.id, l.orderItemId) });
+    if (ol) await tx.update(salesOrderItems).set({ deliveredQty: r3(ol.deliveredQty + l.qty) }).where(eq(salesOrderItems.id, ol.id));
+  }
+  await postStock(tx, dc.items.map((l) => ({ itemId: l.itemId, qty: -l.qty, refType: 'DC', refId: dc.id, refNo: dc.number, location: dc.location, createdById: userId })));
+  if (dc.requisitionId) {
+    const rq = await requisitionForDoc(tx, dc.requisitionId, dc.clientId, dc.siteId ?? null).catch(() => null);
+    if (rq) await markRequisitionUsed(tx, rq, { kind: 'Delivery challan', number: dc.number }, userId, dc.items.map((l) => ({ itemId: l.itemId, description: l.description, qty: l.qty })));
+  }
+  if (dc.orderId) await tx.update(salesOrders).set({ status: 'IN_PROGRESS' }).where(and(eq(salesOrders.id, dc.orderId), eq(salesOrders.status, 'OPEN')));
+}
+
+/** Management: approve (stock goes out now) or reject a challan that sends more than the order. */
+const decideChallan = (action: 'approve' | 'reject') => async (req: Request, res: Response) => {
+  const { reason } = z.object({ reason: z.string().trim().optional() }).parse(req.body ?? {});
+  const dc = await db.transaction(async (tx) => {
+    const dc = await tx.query.deliveryChallans.findFirst({ where: eq(deliveryChallans.id, req.params.id) });
+    if (!dc) throw notFound('Delivery challan');
+    if (dc.status !== 'PENDING_APPROVAL') throw badRequest(`This challan is ${dc.status.toLowerCase().replace('_', ' ')}`);
+    if (action === 'approve') {
+      await tx.update(deliveryChallans).set({ status: 'DISPATCHED', approvedById: req.user.id, approvedAt: new Date() }).where(eq(deliveryChallans.id, dc.id));
+      await postChallan(tx, dc.id, req.user.id);
+    } else {
+      if (!reason || reason.length < 3) throw badRequest('Give a reason for rejecting');
+      await tx.update(deliveryChallans).set({ status: 'REJECTED', rejectReason: reason, approvedById: req.user.id, approvedAt: new Date() }).where(eq(deliveryChallans.id, dc.id));
     }
-    await postStock(tx, lines.map((l) => ({ itemId: l.itemId, qty: -l.qty, refType: 'DC', refId: dc.id, refNo: number, location: d.location, createdById: req.user.id })));
-    if (d.orderId) await tx.update(salesOrders).set({ status: 'IN_PROGRESS' }).where(and(eq(salesOrders.id, d.orderId), eq(salesOrders.status, 'OPEN')));
     return dc;
   });
-  if (d.orderId && d.type === 'SUPPLY') await notifyProjectsHead(d.orderId, dc.number, 'dispatched', req.user.id);
-  audit(req, 'create', 'challan', dc.id);
-  res.status(201).json(dc);
-});
+  if (dc.createdById) await notifyUsers([dc.createdById], { type: 'APPROVAL', title: `Challan ${dc.number} ${action === 'approve' ? 'approved — dispatch it' : 'rejected'}`, body: reason, link: `/challans/${dc.id}`, entityType: 'challan', entityId: dc.id });
+  if (action === 'approve' && dc.orderId && dc.type === 'SUPPLY') await notifyProjectsHead(dc.orderId, dc.number, 'dispatched', req.user.id);
+  audit(req, action, 'challan', dc.id, { reason });
+  res.json({ ok: true });
+};
+r.post('/challans/:id/approve', requirePerm('challans:approve'), decideChallan('approve'));
+r.post('/challans/:id/reject', requirePerm('challans:approve'), decideChallan('reject'));
 
 /** Material for an order has gone to site → the head of the Projects department plans the installation. */
 async function notifyProjectsHead(orderId: string, challanNo: string, what: 'dispatched' | 'delivered', exceptUserId?: string) {
@@ -574,6 +619,7 @@ r.post('/challans/:id/cancel', requirePerm('challans:edit'), async (req, res) =>
     const dc = await tx.query.deliveryChallans.findFirst({ where: eq(deliveryChallans.id, req.params.id), with: { items: true } });
     if (!dc) throw notFound('Delivery challan');
     if (dc.status === 'CANCELLED') throw badRequest('Already cancelled');
+    if (['PENDING_APPROVAL', 'REJECTED'].includes(dc.status)) { await tx.update(deliveryChallans).set({ status: 'CANCELLED' }).where(eq(deliveryChallans.id, dc.id)); return; }
     for (const l of dc.items) {
       if (!l.orderItemId) continue;
       const ol = await tx.query.salesOrderItems.findFirst({ where: eq(salesOrderItems.id, l.orderItemId) });
@@ -587,6 +633,8 @@ r.post('/challans/:id/cancel', requirePerm('challans:edit'), async (req, res) =>
 });
 
 r.get('/challans/:id/pdf', requirePerm('challans:view'), async (req, res) => {
+  const st = await db.query.deliveryChallans.findFirst({ where: eq(deliveryChallans.id, req.params.id), columns: { status: true } });
+  if (st && ['PENDING_APPROVAL', 'REJECTED'].includes(st.status)) throw badRequest(st.status === 'REJECTED' ? 'This challan was rejected — it cannot be printed' : 'This challan is waiting for Management approval — print it once approved');
   const { doc, filename } = await challanPdf(req.params.id);
   await sendPdf(res, doc, filename, req.query.download === '1');
 });

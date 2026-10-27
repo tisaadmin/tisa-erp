@@ -18,7 +18,8 @@ export const MODULES = {
   grn: ['view', 'create', 'approve'],
   /** supplier bills (payables) and payments made to vendors */
   vendor_bills: ['view', 'create', 'edit', 'cancel', 'pay'],
-  challans: ['view', 'create', 'edit', 'without_order'],
+  /** approve: a challan sending more than the order */
+  challans: ['view', 'create', 'edit', 'without_order', 'approve'],
   invoices: ['view', 'create', 'edit', 'cancel'],
   payments: ['view', 'create'],
   amc: ['view', 'create', 'edit', 'delete'],
@@ -72,7 +73,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: st
   {
     name: 'Purchase & Stores', description: 'Vendors, POs, GRNs, delivery challans, stock',
     permissions: ['dashboard:view', ...all('vendors'), ...all('items'), ...all('stock'), 'purchase_orders:view', 'purchase_orders:create',
-      'purchase_orders:edit', 'purchase_orders:without_order', 'accessories:view', ...all('grn').filter((p) => p !== 'grn:approve'), 'vendor_bills:view', 'vendor_bills:create', 'vendor_bills:edit', ...all('challans').filter((p) => p !== 'challans:without_order'), ...view('clients', 'sites', 'orders'), 'requisitions:view',
+      'purchase_orders:edit', 'purchase_orders:without_order', 'accessories:view', ...all('grn').filter((p) => p !== 'grn:approve'), 'vendor_bills:view', 'vendor_bills:create', 'vendor_bills:edit', ...all('challans').filter((p) => p !== 'challans:without_order' && p !== 'challans:approve'), ...view('clients', 'sites', 'orders'), 'requisitions:view',
       'requisitions:view_all', 'requisitions:approve', 'attendance:view', 'attendance:mark', 'leaves:view', 'leaves:apply',
       'expenses:view', 'expenses:create'],
   },

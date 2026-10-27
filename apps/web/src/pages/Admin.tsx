@@ -373,7 +373,8 @@ export function WorkflowPage() {
                 <div className="flex-1">
                   <div className="font-medium">{r.label} <Badge t={r.enabled ? 'green' : 'gray'}>{r.enabled ? 'On' : 'Off'}</Badge></div>
                   <p className="mt-0.5 text-sm text-slate-600">{r.help}</p>
-                  <p className="mt-1 text-xs text-slate-500">Exception permission: <b>{EXCEPTION_LABEL[r.exception] ?? r.exception}</b> — give it to a role in <Link className="text-brand-700 underline" to="/roles">Roles &amp; Access</Link>.</p>
+                  {r.exception ? <p className="mt-1 text-xs text-slate-500">Exception permission: <b>{EXCEPTION_LABEL[r.exception] ?? r.exception}</b> — give it to a role in <Link className="text-brand-700 underline" to="/roles">Roles &amp; Access</Link>.</p>
+                    : <p className="mt-1 text-xs text-slate-500">No role can skip this rule while it is on.</p>}
                 </div>
               </li>
             ))}

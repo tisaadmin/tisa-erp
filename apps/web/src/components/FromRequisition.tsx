@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { useGet, useItems } from '../lib/hooks';
 import type { Line } from './LineItems';
 
-export type Req = { id: string; number: string; status: string; type: string; description: string; clientId: string | null; siteId: string | null; orderId?: string | null; order?: { id: string; number: string } | null;
+export type Req = { id: string; number: string; status: string; type: string; description: string; clientId: string | null; siteId: string | null; orderId?: string | null; ticketId?: string | null; order?: { id: string; number: string } | null;
   client?: { id: string; name: string } | null; site?: { id: string; name: string } | null;
   items: { id: string; itemId: string | null; description: string; qty: number; unit: string; issuedQty: number; coveredQty?: number; excessQty?: number; excessAction?: string | null; excessStatus?: string | null; quotationId?: string | null }[] };
 
