@@ -6,6 +6,7 @@ import { api, getApiUrl } from '../../src/lib/api';
 import { useAuth } from '../../src/lib/auth';
 import { fmtDate, label, todayIso } from '../../src/lib/format';
 import { appMode } from '../../src/lib/manage';
+import { checkForUpdate, versionLabel } from '../../src/lib/updates';
 
 export default function More() {
   const { user, logout, can } = useAuth();
@@ -48,6 +49,7 @@ export default function More() {
       )}
       <Card style={{ paddingHorizontal: 0, paddingBottom: 0, gap: 0 }}>
         <Row icon="shield-checkmark" title="Privacy policy" onPress={() => Linking.openURL(`${getApiUrl()}/privacy`)} />
+        <Row icon="cloud-download" title="Check for updates" sub={versionLabel()} onPress={() => checkForUpdate(true)} />
         <Row icon="person-remove" title="Delete my account" sub="How to request deletion of your account and data" onPress={() => Linking.openURL(`${getApiUrl()}/delete-account`)} />
       </Card>
       <Btn variant="danger" icon="log-out" title="Sign out" onPress={logout} />

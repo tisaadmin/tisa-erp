@@ -8,6 +8,7 @@ import { C } from '../src/components/ui';
 import { AuthProvider, useAuth } from '../src/lib/auth';
 import { SetPassword } from '../src/components/SetPassword';
 import { appRouteFor } from '../src/lib/manage';
+import { useAutoUpdates } from '../src/lib/updates';
 
 /** Maps a desktop link (/tickets/123, /purchase-orders/…) from a push notification to an app route. */
 function routeFor(link?: string, type?: string, chatId?: string): string | null {
@@ -19,6 +20,7 @@ function Gate() {
   const { user, ready } = useAuth();
   const seg = useSegments();
   const router = useRouter();
+  useAutoUpdates();
   useEffect(() => {
     if (!ready) return;
     const onLogin = seg[0] === 'login';

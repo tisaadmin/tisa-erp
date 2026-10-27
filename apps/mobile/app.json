@@ -75,7 +75,8 @@
       ],
       "expo-asset",
       "expo-font",
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-updates"
     ],
     "extra": {
       "apiUrl": "https://erp.tisa.in",
@@ -85,8 +86,13 @@
       }
     },
     "runtimeVersion": {
-      "policy": "sdkVersion"
+      "policy": "appVersion"
     },
-    "owner": "tisaatharvasamant"
+    "owner": "tisaatharvasamant",
+    "updates": {
+      "url": "https://u.expo.dev/00c9d0e0-cf38-4a7f-8c10-b7f0096e5260",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    }
   }
 }
