@@ -5,6 +5,7 @@ import { Btn, Card, Chips, Field, Input, Row, Screen, s, useFetch, useRun } from
 import { api, getApiUrl } from '../../src/lib/api';
 import { useAuth } from '../../src/lib/auth';
 import { fmtDate, label, todayIso } from '../../src/lib/format';
+import { isManager } from '../../src/lib/manage';
 
 export default function More() {
   const { user, logout, can } = useAuth();
@@ -20,6 +21,10 @@ export default function More() {
       <Card style={{ padding: 0, gap: 0 }}>
         <Row icon="notifications" title="Notifications" onPress={() => router.push('/notifications')} />
         <Row icon="business" title="My projects" sub="Material delivered to site, accessories, requisitions" onPress={() => router.push('/projects')} />
+        {isManager(can) && <>
+          <Row icon="cube" title="Requisitions" sub="Site material and work requests" onPress={() => router.push('/(tabs)/requests')} />
+          <Row icon="wallet" title="My expenses" onPress={() => router.push('/(tabs)/expenses')} />
+        </>}
         {(can('expenses:approve') || can('requisitions:approve') || can('leaves:approve') || (user?.teamSize ?? 0) > 0) && <Row icon="checkmark-done" title="Approvals" sub="Team expenses, requisitions, leave" onPress={() => router.push('/approvals')} />}
         {can('service_reports:create') && <Row icon="document-text" title="Service report (no ticket)" onPress={() => router.push('/report/new')} />}
       </Card>

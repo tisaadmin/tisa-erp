@@ -7,13 +7,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { C } from '../src/components/ui';
 import { AuthProvider, useAuth } from '../src/lib/auth';
 import { SetPassword } from '../src/components/SetPassword';
+import { appRouteFor } from '../src/lib/manage';
 
-/** Maps a desktop link (/tickets/123) from a push notification to an app route. */
-function routeFor(link?: string): string | null {
-  if (!link) return null;
-  const m = link.match(/^\/(tickets|requisitions|expenses)\/([\w-]+)/);
-  if (!m) return null;
-  return { tickets: `/ticket/${m[2]}`, requisitions: `/requisition/${m[2]}`, expenses: '/(tabs)/expenses' }[m[1]] ?? null;
+/** Maps a desktop link (/tickets/123, /purchase-orders/…) from a push notification to an app route. */
+function routeFor(link?: string, type?: string): string | null {
+  return appRouteFor(link) ?? (type === 'APPROVAL' ? '/(tabs)/approve' : null);
 }
 
 function Gate() {
@@ -28,7 +26,8 @@ function Gate() {
   }, [user, ready, seg, router]);
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((r) => {
-      const to = routeFor(r.notification.request.content.data?.link as string | undefined);
+      const data = r.notification.request.content.data as { link?: string; type?: string } | undefined;
+      const to = routeFor(data?.link, data?.type);
       if (to) router.push(to as never);
     });
     return () => sub.remove();
@@ -50,6 +49,8 @@ function Gate() {
       <Stack.Screen name="expense/new" options={{ title: 'New expense claim' }} />
       <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
       <Stack.Screen name="approvals" options={{ title: 'Approvals' }} />
+      <Stack.Screen name="list/[kind]" options={{ title: '' }} />
+      <Stack.Screen name="doc/[kind]/[id]" options={{ title: '' }} />
     </Stack>
   );
 }

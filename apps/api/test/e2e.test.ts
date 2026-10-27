@@ -1792,3 +1792,22 @@ test('small POs: under the limit go to the purchase team without approval; sever
   assert.equal((await mk(100)).status, 'PENDING_APPROVAL', 'limit 0 = every PO needs approval');
   await ok('admin', 'PUT', '/settings/purchase', { poNoApprovalBelow: 20000 });
 });
+
+test('approvals inbox: everything waiting for the caller, with how to approve / send back; acting from it works', async () => {
+  const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
+  const po = await ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, submit: true, lines: [{ itemId: ctx.svcItem.id, qty: 1, rate: 50000, gstRate: 18 }] });
+  assert.equal(po.status, 'PENDING_APPROVAL');
+  const inbox = await ok('director', 'GET', '/approvals/inbox');
+  const it = inbox.items.find((x: any) => x.kind === 'PURCHASE_ORDER' && x.id === po.id);
+  assert.ok(it, 'pending PO in the director\'s inbox'); assert.ok(it.lines.length >= 1); assert.equal(inbox.counts.PURCHASE_ORDER >= 1, true);
+  assert.equal((await ok('tech', 'GET', '/approvals/inbox')).items.some((x: any) => x.kind === 'PURCHASE_ORDER'), false, 'technicians see no POs');
+  await ok('director', 'POST', it.approve.path, it.approve.body);
+  assert.equal((await ok('admin', 'GET', `/purchase-orders/${po.id}`)).status, 'APPROVED');
+  const again = await ok('director', 'GET', '/approvals/inbox');
+  assert.ok(!again.items.some((x: any) => x.id === po.id), 'gone once approved');
+  // send back with a comment
+  const po2 = await ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, submit: true, lines: [{ itemId: ctx.svcItem.id, qty: 1, rate: 60000, gstRate: 18 }] });
+  const it2 = (await ok('director', 'GET', '/approvals/inbox')).items.find((x: any) => x.id === po2.id);
+  await ok('director', 'POST', it2.reject.path, { ...it2.reject.body, [it2.reject.field]: 'Get a better rate' });
+  assert.equal((await ok('admin', 'GET', `/purchase-orders/${po2.id}`)).status, 'DRAFT');
+});

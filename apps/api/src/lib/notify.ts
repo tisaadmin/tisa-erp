@@ -28,7 +28,7 @@ export async function notifyUsers(userIds: (string | null | undefined)[], payloa
   const messages: ExpoPushMessage[] = targets
     .map((t) => t.token)
     .filter((t): t is string => !!t && Expo.isExpoPushToken(t))
-    .map((to) => ({ to, title: payload.title, body: payload.body, sound: 'default', data: { link: payload.link, entityType: payload.entityType, entityId: payload.entityId } }));
+    .map((to) => ({ to, title: payload.title, body: payload.body, sound: 'default', data: { link: payload.link, type: payload.type, entityType: payload.entityType, entityId: payload.entityId } }));
   if (messages.length) {
     for (const chunk of expo.chunkPushNotifications(messages)) {
       expo.sendPushNotificationsAsync(chunk).catch((e) => console.warn('push failed', e?.message));

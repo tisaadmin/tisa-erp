@@ -1,15 +1,23 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router, Stack } from 'expo-router';
+import { Redirect, router, Stack } from 'expo-router';
 import { Pressable, Text, View } from 'react-native';
 import { Badge, Btn, C, Card, Empty, Row, Screen, s, useFetch, useRun } from '../../src/components/ui';
 import { api, filePart } from '../../src/lib/api';
 import { useAuth } from '../../src/lib/auth';
 import { fmtDate, fmtDateTime, fmtTime, label } from '../../src/lib/format';
 import { getFix, takePhoto } from '../../src/lib/geo';
+import { isManager } from '../../src/lib/manage';
 
 type Att = { checkInAt?: string; checkOutAt?: string; status: string; onSite: boolean; site?: { name: string } | null; distanceFromSite?: number; workMinutes?: number } | null;
 
+/** Management opens on the Overview; field staff on their day. */
 export default function Home() {
+  const { can } = useAuth();
+  if (isManager(can)) return <Redirect href="/(tabs)/overview" />;
+  return <FieldHome />;
+}
+
+function FieldHome() {
   const { user, can } = useAuth();
   const att = useFetch<Att>('/attendance/today');
   const tickets = useFetch<{ data: any[] }>('/tickets?mine=1&status=OPEN_ALL&pageSize=20');
