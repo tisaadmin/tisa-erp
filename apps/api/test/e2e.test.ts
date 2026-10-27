@@ -1611,3 +1611,31 @@ test('RA bill sheet: order (BOQ) quantity read from differently named columns; m
   const o2 = await ok('admin', 'GET', `/orders/${done.orderId}`);
   assert.deepEqual(o2.items.map((i: any) => i.qty), [150, 30]); assert.equal(o2.taxable, 150 * 1780 + 30 * 2150, 'order value follows the raised quantity');
 });
+
+test('RA sheet saved with inventory items to link later: order line linked afterwards; the RA bill cannot be issued until then', async () => {
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook(); const ws = wb.addWorksheet('RA 3');
+  ws.getCell('A1').value = 'CLIENT NAME: LINK LATER BUILDERS'; ws.getCell('A2').value = 'PROJECT: LINK LATER SITE';
+  ws.getRow(4).values = ['Sr. No.', 'Description', 'Unit', 'Qty', 'Rate', 'Amount', 'Previous', null, 'Current', null, 'Cumulative'];
+  ws.getRow(5).values = [null, null, null, null, null, null, 'Qty', 'Amount', 'Qty', 'Amount', 'Qty', 'Amount'];
+  ws.getRow(6).values = ['1', 'Fire alarm panel 4 loop', 'Nos', 2, 100000, 200000];
+  ws.getRow(7).values = [null, '100% Against supply', null, null, 100000, null, 0, 0, 1, 100000, 1, 100000];
+  ws.getRow(8).values = ['2', 'Smoke detector', 'Nos', 50, 1000, 50000];
+  ws.getRow(9).values = [null, '100% Against supply', null, null, 1000, null, 0, 0, 20, 20000, 20, 20000];
+  ws.getRow(10).values = [null, 'CGST @ 9%'];
+  const buf = await wb.xlsx.writeBuffer(); const fd = new FormData(); fd.append('file', new Blob([new Uint8Array(buf as ArrayBuffer)]), 'RA 3.xlsx');
+  const p = await ok('accounts', 'POST', '/ra-imports/parse', undefined, fd);
+  const body = (extra: any = {}) => ({ newClient: { name: 'LINK LATER BUILDERS', gstin: null }, site: { mode: 'new', name: 'LINK LATER SITE' }, orderId: null, raNo: '3', gstRate: 18,
+    lines: p.doc.lines.map((l: any, i: number) => ({ ...l, include: true, itemId: i === 0 ? ctx.cam.id : null })), ...extra });
+  assert.equal((await call('accounts', 'POST', `/ra-imports/${p.id}/commit`, body())).status, 400, 'still mandatory unless "link later" is chosen');
+  const done = await ok('admin', 'POST', `/ra-imports/${p.id}/commit`, body({ itemsLater: true }));
+  assert.equal(done.itemsToLink, 1);
+  const o = await ok('accounts', 'GET', `/orders/${done.orderId}`);
+  const open = o.items.find((i: any) => !i.itemId); assert.ok(open, 'line saved without an item');
+  const blocked = await call('accounts', 'POST', `/invoices/${done.invoiceId}/issue`, {});
+  assert.equal(blocked.status, 400); assert.match(blocked.data.error, /Link the inventory item/);
+  assert.equal((await call('tech', 'PATCH', `/orders/${o.id}/items/${open.id}/item`, { itemId: ctx.cam.id })).status, 403);
+  await ok('accounts', 'PATCH', `/orders/${o.id}/items/${open.id}/item`, { itemId: ctx.cam.id });
+  const issued = await ok('accounts', 'POST', `/invoices/${done.invoiceId}/issue`, {});
+  assert.equal(issued.status, 'ISSUED');
+});

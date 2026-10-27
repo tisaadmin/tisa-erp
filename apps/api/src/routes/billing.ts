@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
 import { randomBytes } from 'node:crypto';
-import { and, desc, eq, gt, ilike, inArray, lt, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, ilike, inArray, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, type Tx } from '../db';
-import { amcContracts, clients, invoiceItems, invoices, paymentReceipts, salesOrders, sites, type MilestoneStage } from '../db/schema';
+import { amcContracts, clients, invoiceItems, invoices, paymentReceipts, salesOrderItems, salesOrders, sites, type MilestoneStage } from '../db/schema';
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { addDays, dayRange } from '../lib/dates';
@@ -158,7 +158,14 @@ r.post('/invoices/:id/issue', requirePerm('invoices:create'), async (req, res) =
     let raBillNo: number | null = null;
     if (inv.type === 'RUNNING_BILL' && inv.orderId) {
       // continues the client's RA numbering when earlier RA bills were raised before the ERP
-      const ord = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, inv.orderId), columns: { raBillOffset: true } });
+      const ord = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, inv.orderId), columns: { raBillOffset: true, number: true, sourceData: true } });
+      // an order made from the client's RA sheet: every billed line must be linked to its inventory item first
+      if ((ord?.sourceData as { system?: string } | null)?.system === 'RA sheet') {
+        const billed = await tx.query.invoiceItems.findMany({ where: eq(invoiceItems.invoiceId, inv.id), columns: { orderItemId: true } });
+        const ids = [...new Set(billed.map((b) => b.orderItemId).filter((x): x is string => !!x))];
+        const open = ids.length ? await tx.query.salesOrderItems.findMany({ where: and(inArray(salesOrderItems.id, ids), isNull(salesOrderItems.itemId)), columns: { sourceKey: true, description: true } }) : [];
+        if (open.length) throw badRequest(`Link the inventory item on ${ord!.number} for ${open.length} line${open.length > 1 ? 's' : ''} of this bill first: ${open.slice(0, 8).map((o) => o.sourceKey ?? o.description.slice(0, 30)).join(', ')}${open.length > 8 ? '…' : ''}`);
+      }
       raBillNo = (ord?.raBillOffset ?? 0) + (await tx.$count(invoices, and(eq(invoices.orderId, inv.orderId), eq(invoices.type, 'RUNNING_BILL'), inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID', 'PAID'])))) + 1;
     }
     const number = await nextNumber(tx, inv.type === 'PROFORMA' ? 'PROFORMA' : 'INVOICE', inv.date);

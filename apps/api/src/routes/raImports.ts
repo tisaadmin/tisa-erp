@@ -98,6 +98,8 @@ r.get('/ra-imports/:id/suggest', perm, async (req, res) => {
 
 const stageEnum = z.enum(STAGES as [MilestoneStage, ...MilestoneStage[]]);
 const commitSchema = z.object({
+  /** save now; lines without an inventory item are linked later on the order (the RA bill cannot be issued until they are) */
+  itemsLater: z.boolean().optional(),
   clientId: z.string().nullish(),
   newClient: z.object({ name: z.string().trim().min(2), gstin: z.string().trim().nullish(), billingAddress: z.string().nullish(), city: z.string().nullish(), stateCode: z.string().nullish() }).nullish(),
   site: z.discriminatedUnion('mode', [
@@ -132,7 +134,7 @@ r.post('/ra-imports/:id/commit', perm, async (req, res) => {
     for (const s of l.stages) if (s.prevQty + s.currQty > l.qty + 1e-9) throw badRequest(`${l.key} ${s.stage}: previous + current (${r3(s.prevQty + s.currQty)}) is more than the quantity ${l.qty}`);
   }
   const noItem = lines.filter((l) => !l.itemId && !l.newItem);
-  if (noItem.length) throw badRequest(`Pick the inventory item for every line (or add it as a new item): ${noItem.slice(0, 8).map((l) => l.key).join(', ')}${noItem.length > 8 ? '…' : ''}`);
+  if (noItem.length && !d.itemsLater) throw badRequest(`Pick the inventory item for every line (or add it as a new item): ${noItem.slice(0, 8).map((l) => l.key).join(', ')}${noItem.length > 8 ? '…' : ''}`);
   if (lines.some((l) => !l.itemId && l.newItem) && !can(req.user, 'items:create')) throw badRequest('New inventory items can only be added by Stores — pick existing items, or ask Stores to add them first');
   if (!d.orderId && !can(req.user, 'orders:create')) throw badRequest('Making the order from the sheet needs the right to create orders — pick the existing order of this project, or ask the order desk');
   if (!d.clientId && !d.newClient) throw badRequest('Choose the client, or create a new one');
@@ -183,7 +185,7 @@ r.post('/ra-imports/:id/commit', perm, async (req, res) => {
       }).returning({ id: itemsT.id });
       byKeyItem.set(`${itemKey(l.newItem!.name)}|${unitKey(l.unit)}`, it.id);
     }
-    const itemOf = (l: (typeof lines)[number]) => l.itemId ?? byKeyItem.get(`${itemKey(l.newItem!.name)}|${unitKey(l.unit)}`)!;
+    const itemOf = (l: (typeof lines)[number]): string | null => l.itemId ?? (l.newItem ? byKeyItem.get(`${itemKey(l.newItem.name)}|${unitKey(l.unit)}`)! : null);
     const masterById = new Map(master.map((m) => [m.id, m]));
     const missingItem = lines.filter((l) => l.itemId && !masterById.has(l.itemId));
     if (missingItem.length) throw badRequest(`Inventory item not found for ${missingItem.map((l) => l.key).join(', ')}`);
@@ -207,7 +209,7 @@ r.post('/ra-imports/:id/commit', perm, async (req, res) => {
         notes: [`Made from the client's running-bill sheet ${raLabel} (${job.fileName}).`, doc.project ? `Project: ${doc.project}` : null].filter(Boolean).join('\n'),
         lines: lines.map((l) => ({
           // linked to the inventory item (HSN from the item master); the description stays the client's BOQ wording
-          itemId: itemOf(l), description: titleOf(l.description), hsnSac: masterById.get(itemOf(l))?.hsnSac ?? null, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: 0, gstRate: d.gstRate,
+          itemId: itemOf(l), description: titleOf(l.description), hsnSac: (itemOf(l) && masterById.get(itemOf(l)!)?.hsnSac) || null, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: 0, gstRate: d.gstRate,
           paymentTerms: JSON.stringify(termsOf(l)) === JSON.stringify(main) ? null : termsOf(l),
         })),
       }, userId);
@@ -251,8 +253,11 @@ r.post('/ra-imports/:id/commit', perm, async (req, res) => {
       if (!it.sourceKey) await tx.update(salesOrderItems).set({ sourceKey: l.key }).where(eq(salesOrderItems.id, it.id));
       // link the order line to its inventory item (lines made before items were mandatory have none)
       const want = itemOf(l);
+      if (!want) continue; // linked later on the order
       if (it.itemId && it.itemId !== want) throw badRequest(`${l.key}: ${orderNumber} has this line as a different inventory item — pick that item for this line`);
       if (!it.itemId) await tx.update(salesOrderItems).set({ itemId: want, hsnSac: it.hsnSac ?? masterById.get(want)?.hsnSac ?? null }).where(eq(salesOrderItems.id, it.id));
+    }
+    for (const { l, it } of pairs) {
       // the client has certified these quantities: bring delivered / installed up to the cumulative figures (no stock movement)
       const cum = (st: string) => { const s = l.stages.find((x) => x.stage === st); return s ? r3(s.prevQty + s.currQty) : 0; };
       const dq = Math.min(it.qty, Math.max(it.deliveredQty, cum('DELIVERY'))), iq = Math.min(it.qty, Math.max(it.installedQty, cum('INSTALLATION')));
@@ -289,7 +294,7 @@ r.post('/ra-imports/:id/commit', perm, async (req, res) => {
       invoice = { id: inv.id, total: inv.total };
     }
     const summary = {
-      orderId, orderNumber, orderCreated: created, qtyRaised: raised, invoiceId: invoice?.id ?? null, billTotal: invoice?.total ?? 0, billLines: billLines.length,
+      orderId, orderNumber, orderCreated: created, qtyRaised: raised, itemsToLink: lines.filter((l) => !itemOf(l)).length, invoiceId: invoice?.id ?? null, billTotal: invoice?.total ?? 0, billLines: billLines.length,
       itemsCreated: distinct.length, openings: openingRows.length, openingTaxable: r2(openingRows.reduce((a, o) => a + Number(o.taxable), 0)), lines: lines.length,
     };
     await tx.update(importJobs).set({ status: 'DONE', summary }).where(eq(importJobs.id, job.id));

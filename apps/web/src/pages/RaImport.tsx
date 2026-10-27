@@ -45,6 +45,7 @@ export function RaImportPage() {
   const [siteName, setSiteName] = useState('');
   const [orderId, setOrderId] = useState<string | null>(null);
   const [hdr, setHdr] = useState({ raNo: '', billDate: toInputDate(new Date()), gstRate: 18, createBill: true });
+  const [itemsLater, setItemsLater] = useState(false);
   const [saving, setSaving] = useState(false);
   const [showAll, setShowAll] = useState(false);
 
@@ -95,7 +96,7 @@ export function RaImportPage() {
   const currTotal = r2(inc.reduce((a, l) => a + l.stages.reduce((b, s) => b + stageAmt(l, s, s.currQty), 0), 0));
   const noItem = lines.filter((l) => l.include && !l.itemId && !(l.newItem && l.newItem.categoryId && l.newItem.name.trim().length >= 2));
   const problems = [
-    noItem.length > 0 && `Pick the inventory item for ${noItem.length} line${noItem.length > 1 ? 's' : ''} (${noItem.slice(0, 5).map((l) => l.key).join(', ')}${noItem.length > 5 ? '…' : ''})`,
+    noItem.length > 0 && !itemsLater && `Pick the inventory item for ${noItem.length} line${noItem.length > 1 ? 's' : ''} (${noItem.slice(0, 5).map((l) => l.key).join(', ')}${noItem.length > 5 ? '…' : ''})`,
     clientMode === 'existing' && !clientId && 'Choose the client (or add it as a new client)',
     clientMode === 'new' && newClient.name.trim().length < 2 && 'Enter the client name',
     !order && siteMode === 'existing' && !siteId && 'Choose the site, or add the project as a new site',
@@ -109,15 +110,16 @@ export function RaImportPage() {
     if (!p) return;
     setSaving(true);
     try {
-      const r = await api<{ orderId: string; orderNumber: string; orderCreated: boolean; invoiceId: string | null; billTotal: number; openings: number; openingTaxable: number }>(`/ra-imports/${p.id}/commit`, {
+      const r = await api<{ orderId: string; orderNumber: string; orderCreated: boolean; invoiceId: string | null; billTotal: number; openings: number; openingTaxable: number; itemsToLink?: number }>(`/ra-imports/${p.id}/commit`, {
         body: {
           clientId: clientMode === 'existing' ? clientId : null, newClient: clientMode === 'new' ? newClient : null,
           site: order ? (order.site ? { mode: 'existing', siteId: order.site.id } : { mode: 'none' }) : siteMode === 'existing' ? { mode: 'existing', siteId } : siteMode === 'new' ? { mode: 'new', name: siteName } : { mode: 'none' },
-          orderId, raNo: hdr.raNo || null, billDate: hdr.billDate || undefined, gstRate: hdr.gstRate, createBill: hdr.createBill,
+          orderId, raNo: hdr.raNo || null, billDate: hdr.billDate || undefined, gstRate: hdr.gstRate, createBill: hdr.createBill, itemsLater: itemsLater && noItem.length > 0,
           lines: lines.map((l) => ({ key: l.key, include: !!l.include, itemId: l.itemId ?? null, newItem: !l.itemId && l.newItem ? { type: l.newItem.type, categoryId: l.newItem.categoryId, name: l.newItem.name } : null, description: l.description, unit: l.unit || 'Nos', qty: l.qty, rate: l.rate, stages: l.stages.map((s) => ({ stage: s.stage, percent: Number(s.percent), prevQty: s.prevQty, prevAmt: s.prevAmt, currQty: s.currQty })) })),
         },
       });
       toast.success(`${r.orderCreated ? `Order ${r.orderNumber} made from the sheet` : `Order ${r.orderNumber}`} · ${inr(r.openingTaxable)} recorded as billed earlier${r.invoiceId ? ` · draft RA bill ${inr(r.billTotal)}` : ''}`);
+      if (r.itemsToLink) { toast(`${r.itemsToLink} line${r.itemsToLink > 1 ? 's' : ''} still need${r.itemsToLink > 1 ? '' : 's'} an inventory item — link them on the order before issuing the bill`); nav(`/orders/${r.orderId}`); return; }
       nav(r.invoiceId ? `/invoices/${r.invoiceId}` : `/orders/${r.orderId}`);
     } catch (e) { toast.error((e as Error).message); } finally { setSaving(false); }
   };
@@ -252,6 +254,9 @@ export function RaImportPage() {
           </Card>
 
           <div className="flex flex-wrap items-center justify-end gap-3">
+            {noItem.length > 0 && <label className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-sm text-amber-900">
+              <input type="checkbox" checked={itemsLater} onChange={(e) => setItemsLater(e.target.checked)} />
+              Save now and link the {noItem.length} remaining inventory item{noItem.length > 1 ? 's' : ''} later on the order <span className="text-xs text-amber-700">(the RA bill stays a draft until they are linked)</span></label>}
             {problems.length > 0 && <ul className="text-sm text-amber-800">{problems.slice(0, 5).map((x) => <li key={x}>• {x}</li>)}{problems.length > 5 && <li>• and {problems.length - 5} more</li>}</ul>}
             {problems.length === 0 && <span className="flex items-center gap-1 text-sm text-emerald-700"><CheckCircle2 className="size-4" />Ready</span>}
             <Button variant="primary" loading={saving} disabled={problems.length > 0} onClick={commit}>{hdr.createBill ? 'Create RA bill' : 'Record previous billing'}</Button>

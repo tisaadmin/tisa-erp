@@ -386,6 +386,26 @@ r.post('/orders/:id/merge', requirePerm('orders:edit'), async (req, res) => {
   res.json(out);
 });
 
+/**
+ * Link an order line to its inventory item (lines from a client's RA sheet / BOQ saved before their item was picked, or picked wrongly).
+ * The item can only be changed while nothing has gone out against the line on a delivery challan.
+ */
+r.patch('/orders/:id/items/:itemId/item', async (req, res) => {
+  if (!can(req.user, 'orders:edit') && !can(req.user, 'invoices:create')) throw forbidden('You may not change this order');
+  const { itemId } = z.object({ itemId: z.string().min(1) }).parse(req.body);
+  const line = await db.query.salesOrderItems.findFirst({ where: and(eq(salesOrderItems.id, req.params.itemId), eq(salesOrderItems.orderId, req.params.id)) });
+  if (!line) throw notFound('Order line');
+  const item = await db.query.items.findFirst({ where: eq(items.id, itemId), columns: { id: true, name: true, hsnSac: true } });
+  if (!item) throw notFound('Inventory item');
+  if (line.itemId && line.itemId !== itemId) {
+    const sent = await db.$count(deliveryChallanItems, eq(deliveryChallanItems.orderItemId, line.id));
+    if (sent) throw badRequest('Material has already gone out against this line on a delivery challan — its inventory item cannot be changed');
+  }
+  const [row] = await db.update(salesOrderItems).set({ itemId, hsnSac: line.hsnSac ?? item.hsnSac ?? null }).where(eq(salesOrderItems.id, line.id)).returning();
+  audit(req, 'link_item', 'order', req.params.id, { line: line.id, from: line.itemId, to: itemId });
+  res.json(row);
+});
+
 /** Site progress: record installed quantity per line (drives "Against Installation" billing). */
 r.patch('/orders/:id/items/:itemId/progress', requirePerm('orders:edit'), async (req, res) => {
   const { installedQty } = z.object({ installedQty: z.coerce.number().min(0) }).parse(req.body);

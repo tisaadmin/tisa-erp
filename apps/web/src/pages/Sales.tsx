@@ -13,6 +13,7 @@ import { OrderAccessoriesCard } from './Accessories';
 import { OrderInstallationCard } from '../components/Installation';
 import { OrderProjectTeamCard } from './Projects';
 import { OrderQtyCard } from '../components/OrderQty';
+import { OrderItemLinksCard } from '../components/OrderItemLinks';
 import { OrderVendorBillsCard } from './VendorBills';
 import { DeleteOrderButton } from './Cleanup';
 import { emptyCosting, QuoteCostingCard, QuoteCostingEditor, type QuoteCosting } from '../components/QuoteCosting';
@@ -345,6 +346,7 @@ export function OrderDetail() {
         )}
       </div>
 
+      <OrderItemLinksCard orderId={o.id} items={o.items} closed={['CLOSED', 'CANCELLED', 'MERGED'].includes(o.status)} />
       <OrderQtyCard orderId={o.id} items={o.items} closed={['CLOSED', 'CANCELLED', 'MERGED'].includes(o.status)} />
       <OrderAccessoriesCard orderId={o.id} />
       <OrderProjectTeamCard orderId={o.id} />

@@ -1,5 +1,6 @@
 import { ChevronDown } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { cx } from './ui';
 
 export type Opt = { value: string; label: string; sub?: string };
@@ -26,8 +27,29 @@ export function Combo({ options, value, onChange, placeholder = 'Select…', dis
     if (allowCustom && t && !options.some((o) => o.label.toLowerCase() === t.toLowerCase())) return [...list, { value: CUSTOM, label: t, sub: 'Not in the list — use this name' }];
     return list;
   }, [q, options, allowCustom]);
+  const pop = useRef<HTMLDivElement>(null);
+  // the list floats above the page (a portal), so tables with scrollbars and cards never cut it off
+  const [pos, setPos] = useState<{ left: number; width: number; top?: number; bottom?: number; maxH: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = ref.current?.getBoundingClientRect();
+      if (!r) return;
+      const below = window.innerHeight - r.bottom - 8, above = r.top - 8;
+      const width = Math.max(r.width, 256), left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));
+      if (below >= 260 || below >= above) setPos({ left, width, top: r.bottom + 4, maxH: Math.max(140, Math.min(340, below - 4)) });
+      else setPos({ left, width, bottom: window.innerHeight - r.top + 4, maxH: Math.max(140, Math.min(340, above - 4)) });
+    };
+    place();
+    window.addEventListener('scroll', place, true); window.addEventListener('resize', place);
+    return () => { window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); };
+  }, [open]);
   useEffect(() => {
-    const h = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
+    const h = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (ref.current?.contains(t) || pop.current?.contains(t)) return;
+      setOpen(false);
+    };
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, []);
@@ -39,8 +61,9 @@ export function Combo({ options, value, onChange, placeholder = 'Select…', dis
         <span className={cx('truncate', !selected && !text && 'text-slate-400')}>{selected?.label ?? text ?? placeholder}</span>
         <ChevronDown className="size-4 shrink-0 text-slate-400" />
       </button>
-      {open && (
-        <div className="absolute z-40 mt-1 w-full min-w-64 rounded-md border border-slate-200 bg-white shadow-lg">
+      {open && pos && createPortal(
+        <div ref={pop} role="listbox" className="combo-pop fixed z-[1000] flex flex-col rounded-md border border-slate-200 bg-white shadow-lg"
+          style={{ left: pos.left, width: pos.width, top: pos.top, bottom: pos.bottom, maxHeight: pos.maxH }}>
           <input autoFocus className="w-full border-b border-slate-100 px-3 py-2 text-sm outline-none" placeholder="Type to search…" value={q}
             onChange={(e) => { setQ(e.target.value); setHi(0); }}
             onKeyDown={(e) => {
@@ -49,7 +72,7 @@ export function Combo({ options, value, onChange, placeholder = 'Select…', dis
               if (e.key === 'Enter') { e.preventDefault(); if (filtered[hi]) pick(filtered[hi]); }
               if (e.key === 'Escape') setOpen(false);
             }} />
-          <ul className="max-h-64 overflow-y-auto py-1">
+          <ul className="min-h-0 flex-1 overflow-y-auto py-1">
             {(value || text) && <li><button type="button" className="w-full px-3 py-1.5 text-left text-xs text-slate-400 hover:bg-slate-50" onClick={() => pick(null)}>Clear selection</button></li>}
             {filtered.map((o, i) => (
               <li key={o.value}>
@@ -62,7 +85,8 @@ export function Combo({ options, value, onChange, placeholder = 'Select…', dis
             ))}
             {!filtered.length && <li className="px-3 py-2 text-sm text-slate-400">No matches</li>}
           </ul>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
