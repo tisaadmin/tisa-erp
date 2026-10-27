@@ -795,20 +795,24 @@ test('inventory duplicates: exact copies refused, similar ones need a reason, si
   assert.ok(!groups.some((g: any[]) => g.some((x) => x.name === 'VGA Cable 15 Mtr') && g.some((x) => x.name === 'VGA Cable 1.5 mtr')), '15 m and 1.5 m never grouped');
 });
 
-test('vendor bills: from a PO (unbilled lines), duplicate bill no. blocked, rounding to the bill total, part payment, bulk mark paid, cancel', async () => {
+test('vendor bills: from the GRN (unbilled lines), duplicate bill no. blocked, rounding to the bill total, part payment, bulk mark paid, cancel', async () => {
   assert.equal((await call('sales', 'GET', '/vendor-bills')).status, 403, 'sales has no access to payables');
-  const u = await ok('stores', 'GET', `/purchase-orders/${ctx.po.id}/unbilled`);
+  const grn = (await ok('stores', 'GET', `/grns?poId=${ctx.po.id}`)).data[0];
+  const u = await ok('stores', 'GET', `/grns/${grn.id}/unbilled`);
   assert.equal(u.lines[0].qty, 10, 'accepted qty (received − rejected) is what gets billed');
   const today = new Date().toISOString().slice(0, 10);
-  const lines = u.lines.map((l: any) => ({ poItemId: l.poItemId, itemId: l.itemId, description: l.description, qty: l.qty, rate: l.rate, gstRate: l.gstRate }));
+  const lines = u.lines.map((l: any) => ({ grnItemId: l.grnItemId, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, qty: l.qty, rate: l.rate, gstRate: l.gstRate }));
   const calc = 10 * ctx.cam.purchasePrice * 1.18;
-  const bill = await ok('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'INV-5001', billDate: today, dueDate: today, poId: ctx.po.id, lines, totalAsPerBill: Math.round(calc) + 1 });
+  assert.equal((await call('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'INV-5000', billDate: today, poId: ctx.po.id, lines: lines.map(({ grnItemId: _g, ...l }: any) => l) })).status, 400, 'goods on a PO are billed against the GRN');
+  assert.equal((await call('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'INV-5000', billDate: today, grnId: grn.id, lines: lines.map((l: any) => ({ ...l, qty: l.qty + 1 })) })).status, 400, 'not more than the GRN accepted');
+  const bill = await ok('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'INV-5001', billDate: today, dueDate: today, grnId: grn.id, lines, totalAsPerBill: Math.round(calc) + 1 });
+  assert.equal(bill.grnId, grn.id); assert.equal(bill.poId, ctx.po.id, 'PO taken from the GRN');
   assert.equal(bill.total, Math.round(calc) + 1, 'rounding difference adjusted to the bill');
   assert.equal(bill.orderId, ctx.order.id, 'order taken from the PO');
   assert.equal(bill.status, 'UNPAID');
   assert.equal((await call('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'inv-5001', billDate: today, lines })).status, 400, 'same bill no. twice');
   assert.equal((await call('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'INV-5002', billDate: today, lines, totalAsPerBill: calc + 500 })).status, 400, 'big difference rejected');
-  const u2 = await ok('stores', 'GET', `/purchase-orders/${ctx.po.id}/unbilled`);
+  const u2 = await ok('stores', 'GET', `/grns/${grn.id}/unbilled`);
   assert.equal(u2.lines[0].qty, 0, 'nothing left to bill');
   assert.equal((await call('stores', 'POST', `/vendor-bills/${bill.id}/payments`, { amount: 100, mode: 'NEFT' })).status, 403, 'stores cannot pay');
   await ok('accounts', 'POST', `/vendor-bills/${bill.id}/payments`, { amount: 1000, tdsAmount: 10, mode: 'NEFT', reference: 'UTR1' });
@@ -1670,4 +1674,60 @@ test('remove test data: only the picked records and what was raised against them
   const d = await ok('accounts', 'POST', '/invoices', { type: 'SERVICE', clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ description: 'Visit', qty: 1, rate: 100, gstRate: 18, hsnSac: '998719' }] });
   const iss = await ok('accounts', 'POST', `/invoices/${d.id}/issue`, {});
   assert.match(iss.number, /\/0731$/);
+});
+
+test('GRN: up to 10% over the PO is received directly; more needs Management approval (stock moves on approval); less is fine', async () => {
+  const po = await ok('admin', 'POST', '/purchase-orders', { vendorId: ctx.vendor.id, lines: [{ itemId: ctx.cam.id, qty: 10, rate: 1000, gstRate: 18 }] });
+  for (const a of ['submit', 'approve']) await call('admin', 'POST', `/purchase-orders/${po.id}/${a}`, {});
+  const p = await ok('admin', 'GET', `/purchase-orders/${po.id}`);
+  assert.ok(['APPROVED', 'SENT'].includes(p.status), `PO approved (${p.status})`);
+  const line = p.items[0];
+  const stock0 = (await ok('admin', 'GET', `/items/${ctx.cam.id}`)).stock ?? null;
+  // less than ordered: fine
+  const g1 = await ok('stores', 'POST', '/grns', { poId: po.id, lines: [{ poItemId: line.id, receivedQty: 4 }] });
+  assert.equal(g1.status, 'POSTED');
+  // 4 + 7 = 11 → 10% over: allowed
+  const g2 = await ok('stores', 'POST', '/grns', { poId: po.id, lines: [{ poItemId: line.id, receivedQty: 7 }] });
+  assert.equal(g2.status, 'POSTED');
+  // 11 + 1 = 12 → over 10%: needs a reason, then approval
+  const noReason = await call('stores', 'POST', '/grns', { poId: po.id, lines: [{ poItemId: line.id, receivedQty: 1 }] });
+  assert.equal(noReason.status, 400); assert.match(noReason.data.error, /10%/);
+  const g3 = await ok('stores', 'POST', '/grns', { poId: po.id, overQtyReason: 'Vendor sent a spare', lines: [{ poItemId: line.id, receivedQty: 1 }] });
+  assert.equal(g3.status, 'PENDING_APPROVAL');
+  assert.equal((await ok('admin', 'GET', `/purchase-orders/${po.id}`)).items[0].receivedQty, 11, 'not counted until approved');
+  assert.equal((await call('stores', 'POST', `/grns/${g3.id}/approve`, {})).status, 403, 'stores cannot approve');
+  assert.equal((await call('stores', 'GET', `/grns/${g3.id}/unbilled`)).status, 200);
+  assert.equal((await call('stores', 'POST', '/vendor-bills', { vendorId: ctx.vendor.id, billNo: 'GRN-PEND-1', billDate: '2026-10-01', grnId: g3.id, lines: [{ description: 'x', qty: 1, rate: 1, gstRate: 18 }] })).status, 400, 'a GRN waiting for approval cannot be billed');
+  await ok('director', 'POST', `/grns/${g3.id}/approve`, {});
+  const after = await ok('admin', 'GET', `/grns/${g3.id}`);
+  assert.equal(after.status, 'POSTED'); assert.equal(after.approvedBy, 'Rohan Desai');
+  assert.equal((await ok('admin', 'GET', `/purchase-orders/${po.id}`)).items[0].receivedQty, 12);
+  assert.equal(after.items[0].hsnSac ?? null, line.hsnSac ?? null, 'HSN carried on the GRN line');
+  void stock0;
+  // a rejected one moves nothing
+  const g4 = await ok('stores', 'POST', '/grns', { poId: po.id, overQtyReason: 'extra', lines: [{ poItemId: line.id, receivedQty: 5 }] });
+  assert.equal((await call('director', 'POST', `/grns/${g4.id}/reject`, {})).status, 400, 'reason needed');
+  await ok('director', 'POST', `/grns/${g4.id}/reject`, { reason: 'Return the extra' });
+  assert.equal((await ok('admin', 'GET', `/grns/${g4.id}`)).status, 'REJECTED');
+  assert.equal((await ok('admin', 'GET', `/purchase-orders/${po.id}`)).items[0].receivedQty, 12);
+});
+
+test('DC and invoice lines: HSN, own description printed instead of the item when chosen, DC remarks', async () => {
+  const dc = await ok('admin', 'POST', '/challans', { clientId: ctx.client.id, siteId: ctx.site.id, type: 'RETURNABLE', notes: 'Handle with care — fragile',
+    lines: [{ itemId: ctx.cam.id, description: '2MP IP Dome', qty: 1, altDescription: 'Demo dome camera for trial', useAltDescription: true }] });
+  const full = await ok('admin', 'GET', `/challans/${dc.id}`);
+  assert.equal(full.items[0].useAltDescription, true); assert.equal(full.items[0].altDescription, 'Demo dome camera for trial');
+  assert.equal(full.items[0].hsnSac, (await ok('admin', 'GET', `/items/${ctx.cam.id}`)).hsnSac ?? null, 'HSN from the item');
+  assert.equal((await call('admin', 'POST', '/challans', { clientId: ctx.client.id, type: 'RETURNABLE', lines: [{ itemId: ctx.cam.id, description: 'x', qty: 1, useAltDescription: true }] })).status, 400);
+  const pdf = await call('admin', 'GET', `/challans/${dc.id}/pdf`);
+  assert.equal(pdf.status, 200);
+  const inv = await ok('accounts', 'POST', '/invoices', { type: 'SERVICE', clientId: ctx.client.id, siteId: ctx.site.id,
+    lines: [{ description: 'Service visit', qty: 1, rate: 1500, gstRate: 18, hsnSac: '998719', altDescription: 'Quarterly PM visit — CCTV', useAltDescription: true }] });
+  const i1 = await ok('accounts', 'GET', `/invoices/${inv.id}`);
+  assert.equal(i1.items[0].altDescription, 'Quarterly PM visit — CCTV');
+  await ok('accounts', 'PATCH', `/invoices/${inv.id}/items/${i1.items[0].id}`, { altDescription: 'PM visit Oct', useAltDescription: true, hsnSac: '998713' });
+  const i2 = await ok('accounts', 'GET', `/invoices/${inv.id}`);
+  assert.equal(i2.items[0].altDescription, 'PM visit Oct'); assert.equal(i2.items[0].hsnSac, '998713');
+  await ok('accounts', 'POST', `/invoices/${inv.id}/issue`, {});
+  assert.equal((await call('accounts', 'PATCH', `/invoices/${inv.id}/items/${i1.items[0].id}`, { altDescription: 'late' })).status, 400, 'issued: no changes');
 });

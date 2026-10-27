@@ -8,11 +8,12 @@ import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Search
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, inr, label, qty, STAGE_LABEL, toInputDate } from '../lib/format';
-import { useAction, useClients, useGet, useSites, type Page, useListQuery } from '../lib/hooks';
+import { useAction, useClients, useGet, useSites, useItems, type Page, useListQuery } from '../lib/hooks';
 import { OrderAccessoriesCard } from './Accessories';
 import { OrderInstallationCard } from '../components/Installation';
 import { OrderProjectTeamCard } from './Projects';
 import { OrderQtyCard } from '../components/OrderQty';
+import { OwnDescription } from '../components/PrintDescription';
 import { OrderItemLinksCard } from '../components/OrderItemLinks';
 import { OrderVendorBillsCard } from './VendorBills';
 import { DeleteOrderButton } from './Cleanup';
@@ -187,7 +188,8 @@ export function QuotationDetail() {
   );
 }
 
-export function DocLines({ doc, extraCols }: { doc: any; extraCols?: { label: string; render: (l: any) => React.ReactNode }[] }) {
+export function DocLines({ doc, extraCols, editLine }: { doc: any; extraCols?: { label: string; render: (l: any) => React.ReactNode }[];
+  /** draft documents: extra editing under each line's description, and an HSN editor */ editLine?: { desc: (l: any) => React.ReactNode; hsn: (l: any) => React.ReactNode } }) {
   return (
     <Card title="Items" pad={false}>
       <div className="overflow-x-auto">
@@ -195,7 +197,9 @@ export function DocLines({ doc, extraCols }: { doc: any; extraCols?: { label: st
           <thead><tr><th>#</th><th>Description</th><th>HSN/SAC</th><th className="text-right">Qty</th><th className="text-right">Rate</th><th className="text-right">Disc</th><th className="text-right">GST</th><th className="text-right">Taxable</th>{extraCols?.map((c) => <th key={c.label} className="text-right">{c.label}</th>)}</tr></thead>
           <tbody>
             {doc.items.map((l: any, i: number) => (
-              <tr key={l.id}><td>{i + 1}</td><td className="max-w-md">{l.milestone ? l.description.replace(/ — [^—]+ @ [\d.]+%$/, '') : l.description}{l.milestone && <div><Badge t="blue">{STAGE_LABEL[l.milestone]} @ {l.milestonePercent}%</Badge></div>}</td><td>{l.hsnSac}</td>
+              <tr key={l.id}><td>{i + 1}</td><td className="max-w-md">{l.milestone ? l.description.replace(/ — [^—]+ @ [\d.]+%$/, '') : l.description}{l.milestone && <div><Badge t="blue">{STAGE_LABEL[l.milestone]} @ {l.milestonePercent}%</Badge></div>}
+                {!editLine && l.useAltDescription && l.altDescription && <div className="mt-1 text-xs text-brand-800"><span className="text-slate-400">Prints as:</span> {l.altDescription}</div>}
+                {editLine?.desc(l)}</td><td>{editLine ? editLine.hsn(l) : l.hsnSac}</td>
                 <td className="num">{Number(l.qty) === 0 ? <Badge t="violet">Rate only</Badge> : <>{qty(l.qty)} {l.unit}</>}</td><td className="num">{inr(l.rate)}</td><td className="num">{l.discountPct ? `${l.discountPct}%` : ''}</td><td className="num">{l.gstRate}%</td><td className="num font-medium">{Number(l.qty) === 0 ? '—' : inr(l.taxable)}</td>
                 {extraCols?.map((c) => <td key={c.label} className="num">{c.render(l)}</td>)}</tr>
             ))}
@@ -409,11 +413,11 @@ export function OrderDetail() {
         </div>
         <div className="overflow-x-auto">
           <table className="tbl">
-            <thead><tr><th>Item</th>{stages.map((s) => <th key={s.stage} className="text-right">{STAGE_LABEL[s.stage].replace('Against ', '')} {s.percent}%</th>)}</tr></thead>
+            <thead><tr><th>Item</th><th>HSN/SAC</th>{stages.map((s) => <th key={s.stage} className="text-right">{STAGE_LABEL[s.stage].replace('Against ', '')} {s.percent}%</th>)}</tr></thead>
             <tbody>
               {billing.data?.lines.map((l) => (
                 <tr key={l.orderItemId}>
-                  <td className="max-w-xs text-sm">{l.description}</td>
+                  <td className="max-w-xs text-sm">{l.description}</td><td className="text-sm text-slate-500">{o.items.find((x: any) => x.id === l.orderItemId)?.hsnSac || <span className="text-amber-700">missing</span>}</td>
                   {stages.map((st) => {
                     const s = l.stages.find((x) => x.stage === st.stage);
                     const k = `${l.orderItemId}|${st.stage}`;
@@ -510,7 +514,11 @@ export function NewChallan() {
   const requisitionId = orderId ? null : sp.get('requisitionId');
   const rq = useRequisition(requisitionId);
   const [h, setH] = useState({ clientId: null as string | null, siteId: null as string | null, type: 'SUPPLY', vehicleNo: '', transporter: '', ewayBillNo: '', notes: '' });
-  const [lines, setLines] = useState<{ orderItemId?: string; description: string; unit: string; pending?: number; qty: number; serialNos: string; itemId?: string | null; accessory?: boolean }[]>([]);
+  type DcLine = { orderItemId?: string; description: string; unit: string; pending?: number; qty: number; serialNos: string; itemId?: string | null; accessory?: boolean; hsnSac?: string | null; altDescription?: string; useAltDescription?: boolean };
+  const [lines, setLines] = useState<DcLine[]>([]);
+  const itemsQ = useItems();
+  const hsnOf = (itemId?: string | null) => (itemId ? itemsQ.data?.data.find((i) => i.id === itemId)?.hsnSac ?? null : null);
+  const setLine = (i: number, p: Partial<DcLine>) => setLines((ls) => ls.map((x, j) => (j === i ? { ...x, ...p } : x)));
   // the order's accessories & consumables still to be sent go on the same challan
   const proj = useGet<{ accessories: { itemId: string | null; description: string; unit: string; required: number; sent: number; pending: number }[] }>(orderId ? `/projects/${orderId}` : null);
   useEffect(() => {
@@ -518,7 +526,7 @@ export function NewChallan() {
     if (o && (proj.data || proj.isError)) {
       setH((x) => ({ ...x, clientId: o.clientId, siteId: o.siteId }));
       setLines([
-        ...o.items.filter((l: any) => l.qty - l.deliveredQty > 0).map((l: any) => ({ orderItemId: l.id, itemId: l.itemId, description: l.description, unit: l.unit, pending: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, qty: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, serialNos: '' })),
+        ...o.items.filter((l: any) => l.qty - l.deliveredQty > 0).map((l: any) => ({ orderItemId: l.id, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, pending: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, qty: Math.round((l.qty - l.deliveredQty) * 1000) / 1000, serialNos: '' })),
         ...(proj.data?.accessories ?? []).filter((a) => a.pending > 0).map((a) => ({ itemId: a.itemId, description: a.description, unit: a.unit, pending: a.pending, qty: 0, serialNos: '', accessory: true })),
       ]);
     }
@@ -529,7 +537,7 @@ export function NewChallan() {
     setLines(rq.lines('salePrice', true).map((l) => ({ itemId: l.itemId, description: l.description, unit: l.unit, pending: l.qty, qty: l.qty, serialNos: '' })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rq.ready]);
-  const save = useAction(() => api('/challans', { body: { ...h, orderId, requisitionId, lines: lines.filter((l) => l.qty > 0).map((l) => ({ orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos })) } }),
+  const save = useAction(() => api('/challans', { body: { ...h, orderId, requisitionId, lines: lines.filter((l) => l.qty > 0).map((l) => ({ orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos, hsnSac: l.hsnSac ?? hsnOf(l.itemId) ?? null, altDescription: l.altDescription || null, useAltDescription: !!(l.useAltDescription && l.altDescription?.trim()) })) } }),
     { success: 'Challan created — stock updated', invalidate: [['/challans'], ['/orders'], ['/items']], onSuccess: (dc: any) => nav(`/challans/${dc.id}`) });
   if ((orderId && (!order.data || proj.isLoading)) || rq.loading) return <Spinner />;
   const accIdx = lines.findIndex((l) => l.accessory);
@@ -549,12 +557,14 @@ export function NewChallan() {
       </Card>
       <Card title="Items" pad={false}>
         <table className="tbl">
-          <thead><tr><th>Description</th><th className="text-right">Pending</th><th className="w-28 text-right">Dispatch qty</th><th>Serial numbers</th>{!orderId && <th />}</tr></thead>
+          <thead><tr><th className="min-w-80">Description</th><th className="w-28">HSN/SAC</th><th className="text-right">Pending</th><th className="w-28 text-right">Dispatch qty</th><th>Serial numbers</th>{!orderId && <th />}</tr></thead>
           <tbody>
             {lines.map((l, i) => (<Fragment key={i}>
-              {i === accIdx && <tr><td colSpan={4} className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">Accessories & consumables (internal — not billed) <button type="button" className="ml-2 font-normal normal-case text-brand-700 underline" onClick={() => setLines(lines.map((x) => (x.accessory ? { ...x, qty: x.pending ?? 0 } : x)))}>send all pending</button></td></tr>}
+              {i === accIdx && <tr><td colSpan={5} className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">Accessories & consumables (internal — not billed) <button type="button" className="ml-2 font-normal normal-case text-brand-700 underline" onClick={() => setLines(lines.map((x) => (x.accessory ? { ...x, qty: x.pending ?? 0 } : x)))}>send all pending</button></td></tr>}
               <tr>
-                <td>{orderId ? l.description : <Input value={l.description} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} />}</td>
+                <td>{orderId ? l.description : <Input value={l.description} onChange={(e) => setLine(i, { description: e.target.value })} />}
+                  <OwnDescription alt={l.altDescription} use={l.useAltDescription} onChange={(v) => setLine(i, v)} /></td>
+                <td className="align-top"><Input className="py-1 text-sm" aria-label="HSN/SAC" value={l.hsnSac ?? hsnOf(l.itemId) ?? ''} onChange={(e) => setLine(i, { hsnSac: e.target.value })} /></td>
                 <td className="num">{l.pending != null ? `${qty(l.pending)} ${l.unit}` : '—'}</td>
                 <td><Input type="number" min={0} max={l.pending} step="any" className="text-right" value={l.qty} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, qty: Number(e.target.value) } : x)))} /></td>
                 <td><Input value={l.serialNos} placeholder="Optional" onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, serialNos: e.target.value } : x)))} /></td>
@@ -566,6 +576,7 @@ export function NewChallan() {
         {!orderId && <div className="p-3"><Button size="sm" icon={<Plus className="size-3.5" />} onClick={() => setLines([...lines, { description: '', unit: 'Nos', qty: 1, serialNos: '' }])}>Add line</Button></div>}
         {orderId && !lines.length && <div className="p-6 text-center text-sm text-slate-500">Everything on this order has been delivered.</div>}
       </Card>
+      <Card title="Remarks"><Textarea value={h.notes} onChange={(e) => setH({ ...h, notes: e.target.value })} placeholder="Narration for this challan — printed at the end of the DC" rows={3} /></Card>
     </div>
   );
 }
@@ -587,9 +598,10 @@ export function ChallanDetail() {
           {dc.order && dc.type === 'SUPPLY' && dc.status !== 'CANCELLED' && can('tickets:create') && <Link to={`/orders/${dc.order.id}?install=${dc.id}`}><Button>Assign installation</Button></Link>}
           {dc.status !== 'CANCELLED' && can('challans:edit') && <Button variant="danger" loading={cancel.isPending} onClick={() => confirm('Cancel this challan and return stock?') && cancel.mutate(undefined)}>Cancel</Button>}
         </>} />
-      <Card><KV cols={4} items={[['Date', fmtDate(dc.date)], ['Type', label(dc.type)], ['Order', dc.order ? <Link className="text-brand-700" to={`/orders/${dc.order.id}`}>{dc.order.number}</Link> : null], ['Vehicle', dc.vehicleNo], ['Transporter', dc.transporter], ['E-way bill', dc.ewayBillNo], ['Received by', dc.receivedBy]]} /></Card>
+      <Card><KV cols={4} items={[['Date', fmtDate(dc.date)], ['Type', label(dc.type)], ['Remarks', dc.notes], ['Order', dc.order ? <Link className="text-brand-700" to={`/orders/${dc.order.id}`}>{dc.order.number}</Link> : null], ['Vehicle', dc.vehicleNo], ['Transporter', dc.transporter], ['E-way bill', dc.ewayBillNo], ['Received by', dc.receivedBy]]} /></Card>
       <Card title="Items" pad={false}>
-        <Table rows={dc.items} cols={[{ key: 'description', label: 'Description' }, { key: 'serialNos', label: 'Serial nos.', render: (l: any) => l.serialNos ?? '—' }, { key: 'qty', label: 'Qty', num: true, render: (l: any) => `${qty(l.qty)} ${l.unit}` }]} />
+        <Table rows={dc.items} cols={[{ key: 'description', label: 'Description', render: (l: any) => <>{l.description}{l.useAltDescription && l.altDescription && <div className="mt-0.5 text-xs text-brand-800"><span className="text-slate-400">Prints as:</span> {l.altDescription}</div>}</> },
+          { key: 'hsnSac', label: 'HSN/SAC', render: (l: any) => l.hsnSac ?? '—' }, { key: 'serialNos', label: 'Serial nos.', render: (l: any) => l.serialNos ?? '—' }, { key: 'qty', label: 'Qty', num: true, render: (l: any) => `${qty(l.qty)} ${l.unit}` }]} />
       </Card>
     </div>
   );

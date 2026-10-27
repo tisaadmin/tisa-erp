@@ -139,7 +139,7 @@ export function VendorBillsPage() {
   );
 }
 
-type BillLine = Line & { poItemId?: string | null };
+type BillLine = Line & { poItemId?: string | null; grnItemId?: string | null; left?: number };
 
 export function VendorBillEditor() {
   const { id } = useParams();
@@ -148,25 +148,27 @@ export function VendorBillEditor() {
   const companyState = useCompanyState();
   const vendors = useVendors();
   const existing = useGet<any>(id ? `/vendor-bills/${id}` : null);
-  const pos = useGet<Page<any>>('/purchase-orders', { pageSize: 300 });
   const orders = useGet<Page<any>>('/orders', { pageSize: 500 });
-  const [d, setD] = useState({ vendorId: null as string | null, billNo: '', billDate: today(), dueDate: '', poId: sp.get('poId'), orderId: sp.get('orderId'), notes: '', totalAsPerBill: '', lines: [emptyLine()] as BillLine[] });
-  const unbilled = useGet<any>(d.poId && !id ? `/purchase-orders/${d.poId}/unbilled` : null);
+  const [d, setD] = useState({ vendorId: null as string | null, billNo: '', billDate: today(), dueDate: '', grnId: sp.get('grnId'), poId: null as string | null, orderId: sp.get('orderId'), notes: '', totalAsPerBill: '', lines: [emptyLine()] as BillLine[] });
+  // flow: PO → GRN → vendor bill — the bill is entered against a posted GRN of the vendor
+  const grns = useGet<Page<any>>('/grns', { status: 'POSTED', vendorId: d.vendorId ?? undefined, pageSize: 300 });
+  const unbilled = useGet<any>(d.grnId && !id ? `/grns/${d.grnId}/unbilled` : null);
   useEffect(() => {
     const b = existing.data;
-    if (b) setD({ vendorId: b.vendorId, billNo: b.billNo, billDate: b.billDate, dueDate: b.dueDate ?? '', poId: b.poId, orderId: b.orderId, notes: b.notes ?? '', totalAsPerBill: String(b.total), lines: b.items.map((l: any) => ({ ...l })) });
+    if (b) setD({ vendorId: b.vendorId, billNo: b.billNo, billDate: b.billDate, dueDate: b.dueDate ?? '', grnId: b.grnId, poId: b.poId, orderId: b.orderId, notes: b.notes ?? '', totalAsPerBill: String(b.total), lines: b.items.map((l: any) => ({ ...l })) });
   }, [existing.data]);
   useEffect(() => {
-    // from a PO: its lines not billed yet (received qty where goods have come in)
+    // from a GRN: its accepted quantities not billed yet, at the PO rates
     const u = unbilled.data;
     if (!u || id) return;
-    const lines = u.lines.filter((l: any) => l.qty > 0).map((l: any) => ({ poItemId: l.poItemId, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate }));
-    setD((x) => ({ ...x, vendorId: u.vendorId, orderId: x.orderId ?? u.orderId, lines: lines.length ? lines : x.lines }));
+    const lines = u.lines.filter((l: any) => l.qty > 0).map((l: any) => ({ grnItemId: l.grnItemId, poItemId: l.poItemId, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, qty: l.qty, left: l.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate }));
+    setD((x) => ({ ...x, vendorId: u.vendorId, poId: u.poId, orderId: x.orderId ?? u.orderId, billNo: x.billNo || u.vendorInvoiceNo || '', billDate: u.vendorInvoiceDate ? String(u.vendorInvoiceDate).slice(0, 10) : x.billDate, lines: lines.length ? lines : x.lines }));
   }, [unbilled.data, id]);
   const vendor = vendors.data?.data.find((v) => v.id === d.vendorId);
   const inter = !!vendor?.stateCode && vendor.stateCode !== companyState;
   const calc = useMemo(() => totalsOf(d.lines, inter), [d.lines, inter]);
-  const poOpts = (pos.data?.data ?? []).filter((p) => !d.vendorId || p.vendorId === d.vendorId).map((p) => ({ value: p.id, label: p.number, sub: [p.vendor?.name, fmtDate(p.date)].filter(Boolean).join(' · ') }));
+  const grnOpts = (grns.data?.data ?? []).map((g) => ({ value: g.id, label: g.number, sub: [g.vendor?.name, g.po?.number && `PO ${g.po.number}`, fmtDate(g.date), g.vendorInvoiceNo && `inv. ${g.vendorInvoiceNo}`].filter(Boolean).join(' · ') }));
+  const overGrn = d.lines.filter((l) => l.grnItemId && l.left != null && l.qty > l.left + 1e-9);
   const save = useAction(() => {
     const body = { ...d, dueDate: d.dueDate || null, totalAsPerBill: d.totalAsPerBill ? Number(d.totalAsPerBill) : null, lines: d.lines.map((l) => ({ ...l, rate: l.rate })) };
     return id ? api(`/vendor-bills/${id}`, { method: 'PUT', body }) : api('/vendor-bills', { body });
@@ -183,13 +185,17 @@ export function VendorBillEditor() {
           <Field label="Supplier's bill no." required><Input value={d.billNo} onChange={(e) => setD({ ...d, billNo: e.target.value })} /></Field>
           <Field label="Bill date" required><Input type="date" value={d.billDate} onChange={(e) => setD({ ...d, billDate: e.target.value })} /></Field>
           <Field label="Due date"><Input type="date" value={d.dueDate} onChange={(e) => setD({ ...d, dueDate: e.target.value })} /></Field>
-          <Field label="Against PO" hint={!id ? 'Choosing a PO fills in its unbilled lines' : undefined}><Combo options={poOpts} value={d.poId} onChange={(v) => setD({ ...d, poId: v })} /></Field>
+          <Field label="Against GRN" hint={id ? (d.poId ? 'PO from the GRN' : undefined) : 'Choosing the GRN fills in its unbilled lines at the PO rates'}>
+            {id ? <Input disabled value={existing.data?.grn?.number ?? '—'} /> : <Combo options={grnOpts} value={d.grnId} onChange={(v) => setD({ ...d, grnId: v, poId: v ? d.poId : null, lines: v ? d.lines : [emptyLine()] })} placeholder={d.vendorId ? 'Choose the goods receipt…' : 'Choose the vendor or the GRN…'} />}
+          </Field>
           <Field label="For client order"><Combo options={(orders.data?.data ?? []).map((o) => ({ value: o.id, label: o.number, sub: o.client?.name }))} value={d.orderId} onChange={(v) => setD({ ...d, orderId: v })} /></Field>
           <Field label="Total as per the bill (₹)" hint="Only if it differs by rounding"><Input type="number" step="any" value={d.totalAsPerBill} onChange={(e) => setD({ ...d, totalAsPerBill: e.target.value })} placeholder={String(calc.total)} /></Field>
         </div>
         <div className="mt-2 text-xs text-slate-500">Tax: <b>{inter ? 'IGST (inter-state vendor)' : 'CGST + SGST'}</b> · Lines total <b>{inr(calc.total)}</b>
           {diff !== 0 && <span className={Math.abs(diff) > 10 ? 'text-red-600' : 'text-amber-700'}> · bill differs by {inr(diff)}{Math.abs(diff) > 10 ? ' — check the lines' : ' (rounding — will be adjusted)'}</span>}</div>
       </Card>
+      {!d.grnId && !id && <div className="rounded-md bg-sky-50 px-4 py-2 text-sm text-sky-800">For material bought on a PO, pick the GRN above (PO → GRN → vendor bill). Without a GRN, use this only for bills with no PO (services, freight, misc.).</div>}
+      {overGrn.length > 0 && <div className="rounded-md bg-red-50 px-4 py-2 text-sm text-red-700">{overGrn.map((l) => `${l.description}: ${l.qty} but only ${l.left} left to bill on the GRN`).join(' · ')}</div>}
       <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} priceField="purchasePrice" /></Card>
       <Card title="Notes"><Textarea value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} /></Card>
     </div>
@@ -218,7 +224,8 @@ export function VendorBillDetail() {
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Details" className="lg:col-span-2"><KV cols={3} items={[
           ['Bill date', fmtDate(b.billDate)], ['Due', <span className={overdue(b) ? 'text-red-600' : ''}>{fmtDate(b.dueDate)}</span>], ['Tax', b.isInterState ? 'IGST' : 'CGST + SGST'],
-          ['Against PO', b.po ? <Link className="text-brand-700" to={`/purchase-orders/${b.po.id}`}>{b.po.number}</Link> : null],
+          ['Against GRN', b.grn ? <Link className="text-brand-700" to={`/grns/${b.grn.id}`}>{b.grn.number}</Link> : null],
+          ['PO', b.po ? <Link className="text-brand-700" to={`/purchase-orders/${b.po.id}`}>{b.po.number}</Link> : null],
           ['For order', b.order ? <Link className="text-brand-700" to={`/orders/${b.order.id}`}>{b.order.number}</Link> : null], ['Client', b.order?.client?.name],
           ['Vendor GSTIN', b.vendor.gstin],
         ]} /></Card>

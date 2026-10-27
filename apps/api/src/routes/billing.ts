@@ -57,11 +57,31 @@ r.get('/invoices/:id', requirePerm('invoices:view'), async (req, res) => {
   res.json(inv);
 });
 
+/** a line's own wording, printed instead of the item description when chosen */
+const altOf = (l: { altDescription?: string | null; useAltDescription?: boolean }) => {
+  const t = l.altDescription?.trim() || null;
+  if (l.useAltDescription && !t) throw badRequest('Write the description to print, or untick “print my description”');
+  return { altDescription: t, useAltDescription: !!(l.useAltDescription && t) };
+};
+
+/** Draft invoice / RA bill: the wording printed for a line (own description or the item's). */
+r.patch('/invoices/:id/items/:itemId', requirePerm('invoices:create'), async (req, res) => {
+  const d = z.object({ altDescription: opt, useAltDescription: z.boolean().optional(), hsnSac: opt }).parse(req.body);
+  const inv = await db.query.invoices.findFirst({ where: eq(invoices.id, req.params.id), columns: { status: true } });
+  if (!inv) throw notFound('Invoice');
+  if (inv.status !== 'DRAFT') throw badRequest('Only a draft can be changed — the invoice is issued');
+  const set: Record<string, unknown> = { ...altOf(d) };
+  if (d.hsnSac !== undefined) set.hsnSac = d.hsnSac;
+  const [row] = await db.update(invoiceItems).set(set).where(and(eq(invoiceItems.id, req.params.itemId), eq(invoiceItems.invoiceId, req.params.id))).returning();
+  if (!row) throw notFound('Invoice line');
+  res.json(row);
+});
+
 // ── Manual invoice (service visit, AMC, one-off supply, proforma) ──
 const manualSchema = z.object({
   type: z.enum(['TAX_INVOICE', 'SERVICE', 'AMC', 'PROFORMA']).default('TAX_INVOICE'),
   clientId: z.string(), siteId: opt, amcId: opt, ticketId: opt, date: z.coerce.date().optional(), dueDate: z.coerce.date().nullish(),
-  notes: opt, terms: opt, requisitionId: opt, lines: z.array(lineSchema.extend({ qty: z.coerce.number().positive() })).min(1),
+  notes: opt, terms: opt, requisitionId: opt, lines: z.array(lineSchema.extend({ qty: z.coerce.number().positive(), altDescription: opt, useAltDescription: z.boolean().optional() })).min(1),
 });
 
 r.post('/invoices', requirePerm('invoices:create'), async (req, res) => {
@@ -80,7 +100,7 @@ r.post('/invoices', requirePerm('invoices:create'), async (req, res) => {
       amcId: d.amcId, ticketId: d.ticketId, placeOfSupply: ctx.placeOfSupply, isInterState: ctx.isInterState, billingGstin: ctx.billingGstin,
       notes: d.notes, terms: d.terms, ...totals, createdById: req.user.id, requisitionId: rq?.id ?? null,
     }).returning();
-    await tx.insert(invoiceItems).values(rows.map(({ paymentTerms: _p, ...l }) => ({ ...l, invoiceId: inv.id })));
+    await tx.insert(invoiceItems).values(rows.map(({ paymentTerms: _p, ...l }, i) => ({ ...l, invoiceId: inv.id, ...altOf(d.lines[i]) })));
     if (rq) await markRequisitionUsed(tx, rq, { kind: 'Draft invoice', number: inv.number }, req.user.id);
     return inv;
   });

@@ -134,6 +134,13 @@
       "when": 1792843490619,
       "tag": "0018_order_is_project",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793084347210,
+      "tag": "0019_grn_bills_dc_text",
+      "breakpoints": true
     }
   ]
 }

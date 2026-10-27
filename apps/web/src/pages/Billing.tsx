@@ -1,3 +1,6 @@
+import { OwnDescription } from '../components/PrintDescription';
+import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
 import { FileDown, Mail, Plus, Upload } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -99,7 +102,7 @@ export function InvoiceEditor() {
           <Field label="Due date (blank = credit days)"><Input type="date" value={d.dueDate} onChange={(e) => setD({ ...d, dueDate: e.target.value })} /></Field>
         </div>
       </Card>
-      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} /></Card>
+      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} ownDescription /></Card>
       <Card title="Notes"><Textarea value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} /></Card>
     </div>
   );
@@ -137,7 +140,8 @@ export function InvoiceDetail() {
         <Card title="Details" className="lg:col-span-2"><KV cols={3} items={[['Date', fmtDate(inv.date)], ['Due', fmtDate(inv.dueDate)], ['Place of supply', inv.placeOfSupply], ['Tax', inv.isInterState ? 'IGST' : 'CGST + SGST'], ['Billing GSTIN', inv.billingGstin], ['Site', inv.site?.name], ['Client PO', inv.order?.clientPoNo]]} /></Card>
         <Card title="Payment"><KV cols={2} items={[['Total', inr(inv.total)], ['Received', inr(inv.amountPaid)], ['Balance', <span className={balance > 0 ? 'text-red-600' : 'text-emerald-700'}>{inr(balance)}</span>]]} /></Card>
       </div>
-      <DocLines doc={inv} />
+      <DocLines doc={inv} editLine={inv.status === 'DRAFT' && can('invoices:create') ? { desc: (l) => <DraftLineText invoiceId={inv.id} line={l} />, hsn: (l) => <DraftLineHsn invoiceId={inv.id} line={l} /> } : undefined} />
+      {inv.status === 'DRAFT' && can('invoices:create') && <p className="-mt-2 text-xs text-slate-500">While the bill is a draft you can change each line's HSN and write your own description to print instead of the item.</p>}
       {!!inv.payments.length && <Card title="Receipts" pad={false}><Table rows={inv.payments} cols={[{ key: 'number', label: 'Receipt' }, { key: 'date', label: 'Date', render: (p: any) => fmtDate(p.date) }, { key: 'mode', label: 'Mode' }, { key: 'reference', label: 'Reference', render: (p: any) => p.reference ?? '—' }, { key: 'tdsAmount', label: 'TDS', num: true, render: (p: any) => inr(p.tdsAmount) }, { key: 'amount', label: 'Amount', num: true, render: (p: any) => inr(p.amount) }]} /></Card>}
       {inv.notes && <Card title="Notes"><p className="text-sm whitespace-pre-line">{inv.notes}</p></Card>}
 
@@ -194,4 +198,27 @@ export function ReceivablesPage() {
       </Card>
     </div>
   );
+}
+
+/** Draft invoice / RA bill: own description per line (printed instead of the item when chosen) — saved as you leave the box. */
+function DraftLineText({ invoiceId, line }: { invoiceId: string; line: any }) {
+  const [v, setV] = useState({ altDescription: line.altDescription ?? '', useAltDescription: !!line.useAltDescription });
+  const qc = useQueryClient();
+  const save = async (next: typeof v) => {
+    if (next.altDescription === (line.altDescription ?? '') && next.useAltDescription === !!line.useAltDescription) return;
+    try { await api(`/invoices/${invoiceId}/items/${line.id}`, { method: 'PATCH', body: next }); await qc.invalidateQueries({ queryKey: [`/invoices/${invoiceId}`] }); }
+    catch (e) { toast.error((e as Error).message); }
+  };
+  return <div onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) save(v); }}>
+    <OwnDescription alt={v.altDescription} use={v.useAltDescription} onChange={(x) => { setV(x); if (x.useAltDescription !== v.useAltDescription) save(x); }} />
+  </div>;
+}
+function DraftLineHsn({ invoiceId, line }: { invoiceId: string; line: any }) {
+  const [v, setV] = useState(line.hsnSac ?? '');
+  const qc = useQueryClient();
+  return <input className="input w-24 py-1 text-sm" aria-label="HSN/SAC" value={v} onChange={(e) => setV(e.target.value)} onBlur={async () => {
+    if (v === (line.hsnSac ?? '')) return;
+    try { await api(`/invoices/${invoiceId}/items/${line.id}`, { method: 'PATCH', body: { hsnSac: v || null, altDescription: line.altDescription, useAltDescription: line.useAltDescription } }); await qc.invalidateQueries({ queryKey: [`/invoices/${invoiceId}`] }); }
+    catch (e) { toast.error((e as Error).message); }
+  }} />;
 }

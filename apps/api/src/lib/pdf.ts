@@ -26,6 +26,8 @@ export type CommercialDoc = {
   paymentSchedule?: { stage: string; percent: number }[];
   terms?: string | null;
   notes?: string | null;
+  /** heading over the notes (default "Notes") */
+  notesTitle?: string;
   signatory?: string;
   footerNote?: string;
 };
@@ -163,7 +165,7 @@ export function renderCommercialDoc(company: Company, d: CommercialDoc): PDFKit.
   }
   if (d.notes) {
     ensureSpace(doc, 40);
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(ACCENT).text('Notes', 40, doc.y);
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(ACCENT).text(d.notesTitle ?? 'Notes', 40, doc.y);
     doc.font('Helvetica').fontSize(8).fillColor('#222').text(d.notes, { width: 515 });
   }
 

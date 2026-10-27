@@ -1,6 +1,7 @@
 import { FileDown, PackageCheck, Plus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { Combo } from '../components/Combo';
 import { emptyLine, LineItemsEditor, type Line } from '../components/LineItems';
 import { RequisitionBanner, useRequisition } from '../components/FromRequisition';
@@ -166,13 +167,15 @@ export function PoDetail() {
   const nav = useNavigate();
   const { can } = useAuth();
   const { data: po } = useGet<any>(`/purchase-orders/${id}`);
-  const [grn, setGrn] = useState<{ vendorInvoiceNo: string; vendorInvoiceDate: string; notes: string; lines: Record<string, { received: number; rejected: number; serialNos: string }> } | null>(null);
+  const [grn, setGrn] = useState<{ vendorInvoiceNo: string; vendorInvoiceDate: string; notes: string; overQtyReason: string; lines: Record<string, { received: number; rejected: number; serialNos: string }> } | null>(null);
   const act = useAction((a: string) => api(`/purchase-orders/${id}/${a}`, { body: {} }), { success: 'Updated', invalidate: [['/purchase-orders']] });
-  const post = useAction(() => api('/grns', { body: { poId: id, vendorInvoiceNo: grn!.vendorInvoiceNo, vendorInvoiceDate: grn!.vendorInvoiceDate || null, notes: grn!.notes,
+  const post = useAction(() => api('/grns', { body: { poId: id, vendorInvoiceNo: grn!.vendorInvoiceNo, vendorInvoiceDate: grn!.vendorInvoiceDate || null, notes: grn!.notes, overQtyReason: grn!.overQtyReason || null,
     lines: Object.entries(grn!.lines).filter(([, v]) => v.received > 0).map(([poItemId, v]) => ({ poItemId, receivedQty: v.received, rejectedQty: v.rejected, serialNos: v.serialNos })) } }),
-  { success: 'GRN posted — stock updated', invalidate: [['/purchase-orders'], ['/grns'], ['/items']], onSuccess: (g: any) => nav(`/grns/${g.id}`) });
+  { invalidate: [['/purchase-orders'], ['/grns'], ['/items']], onSuccess: (g: any) => { toast.success(g.status === 'PENDING_APPROVAL' ? 'GRN sent to Management for approval — stock moves once approved' : 'GRN posted — stock updated'); nav(`/grns/${g.id}`); } });
   if (!po) return <Spinner />;
-  const canReceive = ['APPROVED', 'SENT', 'PARTIALLY_RECEIVED'].includes(po.status) && can('grn:create');
+  const canReceive = ['APPROVED', 'SENT', 'PARTIALLY_RECEIVED', 'RECEIVED'].includes(po.status) && can('grn:create');
+  // up to 10% over the PO line comes in directly; more needs Management approval
+  const overLines = grn ? po.items.filter((l: any) => { const v = grn.lines[l.id]; return v && l.receivedQty + (v.received - v.rejected) > l.qty * 1.1 + 1e-9; }) : [];
   return (
     <div className="space-y-4">
       <PageHeader back="/purchase-orders" title={<>{po.number} <Status s={po.status} /></>} subtitle={po.vendor.name}
@@ -180,12 +183,12 @@ export function PoDetail() {
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/purchase-orders/${po.id}/pdf`)}>PDF</Button>
           {['DRAFT', 'PENDING_APPROVAL'].includes(po.status) && can('purchase_orders:edit') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit</Button></Link>}
           {(PO_ACTIONS[po.status] ?? []).filter((x) => can(x.perm)).map((x) => <Button key={x.a} variant={x.variant} loading={act.isPending} onClick={() => act.mutate(x.a)}>{x.label}</Button>)}
-          {can('vendor_bills:create') && !['DRAFT', 'PENDING_APPROVAL', 'CANCELLED'].includes(po.status) && <Link to={`/vendor-bills/new?poId=${po.id}`}><Button>Enter vendor bill</Button></Link>}
-          {canReceive && <Button variant="primary" icon={<PackageCheck className="size-4" />} onClick={() => setGrn({ vendorInvoiceNo: '', vendorInvoiceDate: '', notes: '', lines: Object.fromEntries(po.items.map((l: any) => [l.id, { received: Math.max(0, l.qty - l.receivedQty), rejected: 0, serialNos: '' }])) })}>Receive goods (GRN)</Button>}
+          {canReceive && <Button variant="primary" icon={<PackageCheck className="size-4" />} onClick={() => setGrn({ vendorInvoiceNo: '', vendorInvoiceDate: '', notes: '', overQtyReason: '', lines: Object.fromEntries(po.items.map((l: any) => [l.id, { received: Math.max(0, l.qty - l.receivedQty), rejected: 0, serialNos: '' }])) })}>Receive goods (GRN)</Button>}
         </>} />
       <Card><KV cols={4} items={[['Date', fmtDate(po.date)], ['Expected', fmtDate(po.expectedDate)], ['Against order', po.salesOrder ? <Link className="text-brand-700" to={`/orders/${po.salesOrder.id}`}>{po.salesOrder.number}</Link> : null], ['Deliver to', po.deliverToSite?.name ?? 'Store'], ['Tax', po.isInterState ? 'IGST' : 'CGST + SGST']]} /></Card>
       <DocLines doc={po} extraCols={[{ label: 'Received', render: (l) => <span className={l.receivedQty >= l.qty ? 'text-emerald-700' : 'text-amber-700'}>{qty(l.receivedQty)}</span> }]} />
-      {!!po.grns.length && <Card title="Goods receipts" pad={false}><Table rows={po.grns} to={(g: any) => `/grns/${g.id}`} cols={[{ key: 'number', label: 'GRN' }, { key: 'date', label: 'Date', render: (g: any) => fmtDate(g.date) }, { key: 'vendorInvoiceNo', label: 'Vendor invoice' }]} /></Card>}
+      {!!po.grns.length && <Card title="Goods receipts" pad={false}><Table rows={po.grns} to={(g: any) => `/grns/${g.id}`} cols={[{ key: 'number', label: 'GRN' }, { key: 'date', label: 'Date', render: (g: any) => fmtDate(g.date) }, { key: 'status', label: 'Status', render: (g: any) => <Status s={g.status} /> }, { key: 'vendorInvoiceNo', label: 'Vendor invoice', render: (g: any) => g.vendorInvoiceNo ?? '—' }]} />
+        {can('vendor_bills:create') && <p className="px-4 py-2 text-xs text-slate-500">Vendor bills are entered against the GRN — open the GRN and use “Enter vendor bill”.</p>}</Card>}
       <Modal open={!!grn} onClose={() => setGrn(null)} title="Goods receipt note" wide
         footer={<><Button onClick={() => setGrn(null)}>Cancel</Button><Button variant="primary" loading={post.isPending} onClick={() => post.mutate(undefined)}>Post GRN</Button></>}>
         {grn && <div className="space-y-3">
@@ -195,17 +198,23 @@ export function PoDetail() {
             <Field label="Notes"><Input value={grn.notes} onChange={(e) => setGrn({ ...grn, notes: e.target.value })} /></Field>
           </div>
           <table className="tbl">
-            <thead><tr><th>Item</th><th className="text-right">Pending</th><th className="w-24 text-right">Received</th><th className="w-24 text-right">Rejected</th><th>Serial nos.</th></tr></thead>
+            <thead><tr><th>Item</th><th>HSN/SAC</th><th className="text-right">Ordered</th><th className="text-right">Received so far</th><th className="text-right">Pending</th><th className="w-24 text-right">Received</th><th className="w-24 text-right">Rejected</th><th>Serial nos.</th></tr></thead>
             <tbody>{po.items.map((l: any) => {
               const v = grn.lines[l.id];
               const set = (p: Partial<typeof v>) => setGrn({ ...grn, lines: { ...grn.lines, [l.id]: { ...v, ...p } } });
-              return <tr key={l.id}><td>{l.description}</td><td className="num">{qty(l.qty - l.receivedQty)} {l.unit}</td>
+              const isOver = overLines.includes(l);
+              return <tr key={l.id} className={isOver ? 'bg-amber-50' : ''}><td>{l.description}{isOver && <div className="text-xs text-amber-700">more than 10% over the PO (max {qty(Math.round(l.qty * 1.1 * 1000) / 1000)} in all)</div>}</td><td className="text-sm text-slate-500">{l.hsnSac || '—'}</td>
+                <td className="num">{qty(l.qty)} {l.unit}</td><td className="num">{qty(l.receivedQty)}</td><td className="num">{qty(Math.max(0, l.qty - l.receivedQty))}</td>
                 <td><Input type="number" min={0} step="any" className="text-right" value={v.received} onChange={(e) => set({ received: Number(e.target.value) })} /></td>
                 <td><Input type="number" min={0} step="any" className="text-right" value={v.rejected} onChange={(e) => set({ rejected: Number(e.target.value) })} /></td>
                 <td><Input value={v.serialNos} onChange={(e) => set({ serialNos: e.target.value })} /></td></tr>;
             })}</tbody>
           </table>
-          <p className="text-xs text-slate-500">Accepted qty (received − rejected) is added to stock.</p>
+          {overLines.length > 0 && <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            <p><b>{overLines.length} line{overLines.length > 1 ? 's are' : ' is'} more than 10% over the PO.</b> The GRN goes to Management for approval; stock is updated once approved.</p>
+            <Field label="Reason for the extra quantity" className="mt-2"><Input value={grn.overQtyReason} onChange={(e) => setGrn({ ...grn, overQtyReason: e.target.value })} placeholder="e.g. vendor sent extra; site needs more" /></Field>
+          </div>}
+          <p className="text-xs text-slate-500">Accepted qty (received − rejected) is added to stock. Less than the PO is fine; up to 10% more comes in directly.</p>
         </div>}
       </Modal>
     </div>
@@ -219,10 +228,12 @@ export function GrnsPage() {
     <div>
       <PageHeader title="Goods receipt notes" subtitle="Create a GRN from an approved purchase order" />
       <Card pad={false}>
-        <div className="border-b border-slate-100 p-3"><SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} /></div>
+        <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3"><SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} />
+          <Select className="w-52" value={(q as any).status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 } as any)} placeholder="All statuses" options={[{ value: 'PENDING_APPROVAL', label: 'Waiting for approval' }, { value: 'POSTED', label: 'Posted' }, { value: 'REJECTED', label: 'Rejected' }]} /></div>
         <Table rows={list.data?.data} exportAs={{ name: 'goods-receipts', path: '/grns', query: q }} to={(r) => `/grns/${r.id}`} cols={[
           { key: 'number', label: 'GRN' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) }, { key: 'vendor', label: 'Vendor', render: (r) => r.vendor?.name },
           { key: 'po', label: 'PO', render: (r) => r.po?.number }, { key: 'vendorInvoiceNo', label: 'Vendor invoice', render: (r) => r.vendorInvoiceNo ?? '—' },
+          { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
         ]} />
         {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
       </Card>
@@ -232,17 +243,42 @@ export function GrnsPage() {
 
 export function GrnDetail() {
   const { id } = useParams();
+  const { can } = useAuth();
   const { data: g } = useGet<any>(`/grns/${id}`);
+  const [reject, setReject] = useState<string | null>(null);
+  const approve = useAction(() => api(`/grns/${id}/approve`, { body: {} }), { success: 'GRN approved — stock updated', invalidate: [['/grns'], ['/purchase-orders'], ['/items']] });
+  const doReject = useAction(() => api(`/grns/${id}/reject`, { body: { reason: reject } }), { success: 'GRN rejected', invalidate: [['/grns'], ['/purchase-orders']], onSuccess: () => setReject(null) });
   if (!g) return <Spinner />;
+  const poQty = new Map<string, number>((g.po.items ?? []).map((i: any) => [i.id, i.qty]));
+  const billedLeft = g.status === 'POSTED';
   return (
     <div className="space-y-4">
-      <PageHeader back="/grns" title={g.number} subtitle={g.vendor.name} />
-      <Card><KV cols={4} items={[['Date', fmtDate(g.date)], ['PO', <Link className="text-brand-700" to={`/purchase-orders/${g.po.id}`}>{g.po.number}</Link>], ['Vendor invoice', g.vendorInvoiceNo], ['Invoice date', fmtDate(g.vendorInvoiceDate)], ['Location', g.location], ['Notes', g.notes]]} /></Card>
+      <PageHeader back="/grns" title={<>{g.number} <Status s={g.status} /></>} subtitle={g.vendor.name}
+        actions={<>
+          {g.status === 'PENDING_APPROVAL' && can('grn:approve') && <>
+            <Button variant="success" loading={approve.isPending} onClick={() => approve.mutate(undefined)}>Approve</Button>
+            <Button variant="danger" onClick={() => setReject('')}>Reject</Button></>}
+          {billedLeft && can('vendor_bills:create') && <Link to={`/vendor-bills/new?grnId=${g.id}`}><Button variant="primary">Enter vendor bill</Button></Link>}
+        </>} />
+      {g.status === 'PENDING_APPROVAL' && <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <b>Waiting for Management approval</b> — more than 10% over the PO quantity. Stock and the PO's received quantity are updated once approved.{g.overQtyReason && <> Reason given: <i>{g.overQtyReason}</i></>}</div>}
+      {g.status === 'REJECTED' && <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">Rejected{g.approvedBy ? ` by ${g.approvedBy}` : ''}{g.rejectReason ? ` — ${g.rejectReason}` : ''}. Nothing was added to stock.</div>}
+      <Card><KV cols={4} items={[['Date', fmtDate(g.date)], ['PO', <Link className="text-brand-700" to={`/purchase-orders/${g.po.id}`}>{g.po.number}</Link>], ['Vendor invoice', g.vendorInvoiceNo], ['Invoice date', fmtDate(g.vendorInvoiceDate)], ['Location', g.location], ['Received by', g.receivedBy],
+        ...(g.approvedBy && g.status === 'POSTED' ? [['Approved by', `${g.approvedBy} · ${fmtDate(g.approvedAt)}`] as [string, string]] : []), ['Notes', g.notes]]} /></Card>
       <Card title="Items" pad={false}><Table rows={g.items} cols={[
-        { key: 'description', label: 'Item' }, { key: 'receivedQty', label: 'Received', num: true, render: (l: any) => qty(l.receivedQty) },
+        { key: 'description', label: 'Item' }, { key: 'hsnSac', label: 'HSN/SAC', render: (l: any) => l.hsnSac ?? '—' },
+        { key: 'po', label: 'PO qty', num: true, render: (l: any) => qty(poQty.get(l.poItemId) ?? 0) },
+        { key: 'receivedQty', label: 'Received', num: true, render: (l: any) => qty(l.receivedQty) },
         { key: 'rejectedQty', label: 'Rejected', num: true, render: (l: any) => qty(l.rejectedQty) }, { key: 'acceptedQty', label: 'Accepted', num: true, render: (l: any) => <b>{qty(l.acceptedQty)}</b> },
         { key: 'serialNos', label: 'Serial nos.', render: (l: any) => l.serialNos ?? '—' },
       ]} /></Card>
+      {!!g.bills?.length && <Card title="Vendor bills for this GRN" pad={false}><Table rows={g.bills} to={(b: any) => `/vendor-bills/${b.id}`} cols={[
+        { key: 'billNo', label: "Supplier's bill" }, { key: 'number', label: 'Our ref.' }, { key: 'billDate', label: 'Date', render: (b: any) => fmtDate(b.billDate) },
+        { key: 'total', label: 'Total', num: true, render: (b: any) => inr(b.total) }, { key: 'status', label: 'Status', render: (b: any) => <Status s={b.status} /> },
+      ]} /></Card>}
+      <Modal open={reject !== null} onClose={() => setReject(null)} title="Reject GRN" footer={<><Button onClick={() => setReject(null)}>Back</Button><Button variant="danger" disabled={(reject ?? '').trim().length < 3} loading={doReject.isPending} onClick={() => doReject.mutate(undefined)}>Reject</Button></>}>
+        <Field label="Reason"><Input value={reject ?? ''} onChange={(e) => setReject(e.target.value)} placeholder="e.g. return the extra quantity to the vendor" /></Field>
+      </Modal>
     </div>
   );
 }

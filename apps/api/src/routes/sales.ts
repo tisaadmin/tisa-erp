@@ -433,7 +433,8 @@ const dcSchema = z.object({
   orderId: opt, clientId: z.string(), siteId: opt, date: z.coerce.date().optional(),
   type: z.enum(['SUPPLY', 'RETURNABLE', 'JOB_WORK', 'SITE_TRANSFER']).default('SUPPLY'),
   vehicleNo: opt, transporter: opt, ewayBillNo: opt, location: z.string().default('MAIN'), notes: opt, requisitionId: opt,
-  lines: z.array(z.object({ orderItemId: opt, itemId: opt, description: opt, unit: opt, qty: z.coerce.number().positive(), serialNos: opt })).min(1),
+  lines: z.array(z.object({ orderItemId: opt, itemId: opt, description: opt, unit: opt, qty: z.coerce.number().positive(), serialNos: opt,
+    hsnSac: opt, altDescription: opt, useAltDescription: z.boolean().optional() })).min(1),
 });
 
 r.get('/challans', requirePerm('challans:view'), async (req, res) => {
@@ -501,8 +502,16 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
       }
       const description = l.description ?? ol?.description;
       if (!description) throw badRequest(`Line ${i + 1} needs a description`);
-      return { orderItemId: ol?.id ?? null, itemId: l.itemId ?? ol?.itemId ?? null, description, unit: l.unit ?? ol?.unit ?? 'Nos', qty: l.qty, serialNos: l.serialNos };
+      if (l.useAltDescription && !l.altDescription) throw badRequest(`Line ${i + 1}: write the description to print, or untick “print my description”`);
+      return { orderItemId: ol?.id ?? null, itemId: l.itemId ?? ol?.itemId ?? null, description, hsnSac: l.hsnSac ?? ol?.hsnSac ?? null, altDescription: l.altDescription ?? null, useAltDescription: !!(l.useAltDescription && l.altDescription),
+        unit: l.unit ?? ol?.unit ?? 'Nos', qty: l.qty, serialNos: l.serialNos };
     });
+    // HSN from the item master where the line has none
+    const needHsn = [...new Set(lines.filter((l) => !l.hsnSac && l.itemId).map((l) => l.itemId!))];
+    if (needHsn.length) {
+      const hs = new Map((await tx.select({ id: items.id, h: items.hsnSac }).from(items).where(inArray(items.id, needHsn))).map((x) => [x.id, x.h]));
+      for (const l of lines) if (!l.hsnSac && l.itemId) l.hsnSac = hs.get(l.itemId) ?? null;
+    }
     // other lines on an order's challan are its accessories & consumables — never more than still to be sent
     const extra = lines.filter((l) => !l.orderItemId);
     if (d.orderId && extra.length) {

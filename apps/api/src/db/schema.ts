@@ -568,10 +568,16 @@ export const goodsReceipts = pgTable('goods_receipts', {
   vendorInvoiceNo: text(),
   vendorInvoiceDate: ts(),
   location: text().notNull().default('MAIN'),
-  status: text().notNull().default('POSTED'), // POSTED, CANCELLED
+  /** POSTED; PENDING_APPROVAL when a line is received more than 10% over its PO quantity (stock moves only once approved); REJECTED; CANCELLED */
+  status: text().notNull().default('POSTED'),
   notes: text(),
   sourceRef: text(), // imported from the old ERP (history — no stock was moved)
   receivedById: text(),
+  /** why more than the PO + 10% came in (asked when the GRN needs approval) */
+  overQtyReason: text(),
+  approvedById: text(),
+  approvedAt: ts(),
+  rejectReason: text(),
   createdAt: createdAt(),
 });
 
@@ -581,6 +587,8 @@ export const goodsReceiptItems = pgTable('goods_receipt_items', {
   poItemId: text().notNull().references(() => purchaseOrderItems.id),
   itemId: text(),
   description: text().notNull(),
+  hsnSac: text(),
+  unit: text(),
   receivedQty: qty().notNull(),
   acceptedQty: qty().notNull(),
   rejectedQty: qty().notNull().default(0),
@@ -597,6 +605,8 @@ export const vendorBills = pgTable('vendor_bills', {
   dueDate: date({ mode: 'string' }),
   vendorId: text().notNull().references(() => vendors.id),
   poId: text().references(() => purchaseOrders.id),
+  /** the goods receipt this bill is for (flow: PO → GRN → vendor bill) */
+  grnId: text().references(() => goodsReceipts.id),
   orderId: text().references(() => salesOrders.id), // the client order the material was bought for
   isInterState: boolean().notNull().default(false),
   status: text().notNull().default('UNPAID'), // UNPAID, PARTIALLY_PAID, PAID, CANCELLED
@@ -613,8 +623,9 @@ export const vendorBillItems = pgTable('vendor_bill_items', {
   id: id(),
   billId: text().notNull().references(() => vendorBills.id, { onDelete: 'cascade' }),
   poItemId: text().references(() => purchaseOrderItems.id),
+  grnItemId: text().references(() => goodsReceiptItems.id),
   ...lineCols(),
-}, (t) => [index().on(t.billId)]);
+}, (t) => [index().on(t.billId), index().on(t.grnItemId)]);
 
 export const vendorPayments = pgTable('vendor_payments', {
   id: id(),
@@ -658,6 +669,10 @@ export const deliveryChallanItems = pgTable('delivery_challan_items', {
   orderItemId: text().references(() => salesOrderItems.id),
   itemId: text(),
   description: text().notNull(),
+  hsnSac: text(),
+  /** own wording for this line; printed instead of the item name when useAltDescription is on */
+  altDescription: text(),
+  useAltDescription: boolean().notNull().default(false),
   unit: text().notNull().default('Nos'),
   qty: qty().notNull(),
   serialNos: text(),
@@ -722,6 +737,9 @@ export const invoiceItems = pgTable('invoice_items', {
   /** Milestone billing: stage + % of the full line rate billed in this line */
   milestone: text(),
   milestonePercent: pct(),
+  /** own wording for this line; printed instead of the item description when useAltDescription is on */
+  altDescription: text(),
+  useAltDescription: boolean().notNull().default(false),
 }, (t) => [index().on(t.orderItemId, t.milestone)]);
 
 export const paymentReceipts = pgTable('payment_receipts', {
@@ -1036,6 +1054,7 @@ export const purchaseOrderItemsRel = relations(purchaseOrderItems, ({ one }) => 
 export const vendorBillsRel = relations(vendorBills, ({ one, many }) => ({
   vendor: one(vendors, { fields: [vendorBills.vendorId], references: [vendors.id] }),
   po: one(purchaseOrders, { fields: [vendorBills.poId], references: [purchaseOrders.id] }),
+  grn: one(goodsReceipts, { fields: [vendorBills.grnId], references: [goodsReceipts.id] }),
   order: one(salesOrders, { fields: [vendorBills.orderId], references: [salesOrders.id] }),
   items: many(vendorBillItems),
   payments: many(vendorPayments),

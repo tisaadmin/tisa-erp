@@ -26,8 +26,11 @@ const lineCols = (inter: boolean): DocColumn[] => [
 ];
 
 type L = { description: string; hsnSac: string | null; qty: number; unit: string; rate: number; discountPct: number; gstRate: number; taxable: number };
+/** a line's own wording replaces the item description when chosen */
+export const printedDescription = (l: { description: string; altDescription?: string | null; useAltDescription?: boolean | null }) => (l.useAltDescription && l.altDescription ? l.altDescription : l.description);
+
 const toRows = (ls: L[]) => ls.map((l, i) => ({
-  sr: i + 1, description: l.discountPct ? `${l.description} (disc. ${l.discountPct}%)` : l.description, hsnSac: l.hsnSac,
+  sr: i + 1, description: l.discountPct ? `${printedDescription(l)} (disc. ${l.discountPct}%)` : printedDescription(l), hsnSac: l.hsnSac,
   // rate-only lines: rate agreed, quantity as required at site
   qty: Number(l.qty) === 0 ? 'Rate only' : l.qty, unit: l.unit,
   rate: l.rate, gst: `${l.gstRate}`, taxable: Number(l.qty) === 0 ? '—' : l.taxable,
@@ -73,11 +76,11 @@ export async function challanPdf(id: string) {
     meta: [['Challan No', dc.number], ['Date', fmtDate(dc.date)], ['Order', dc.order?.number], ['Client PO', dc.order?.clientPoNo], ['Vehicle', dc.vehicleNo], ['Transporter', dc.transporter], ['E-way bill', dc.ewayBillNo], ['Type', dc.type.replace('_', ' ')]],
     parties: [{ title: 'Consignee', name: dc.client.name, lines: partyLines(dc.client) }, ...(dc.site ? [{ title: 'Deliver to', name: dc.site.name, lines: partyLines(dc.site) }] : [])],
     columns: [
-      { key: 'sr', label: '#', width: 25, align: 'center' }, { key: 'description', label: 'Description', width: 270 },
-      { key: 'serialNos', label: 'Serial nos.', width: 130 }, { key: 'qty', label: 'Qty', width: 50, align: 'right' }, { key: 'unit', label: 'Unit', width: 40 },
+      { key: 'sr', label: '#', width: 25, align: 'center' }, { key: 'description', label: 'Description', width: 225 },
+      { key: 'hsnSac', label: 'HSN/SAC', width: 50 }, { key: 'serialNos', label: 'Serial nos.', width: 125 }, { key: 'qty', label: 'Qty', width: 50, align: 'right' }, { key: 'unit', label: 'Unit', width: 40 },
     ],
-    rows: dc.items.map((l, i) => ({ sr: i + 1, description: l.description, serialNos: l.serialNos, qty: l.qty, unit: l.unit })),
-    notes: dc.notes, footerNote: `Received the above goods in good condition.\n\nReceiver's signature: ____________________${dc.receivedBy ? `  (${dc.receivedBy})` : ''}`,
+    rows: dc.items.map((l, i) => ({ sr: i + 1, description: printedDescription(l), hsnSac: l.hsnSac, serialNos: l.serialNos, qty: l.qty, unit: l.unit })),
+    notes: dc.notes, notesTitle: 'Remarks', footerNote: `Received the above goods in good condition.\n\nReceiver's signature: ____________________${dc.receivedBy ? `  (${dc.receivedBy})` : ''}`,
   });
   return { doc, filename: fname(dc.number) };
 }
@@ -113,7 +116,7 @@ export async function invoicePdf(id: string) {
     ]
     : lineCols(inv.isInterState);
   const rows = inv.items.map((l, i) => ({
-    sr: i + 1, description: l.milestone ? l.description.replace(/ — [^—]+ @ [\d.]+%$/, '') : l.description, hsnSac: l.hsnSac, qty: l.qty, unit: l.unit,
+    sr: i + 1, description: l.useAltDescription && l.altDescription ? l.altDescription : l.milestone ? l.description.replace(/ — [^—]+ @ [\d.]+%$/, '') : l.description, hsnSac: l.hsnSac, qty: l.qty, unit: l.unit,
     rate: l.rate, gst: `${l.gstRate}`, taxable: l.taxable,
     stage: l.milestone ? `${STAGE_LABEL[l.milestone] ?? l.milestone} ${l.milestonePercent}%` : '',
   }));

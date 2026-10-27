@@ -6,10 +6,13 @@ import { ItemSuggest, type SuggestItem } from './ItemSuggest';
 import { Button, cx } from './ui';
 import { Combo, CUSTOM } from './Combo';
 import { api } from '../lib/api';
+import { OwnDescription } from './PrintDescription';
 
 export type Line = { itemId?: string | null; description: string; hsnSac?: string | null; unit: string; qty: number; rate: number; discountPct: number; gstRate: number;
   /** quotation costing (internal): our purchase rate and the vendor quoting it */
-  costRate?: number | null; costVendorId?: string | null; costVendor?: string | null };
+  costRate?: number | null; costVendorId?: string | null; costVendor?: string | null;
+  /** challan / sales invoice: own wording, printed instead of the item when chosen */
+  altDescription?: string | null; useAltDescription?: boolean };
 export type Term = { stage: string; percent: number };
 export const emptyLine = (): Line => ({ itemId: null, description: '', hsnSac: '', unit: 'Nos', qty: 1, rate: 0, discountPct: 0, gstRate: 18 });
 
@@ -27,11 +30,12 @@ export function totalsOf(lines: Line[], interState: boolean) {
   return { gross: r2(gross), discount: r2(gross - taxable), taxable: r2(taxable), cgst: r2(cgst), sgst: r2(sgst), igst: interState ? r2(tax) : 0, roundOff: r2(total - raw), total };
 }
 
-export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds, limits, costing }: {
+export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds, limits, costing, ownDescription }: {
   lines: Line[]; onChange: (l: Line[]) => void; interState: boolean; priceField?: 'salePrice' | 'purchasePrice';
   /** when set, only these inventory items may be picked (e.g. a PO against an order) */ onlyItemIds?: string[];
   /** per item: quantity on the order and how much is still left to order */ limits?: Record<string, { qty: number; ordered: number; remaining: number }>;
   /** quotation: show our purchase rate + vendor per line (internal costing) */ costing?: boolean;
+  /** sales invoice: an own-description box per line, printed instead of the item when chosen */ ownDescription?: boolean;
 }) {
   // Sales may not have the Vendors module — this list is for picking who quoted a purchase rate
   const vendors = useGet<{ id: string; name: string; city: string | null }[]>(costing ? '/quotations-costing/vendors' : null);
@@ -78,6 +82,7 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
                         }
                         set(i, { itemId: it.id, costRate: null, costVendorId: null, costVendor: null, description: `${it.name}${it.brand && !it.name.toLowerCase().includes(it.brand.toLowerCase()) ? ` — ${it.brand}` : ''}${it.model && !it.name.toLowerCase().includes(it.model.toLowerCase()) ? ` ${it.model}` : ''}`, hsnSac: it.hsnSac ?? '', unit: it.unit, rate: it[priceField], gstRate: it.gstRate });
                       }} />
+                    {ownDescription && <OwnDescription alt={l.altDescription} use={l.useAltDescription} onChange={(v) => set(i, v)} />}
                   </td>
                   <td><input className="input" value={l.hsnSac ?? ''} onChange={(e) => set(i, { hsnSac: e.target.value })} /></td>
                   <td>

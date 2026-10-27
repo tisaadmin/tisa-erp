@@ -1,9 +1,9 @@
-import { Router } from 'express';
+import { Router, type Request, type Response } from 'express';
 import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
 import { and, desc, eq, ilike, inArray, notInArray, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { db } from '../db';
-import { accessorySheets, goodsReceiptItems, goodsReceipts, items, purchaseOrderItems, purchaseOrders, requisitions, salesOrders, stockMovements, vendors } from '../db/schema';
+import { db, type Tx } from '../db';
+import { accessorySheets, goodsReceiptItems, goodsReceipts, vendorBills, items, purchaseOrderItems, purchaseOrders, requisitions, salesOrders, stockMovements, vendors } from '../db/schema';
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { r3 } from '../lib/gst';
@@ -247,6 +247,8 @@ r.get('/purchase-orders/:id/pdf', requirePerm('purchase_orders:view'), async (re
 const grnSchema = z.object({
   poId: z.string(), date: z.coerce.date().optional(), vendorInvoiceNo: opt, vendorInvoiceDate: z.coerce.date().nullish(),
   location: z.string().default('MAIN'), notes: opt,
+  /** needed when a line goes more than 10% over the PO */
+  overQtyReason: opt,
   lines: z.array(z.object({
     poItemId: z.string(), receivedQty: z.coerce.number().positive(), rejectedQty: z.coerce.number().min(0).default(0), serialNos: opt, remarks: opt,
   })).min(1),
@@ -257,6 +259,7 @@ r.get('/grns', requirePerm('grn:view'), async (req, res) => {
   const where = all([
     qs(req.query.poId) ? eq(goodsReceipts.poId, qs(req.query.poId)!) : undefined,
     qs(req.query.vendorId) ? eq(goodsReceipts.vendorId, qs(req.query.vendorId)!) : undefined,
+    qs(req.query.status) ? eq(goodsReceipts.status, qs(req.query.status)!) : undefined,
     textSearch(search, [goodsReceipts.number], [rel(goodsReceipts.vendorId, vendors, vendors.id, vendors.name), rel(goodsReceipts.poId, purchaseOrders, purchaseOrders.id, purchaseOrders.number)]),
   ]);
   const [data, total] = await Promise.all([
@@ -267,45 +270,96 @@ r.get('/grns', requirePerm('grn:view'), async (req, res) => {
 });
 
 r.get('/grns/:id', requirePerm('grn:view'), async (req, res) => {
-  const g = await db.query.goodsReceipts.findFirst({ where: eq(goodsReceipts.id, req.params.id), with: { items: true, vendor: true, po: true } });
+  const g = await db.query.goodsReceipts.findFirst({ where: eq(goodsReceipts.id, req.params.id), with: { items: true, vendor: true, po: { with: { items: { columns: { id: true, qty: true, receivedQty: true, rate: true } } } } } });
   if (!g) throw notFound('GRN');
-  res.json(g);
+  const bills = await db.query.vendorBills.findMany({ where: eq(vendorBills.grnId, g.id), columns: { id: true, number: true, billNo: true, billDate: true, total: true, status: true } });
+  const users = [g.receivedById, g.approvedById].filter((x): x is string => !!x);
+  const names = users.length ? new Map((await db.query.users.findMany({ where: (t, { inArray: ia }) => ia(t.id, users), columns: { id: true, name: true } })).map((u) => [u.id, u.name])) : new Map();
+  res.json({ ...g, bills, receivedBy: names.get(g.receivedById ?? '') ?? null, approvedBy: names.get(g.approvedById ?? '') ?? null });
 });
+
+/** A GRN may bring in up to 10% more than the PO line; beyond that Management approves it before the stock moves. */
+export const GRN_TOLERANCE = 0.1;
+
+/** Book an approved / within-tolerance GRN: PO received quantities, stock, PO status. */
+async function postGrn(tx: Tx, grnId: string, userId: string) {
+  const grn = await tx.query.goodsReceipts.findFirst({ where: eq(goodsReceipts.id, grnId), with: { items: true } });
+  if (!grn) throw notFound('GRN');
+  const po = await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, grn.poId), with: { items: true } });
+  if (!po) throw notFound('Purchase order');
+  const byId = new Map(po.items.map((i) => [i.id, i]));
+  for (const l of grn.items) {
+    const pi = byId.get(l.poItemId)!;
+    pi.receivedQty = r3(pi.receivedQty + l.acceptedQty);
+    await tx.update(purchaseOrderItems).set({ receivedQty: pi.receivedQty }).where(eq(purchaseOrderItems.id, pi.id));
+  }
+  await postStock(tx, grn.items.map((l) => ({ itemId: l.itemId, qty: l.acceptedQty, rate: byId.get(l.poItemId)!.rate, refType: 'GRN', refId: grn.id, refNo: grn.number, location: grn.location, createdById: userId })));
+  const complete = po.items.every((i) => i.receivedQty >= i.qty - 1e-9);
+  await tx.update(purchaseOrders).set({ status: complete ? 'RECEIVED' : 'PARTIALLY_RECEIVED' }).where(eq(purchaseOrders.id, po.id));
+}
 
 r.post('/grns', requirePerm('grn:create'), async (req, res) => {
   const d = grnSchema.parse(req.body);
-  const grn = await db.transaction(async (tx) => {
+  const out = await db.transaction(async (tx) => {
     const po = await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, d.poId), with: { items: true } });
     if (!po) throw notFound('Purchase order');
-    if (!['APPROVED', 'SENT', 'PARTIALLY_RECEIVED'].includes(po.status)) throw badRequest(`PO must be approved before receiving goods (currently ${po.status})`);
+    if (!['APPROVED', 'SENT', 'PARTIALLY_RECEIVED', 'RECEIVED'].includes(po.status)) throw badRequest(`PO must be approved before receiving goods (currently ${po.status})`);
+    // quantities on GRNs still waiting for approval count as received for the limit
+    const waiting = await tx.select({ poItemId: goodsReceiptItems.poItemId, q: goodsReceiptItems.acceptedQty }).from(goodsReceiptItems)
+      .innerJoin(goodsReceipts, eq(goodsReceipts.id, goodsReceiptItems.grnId)).where(and(eq(goodsReceipts.poId, po.id), eq(goodsReceipts.status, 'PENDING_APPROVAL')));
+    const pend = new Map<string, number>();
+    for (const w of waiting) pend.set(w.poItemId, r3((pend.get(w.poItemId) ?? 0) + Number(w.q)));
     const byId = new Map(po.items.map((i) => [i.id, i]));
+    const over: string[] = [];
     const lines = d.lines.map((l, i) => {
       const pi = byId.get(l.poItemId);
       if (!pi) throw badRequest(`Line ${i + 1} is not on this PO`);
       if (l.rejectedQty > l.receivedQty) throw badRequest(`Line ${i + 1}: rejected qty exceeds received qty`);
       const accepted = r3(l.receivedQty - l.rejectedQty);
-      const pending = r3(pi.qty - pi.receivedQty);
-      if (accepted > pending + 1e-9) throw badRequest(`Line ${i + 1} (${pi.description}): only ${pending} pending on PO`);
-      return { pi, row: { poItemId: pi.id, itemId: pi.itemId, description: pi.description, receivedQty: l.receivedQty, acceptedQty: accepted, rejectedQty: l.rejectedQty, serialNos: l.serialNos, remarks: l.remarks } };
+      const after = r3(pi.receivedQty + (pend.get(pi.id) ?? 0) + accepted);
+      const limit = r3(pi.qty * (1 + GRN_TOLERANCE));
+      if (after > limit + 1e-9) over.push(`${pi.description}: ${after} ${pi.unit} against ${pi.qty} ordered (limit ${limit})`);
+      return { poItemId: pi.id, itemId: pi.itemId, description: pi.description, hsnSac: pi.hsnSac, unit: pi.unit, receivedQty: l.receivedQty, acceptedQty: accepted, rejectedQty: l.rejectedQty, serialNos: l.serialNos, remarks: l.remarks };
     });
+    if (over.length && !d.overQtyReason) throw badRequest(`More than 10% over the PO — ${over.join('; ')}. Give the reason; the GRN then goes to Management for approval.`);
     const number = await nextNumber(tx, 'GRN', d.date);
     const [grn] = await tx.insert(goodsReceipts).values({
       number, date: d.date ?? new Date(), poId: po.id, vendorId: po.vendorId, vendorInvoiceNo: d.vendorInvoiceNo, vendorInvoiceDate: d.vendorInvoiceDate,
-      location: d.location, notes: d.notes, receivedById: req.user.id,
+      location: d.location, notes: d.notes, receivedById: req.user.id, status: over.length ? 'PENDING_APPROVAL' : 'POSTED', overQtyReason: over.length ? d.overQtyReason : null,
     }).returning();
-    await tx.insert(goodsReceiptItems).values(lines.map((l) => ({ ...l.row, grnId: grn.id })));
-    for (const l of lines) {
-      l.pi.receivedQty = r3(l.pi.receivedQty + l.row.acceptedQty);
-      await tx.update(purchaseOrderItems).set({ receivedQty: l.pi.receivedQty }).where(eq(purchaseOrderItems.id, l.pi.id));
-    }
-    await postStock(tx, lines.map((l) => ({ itemId: l.row.itemId, qty: l.row.acceptedQty, rate: l.pi.rate, refType: 'GRN', refId: grn.id, refNo: number, location: d.location, createdById: req.user.id })));
-    const complete = po.items.every((i) => i.receivedQty >= i.qty - 1e-9);
-    await tx.update(purchaseOrders).set({ status: complete ? 'RECEIVED' : 'PARTIALLY_RECEIVED' }).where(eq(purchaseOrders.id, po.id));
-    return grn;
+    await tx.insert(goodsReceiptItems).values(lines.map((l) => ({ ...l, grnId: grn.id })));
+    if (!over.length) await postGrn(tx, grn.id, req.user.id);
+    return { grn, over };
   });
-  audit(req, 'create', 'grn', grn.id);
-  res.status(201).json(grn);
+  if (out.over.length) {
+    await notifyPermission('grn:approve', { type: 'APPROVAL', title: `GRN ${out.grn.number} needs approval — over the PO quantity`, body: out.over.join('; '), link: `/grns/${out.grn.id}`, entityType: 'grn', entityId: out.grn.id }, req.user.id);
+  }
+  audit(req, 'create', 'grn', out.grn.id, out.over.length ? { over: out.over } : undefined);
+  res.status(201).json(out.grn);
 });
+
+/** Management: approve (stock moves now) or reject a GRN that came in more than 10% over the PO. */
+const decideGrn = (action: 'approve' | 'reject') => async (req: Request, res: Response) => {
+  const { reason } = z.object({ reason: z.string().trim().optional() }).parse(req.body ?? {});
+  const g = await db.transaction(async (tx) => {
+    const g = await tx.query.goodsReceipts.findFirst({ where: eq(goodsReceipts.id, req.params.id) });
+    if (!g) throw notFound('GRN');
+    if (g.status !== 'PENDING_APPROVAL') throw badRequest(`This GRN is ${g.status.toLowerCase().replace('_', ' ')}`);
+    if (action === 'approve') {
+      await tx.update(goodsReceipts).set({ status: 'POSTED', approvedById: req.user.id, approvedAt: new Date() }).where(eq(goodsReceipts.id, g.id));
+      await postGrn(tx, g.id, req.user.id);
+    } else {
+      if (!reason || reason.length < 3) throw badRequest('Give a reason for rejecting');
+      await tx.update(goodsReceipts).set({ status: 'REJECTED', rejectReason: reason, approvedById: req.user.id, approvedAt: new Date() }).where(eq(goodsReceipts.id, g.id));
+    }
+    return g;
+  });
+  if (g.receivedById) await notifyUsers([g.receivedById], { type: 'APPROVAL', title: `GRN ${g.number} ${action === 'approve' ? 'approved — stock updated' : 'rejected'}`, body: reason, link: `/grns/${g.id}`, entityType: 'grn', entityId: g.id });
+  audit(req, action, 'grn', g.id, { reason });
+  res.json({ ok: true });
+};
+r.post('/grns/:id/approve', requirePerm('grn:approve'), decideGrn('approve'));
+r.post('/grns/:id/reject', requirePerm('grn:approve'), decideGrn('reject'));
 
 // ═══════════════════════ Stock ═══════════════════════
 

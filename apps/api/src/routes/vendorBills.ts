@@ -6,7 +6,7 @@ import { Router } from 'express';
 import { and, asc, desc, eq, gt, ilike, inArray, lt, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
-import { purchaseOrderItems, purchaseOrders, salesOrders, vendorBillItems, vendorBills, vendorPayments, vendors } from '../db/schema';
+import { goodsReceipts, items, purchaseOrderItems, purchaseOrders, salesOrders, vendorBillItems, vendorBills, vendorPayments, vendors } from '../db/schema';
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { r2 } from '../lib/gst';
@@ -26,17 +26,53 @@ const MODES = ['NEFT', 'RTGS', 'IMPS', 'CHEQUE', 'UPI', 'CASH'] as const;
 const billSchema = z.object({
   vendorId: z.string(), billNo: z.string().trim().min(1, 'Enter the supplier’s bill number'),
   billDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), dueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
-  poId: opt, orderId: opt, notes: opt,
-  lines: z.array(lineSchema.extend({ poItemId: opt, qty: z.coerce.number().positive() })).min(1),
+  poId: opt, grnId: opt, orderId: opt, notes: opt,
+  lines: z.array(lineSchema.extend({ poItemId: opt, grnItemId: opt, qty: z.coerce.number().positive() })).min(1),
   /** the supplier's grand total, when it differs from the calculated one by rounding (max ₹10) */
   totalAsPerBill: z.coerce.number().positive().nullish(),
 });
 
 const statusOf = (total: number, paid: number) => (paid <= 0.005 ? 'UNPAID' : paid >= total - 0.5 ? 'PAID' : 'PARTIALLY_PAID');
 
+/** quantity already billed per GRN line (bills not cancelled; optionally leaving one bill out) */
+async function billedByGrnItem(grnItemIds: string[], excludeBillId?: string) {
+  if (!grnItemIds.length) return new Map<string, number>();
+  const rows = await db.select({ id: vendorBillItems.grnItemId, q: sql<number>`sum(${vendorBillItems.qty})::float` }).from(vendorBillItems)
+    .innerJoin(vendorBills, eq(vendorBills.id, vendorBillItems.billId))
+    .where(and(inArray(vendorBillItems.grnItemId, grnItemIds), sql`${vendorBills.status} <> 'CANCELLED'`, excludeBillId ? sql`${vendorBills.id} <> ${excludeBillId}` : undefined))
+    .groupBy(vendorBillItems.grnItemId);
+  return new Map(rows.map((r) => [r.id!, Number(r.q)]));
+}
+
 async function prepare(d: z.infer<typeof billSchema>, excludeId?: string) {
   const [vendor, company] = await Promise.all([db.query.vendors.findFirst({ where: eq(vendors.id, d.vendorId) }), getCompany()]);
   if (!vendor) throw badRequest('Vendor not found');
+  // flow: PO → GRN → vendor bill. A bill for goods on a PO is entered against its GRN.
+  if (d.grnId) {
+    const g = await db.query.goodsReceipts.findFirst({ where: eq(goodsReceipts.id, d.grnId), with: { items: true } });
+    if (!g) throw badRequest('GRN not found');
+    if (g.status !== 'POSTED') throw badRequest(`GRN ${g.number} is ${g.status === 'PENDING_APPROVAL' ? 'waiting for approval' : g.status.toLowerCase()} — it can be billed once posted`);
+    if (g.vendorId !== d.vendorId) throw badRequest('That GRN is from a different vendor');
+    d.poId = g.poId;
+    const gi = new Map(g.items.map((i) => [i.id, i]));
+    const billed = await billedByGrnItem([...gi.keys()], excludeId);
+    const want = new Map<string, number>();
+    for (const l of d.lines) {
+      if (!l.grnItemId) continue;
+      const it = gi.get(l.grnItemId);
+      if (!it) throw badRequest(`${l.description}: not on GRN ${g.number}`);
+      l.poItemId = it.poItemId;
+      want.set(it.id, r2((want.get(it.id) ?? 0) + l.qty));
+    }
+    for (const [id, q] of want) {
+      const it = gi.get(id)!; const left = r2(it.acceptedQty - (billed.get(id) ?? 0));
+      if (q > left + 1e-9) throw badRequest(`${it.description}: ${q} billed but only ${left} accepted on GRN ${g.number} is left to bill`);
+    }
+  } else if (d.poId && !excludeId) {
+    // (bills entered against a PO before the GRN step stay editable)
+    const poItems = await db.select({ itemId: purchaseOrderItems.itemId, track: items.trackStock }).from(purchaseOrderItems).leftJoin(items, eq(items.id, purchaseOrderItems.itemId)).where(eq(purchaseOrderItems.poId, d.poId));
+    if (poItems.some((p) => p.track !== false)) throw badRequest('Enter the bill against the goods receipt (GRN) of this PO — the flow is PO → GRN → vendor bill');
+  }
   if (d.poId) {
     const po = await db.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, d.poId), columns: { vendorId: true, salesOrderId: true } });
     if (!po) throw badRequest('Purchase order not found');
@@ -111,11 +147,28 @@ r.get('/vendor-bills/:id', requirePerm('vendor_bills:view'), async (req, res) =>
     where: eq(vendorBills.id, req.params.id),
     with: {
       items: { orderBy: [asc(vendorBillItems.sortOrder)] }, payments: { orderBy: [desc(vendorPayments.date)] }, vendor: true,
-      po: { columns: { id: true, number: true, date: true, total: true } }, order: { columns: { id: true, number: true, clientId: true }, with: { client: { columns: { id: true, name: true } } } },
+      po: { columns: { id: true, number: true, date: true, total: true } }, grn: { columns: { id: true, number: true, date: true } }, order: { columns: { id: true, number: true, clientId: true }, with: { client: { columns: { id: true, name: true } } } },
     },
   });
   if (!bill) throw notFound('Vendor bill');
   res.json(bill);
+});
+
+/** Lines of a GRN not billed yet (accepted qty at the PO rate), to enter the supplier's bill for that receipt. */
+r.get('/grns/:id/unbilled', requirePerm('vendor_bills:create'), async (req, res) => {
+  const g = await db.query.goodsReceipts.findFirst({ where: eq(goodsReceipts.id, req.params.id), with: { items: true, po: { with: { items: true } } } });
+  if (!g) throw notFound('GRN');
+  const billed = await billedByGrnItem(g.items.map((i) => i.id));
+  const pi = new Map(g.po.items.map((i) => [i.id, i]));
+  res.json({
+    grnId: g.id, grnNumber: g.number, status: g.status, poId: g.poId, poNumber: g.po.number, vendorId: g.vendorId, orderId: g.po.salesOrderId,
+    vendorInvoiceNo: g.vendorInvoiceNo, vendorInvoiceDate: g.vendorInvoiceDate,
+    lines: g.items.map((i) => {
+      const p = pi.get(i.poItemId)!;
+      return { grnItemId: i.id, poItemId: i.poItemId, itemId: i.itemId, description: i.description, hsnSac: i.hsnSac ?? p.hsnSac, unit: i.unit ?? p.unit, accepted: i.acceptedQty, billed: billed.get(i.id) ?? 0,
+        qty: Math.max(0, r2(i.acceptedQty - (billed.get(i.id) ?? 0))), rate: p.rate, discountPct: p.discountPct, gstRate: p.gstRate };
+    }),
+  });
 });
 
 /** Lines of a PO not billed yet, to start a bill from the PO. */
@@ -144,9 +197,9 @@ r.post('/vendor-bills', requirePerm('vendor_bills:create'), async (req, res) => 
     const t = withBillTotal(totals, d.totalAsPerBill);
     const [b] = await tx.insert(vendorBills).values({
       number: await nextNumber(tx, 'VENDOR_BILL', new Date(`${d.billDate}T12:00:00+05:30`)), billNo: d.billNo, billDate: d.billDate, dueDate: d.dueDate ?? null,
-      vendorId: d.vendorId, poId: d.poId, orderId: d.orderId, isInterState: interState, notes: d.notes, ...t, status: 'UNPAID', createdById: req.user.id,
+      vendorId: d.vendorId, poId: d.poId, grnId: d.grnId, orderId: d.orderId, isInterState: interState, notes: d.notes, ...t, status: 'UNPAID', createdById: req.user.id,
     }).returning();
-    await tx.insert(vendorBillItems).values(rows.map(({ paymentTerms: _p, ...l }, i) => ({ ...l, billId: b.id, poItemId: d.lines[i].poItemId ?? null })));
+    await tx.insert(vendorBillItems).values(rows.map(({ paymentTerms: _p, ...l }, i) => ({ ...l, billId: b.id, poItemId: d.lines[i].poItemId ?? null, grnItemId: d.lines[i].grnItemId ?? null })));
     return b;
   });
   audit(req, 'create', 'vendor_bill', bill.id);
@@ -164,11 +217,11 @@ r.put('/vendor-bills/:id', requirePerm('vendor_bills:edit'), async (req, res) =>
     const t = withBillTotal(totals, d.totalAsPerBill);
     if (t.total < cur.amountPaid - 0.5) throw badRequest(`₹${cur.amountPaid} is already paid against this bill — the total can't go below that`);
     const [b] = await tx.update(vendorBills).set({
-      billNo: d.billNo, billDate: d.billDate, dueDate: d.dueDate ?? null, vendorId: d.vendorId, poId: d.poId, orderId: d.orderId, isInterState: interState,
+      billNo: d.billNo, billDate: d.billDate, dueDate: d.dueDate ?? null, vendorId: d.vendorId, poId: d.poId, grnId: d.grnId, orderId: d.orderId, isInterState: interState,
       notes: d.notes, ...t, status: statusOf(t.total, cur.amountPaid),
     }).where(eq(vendorBills.id, cur.id)).returning();
     await tx.delete(vendorBillItems).where(eq(vendorBillItems.billId, cur.id));
-    await tx.insert(vendorBillItems).values(rows.map(({ paymentTerms: _p, ...l }, i) => ({ ...l, billId: cur.id, poItemId: d.lines[i].poItemId ?? null })));
+    await tx.insert(vendorBillItems).values(rows.map(({ paymentTerms: _p, ...l }, i) => ({ ...l, billId: cur.id, poItemId: d.lines[i].poItemId ?? null, grnItemId: d.lines[i].grnItemId ?? null })));
     return b;
   });
   audit(req, 'update', 'vendor_bill', bill.id);
