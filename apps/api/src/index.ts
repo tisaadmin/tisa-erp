@@ -55,7 +55,7 @@ export function createApp() {
   // Serve the built web dashboard if present (single-container deploys).
   const webDist = path.resolve(__dirname, '../../web/dist');
   if (fs.existsSync(webDist)) {
-    app.use(express.static(webDist));
+    app.use(express.static(webDist, { extensions: ['html'] }));
     app.get(/^\/(?!api).*/, (_req, res) => res.sendFile(path.join(webDist, 'index.html')));
   }
   app.use(errorHandler);

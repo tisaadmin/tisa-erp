@@ -25,6 +25,7 @@ export default function Login() {
           {err && <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{err}</div>}
           <Button variant="primary" className="w-full" loading={busy}>Sign in</Button>
         </div>
+        <div className="mt-4 text-center text-xs text-slate-500"><a className="hover:underline" href="/privacy">Privacy policy</a></div>
       </form>
     </div>
   );

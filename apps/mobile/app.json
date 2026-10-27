@@ -18,7 +18,8 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Your location is stamped on attendance and site photos so the office can verify site visits.",
         "NSCameraUsageDescription": "Take geo-tagged site photos, selfies for attendance and expense receipts.",
-        "NSPhotoLibraryUsageDescription": "Attach receipts and photos."
+        "NSPhotoLibraryUsageDescription": "Attach receipts and photos.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "config": {
         "usesNonExemptEncryption": false
@@ -38,7 +39,14 @@
         "android.permission.RECORD_AUDIO"
       ],
       "blockedPermissions": [
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.SYSTEM_ALERT_WINDOW"
       ]
     },
     "plugins": [
@@ -53,7 +61,9 @@
       [
         "expo-image-picker",
         {
-          "cameraPermission": "Take geo-tagged site photos, selfies for attendance and expense receipts."
+          "cameraPermission": "Take geo-tagged site photos, selfies for attendance and expense receipts.",
+          "photosPermission": "Attach receipts and photos.",
+          "microphonePermission": false
         }
       ],
       [

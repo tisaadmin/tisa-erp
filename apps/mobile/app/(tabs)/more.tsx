@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Text, View } from 'react-native';
+import { Linking, Text, View } from 'react-native';
 import { Btn, Card, Chips, Field, Input, Row, Screen, s, useFetch, useRun } from '../../src/components/ui';
 import { api, getApiUrl } from '../../src/lib/api';
 import { useAuth } from '../../src/lib/auth';
@@ -46,6 +46,10 @@ export default function More() {
           {(leaves.data ?? []).slice(0, 5).map((l) => <Text key={l.id} style={s.muted}>{label(l.type)} {fmtDate(l.fromDate)} → {fmtDate(l.toDate)} · {label(l.status)}</Text>)}
         </Card>
       )}
+      <Card style={{ paddingHorizontal: 0, paddingBottom: 0, gap: 0 }}>
+        <Row icon="shield-checkmark" title="Privacy policy" onPress={() => Linking.openURL(`${getApiUrl()}/privacy`)} />
+        <Row icon="person-remove" title="Delete my account" sub="How to request deletion of your account and data" onPress={() => Linking.openURL(`${getApiUrl()}/delete-account`)} />
+      </Card>
       <Btn variant="danger" icon="log-out" title="Sign out" onPress={logout} />
       <Text style={[s.muted, { textAlign: 'center', fontSize: 11 }]}>Server {getApiUrl()}</Text>
     </Screen>
