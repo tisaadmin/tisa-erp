@@ -21,7 +21,7 @@ export default function Tickets() {
           <Row title={`${t.site?.name} — ${t.title}`} sub={`${t.number} · ${t.client?.name} · ${label(t.type)} · ${fmtDateTime(t.createdAt)}`}
             right={<View style={{ gap: 4, alignItems: 'flex-end' }}><Badge text={t.status} /><Badge text={t.priority} /></View>} onPress={() => router.push(`/ticket/${t.id}`)} />
         )}
-        ListEmptyComponent={list.data ? <Empty text="No tickets" /> : null} />
+        ListEmptyComponent={list.data ? <Empty text="No tickets" /> : undefined} />
     </Screen>
   );
 }

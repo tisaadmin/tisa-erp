@@ -19,7 +19,7 @@ export default function Requests() {
             sub={`${r.number} · ${fmtDateTime(r.createdAt)}${r.items?.length ? ` · ${r.items.length} item${r.items.length > 1 ? 's' : ''}` : ''}\n${r.actionNote ? `Office: ${r.actionNote}` : r.description}`}
             right={<Badge text={r.status} />} onPress={() => router.push(`/requisition/${r.id}`)} />
         )}
-        ListEmptyComponent={list.data ? <Empty text="No requisitions yet" /> : null} />
+        ListEmptyComponent={list.data ? <Empty text="No requisitions yet" /> : undefined} />
     </Screen>
   );
 }

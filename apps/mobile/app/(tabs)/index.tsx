@@ -4,7 +4,7 @@ import { Pressable, Text, View } from 'react-native';
 import { Badge, Btn, C, Card, Empty, Row, Screen, s, useFetch, useRun } from '../../src/components/ui';
 import { api, filePart } from '../../src/lib/api';
 import { useAuth } from '../../src/lib/auth';
-import { fmtDateTime, fmtTime, label } from '../../src/lib/format';
+import { fmtDate, fmtDateTime, fmtTime, label } from '../../src/lib/format';
 import { getFix, takePhoto } from '../../src/lib/geo';
 
 type Att = { checkInAt?: string; checkOutAt?: string; status: string; onSite: boolean; site?: { name: string } | null; distanceFromSite?: number; workMinutes?: number } | null;
@@ -69,7 +69,7 @@ export default function Home() {
 
       <Card title="My open jobs" style={{ padding: 0, gap: 0 }}>
         {(tickets.data?.data ?? []).map((t) => (
-          <Row key={t.id} title={`${t.site?.name} — ${t.title}`} sub={`${t.number} · ${label(t.type)}${t.scheduledAt ? ` · ${fmtDateTime(t.scheduledAt)}` : ''}`}
+          <Row key={t.id} title={`${t.site?.name} — ${t.title}`} sub={`${t.number} · ${label(t.type)}${t.scheduledAt ? ` · ${fmtDateTime(t.scheduledAt)}${t.scheduledEnd ? ` to ${fmtDate(t.scheduledEnd)}` : ''}` : ''}`}
             right={<Badge text={t.priority === 'CRITICAL' || t.priority === 'HIGH' ? t.priority : t.status} />} onPress={() => router.push(`/ticket/${t.id}`)} />
         ))}
         {tickets.data && !tickets.data.data.length && <Empty text="No open jobs assigned to you" />}

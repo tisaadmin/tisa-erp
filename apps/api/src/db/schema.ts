@@ -789,6 +789,8 @@ export const tickets = pgTable('tickets', {
   raisedById: text().references(() => users.id),
   assignedToId: text().references(() => users.id),
   scheduledAt: ts(),
+  /** last day of the work (e.g. an installation spread over several days) — the assignee is booked from scheduledAt to this */
+  scheduledEnd: ts(),
   slaDueAt: ts(),
   resolvedAt: ts(),
   closedAt: ts(),

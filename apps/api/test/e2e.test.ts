@@ -1754,3 +1754,17 @@ test('challan: within the order goes out; more than the order needs a reason and
   assert.equal((await ok('admin', 'GET', `/challans/${dc3.id}`)).status, 'REJECTED');
   await ok('stores', 'POST', `/challans/${dc3.id}/cancel`, {});
 });
+
+test('installation ticket from the project: start and end date (booked for several days); end before start refused', async () => {
+  const start = '2026-11-02T09:30:00+05:30', end = '2026-11-06T18:00:00+05:30';
+  assert.equal((await call('admin', 'POST', `/orders/${ctx.order.id}/installation-ticket`, { scheduledAt: end, scheduledEnd: start })).status, 400);
+  assert.equal((await call('admin', 'POST', `/orders/${ctx.order.id}/installation-ticket`, { scheduledEnd: end })).status, 400, 'end needs a start');
+  const t = await ok('admin', 'POST', `/orders/${ctx.order.id}/installation-ticket`, { scheduledAt: start, scheduledEnd: end });
+  assert.equal(new Date(t.scheduledEnd).toISOString(), new Date(end).toISOString());
+  assert.equal(new Date(t.slaDueAt).toISOString(), new Date(end).toISOString(), 'due by the end date');
+  const inst = await ok('admin', 'GET', `/orders/${ctx.order.id}/installation`);
+  assert.ok(inst.tickets.some((x: any) => x.id === t.id && x.scheduledEnd));
+  const tech = (await ok('admin', 'GET', '/users/lookup')).find((u: any) => u.isFieldStaff);
+  const a = await ok('admin', 'POST', `/tickets/${t.id}/assign`, { assignedToId: tech.id, scheduledAt: start, scheduledEnd: '2026-11-08T18:00:00+05:30' });
+  assert.equal(new Date(a.scheduledEnd).toISOString(), new Date('2026-11-08T18:00:00+05:30').toISOString());
+});

@@ -62,7 +62,10 @@
           "color": "#E67817",
           "icon": "./assets/notification-icon.png"
         }
-      ]
+      ],
+      "expo-asset",
+      "expo-font",
+      "expo-status-bar"
     ],
     "extra": {
       "apiUrl": "https://erp.tisa.in",

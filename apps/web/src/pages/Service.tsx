@@ -56,7 +56,7 @@ export function NewTicket() {
   const cats = useCategories();
   const users = useUsers();
   const [d, setD] = useState<Record<string, any>>({ type: 'COMPLAINT', priority: 'MEDIUM', source: 'PHONE' });
-  const save = useAction(() => api('/tickets', { body: { ...d, scheduledAt: d.scheduledAt || null } }), { success: 'Ticket raised', invalidate: [['/tickets']], onSuccess: (t: any) => nav(`/tickets/${t.id}`) });
+  const save = useAction(() => api('/tickets', { body: { ...d, scheduledAt: d.scheduledAt || null, scheduledEnd: (d as any).scheduledEnd || null } }), { success: 'Ticket raised', invalidate: [['/tickets']], onSuccess: (t: any) => nav(`/tickets/${t.id}`) });
   return (
     <div className="max-w-3xl space-y-4">
       <PageHeader back="/tickets" title="Raise service ticket" actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Create ticket</Button>} />
@@ -73,7 +73,8 @@ export function NewTicket() {
           <Field label="Reporter phone"><Input value={d.reportedPhone ?? ''} onChange={(e) => setD({ ...d, reportedPhone: e.target.value })} /></Field>
           {can('tickets:assign') && <>
             <Field label="Assign technician"><Combo options={(users.data ?? []).filter((u) => u.isFieldStaff).map((u) => ({ value: u.id, label: u.name }))} value={d.assignedToId} onChange={(v) => setD({ ...d, assignedToId: v })} /></Field>
-            <Field label="Scheduled visit"><Input type="datetime-local" value={d.scheduledAt ?? ''} onChange={(e) => setD({ ...d, scheduledAt: e.target.value })} /></Field>
+            <Field label="Scheduled visit (start)"><Input type="datetime-local" value={d.scheduledAt ?? ''} onChange={(e) => setD({ ...d, scheduledAt: e.target.value })} /></Field>
+            <Field label="End" hint="Optional — for work over several days"><Input type="datetime-local" value={(d as any).scheduledEnd ?? ''} min={d.scheduledAt || undefined} onChange={(e) => setD({ ...d, scheduledEnd: e.target.value } as any)} /></Field>
           </>}
         </div>
         <p className="mt-3 text-xs text-slate-500">If the site has an active AMC the ticket is linked automatically and marked non-chargeable; otherwise complaints are marked as chargeable visits.</p>
@@ -108,10 +109,10 @@ export function TicketDetail() {
   const { can, user } = useAuth();
   const users = useUsers();
   const { data: t } = useGet<any>(`/tickets/${id}`);
-  const [assign, setAssign] = useState<{ assignedToId: string | null; scheduledAt: string } | null>(null);
+  const [assign, setAssign] = useState<{ assignedToId: string | null; scheduledAt: string; scheduledEnd: string } | null>(null);
   const [note, setNote] = useState('');
   const [statusTo, setStatusTo] = useState<{ status: string; note: string } | null>(null);
-  const doAssign = useAction(() => api(`/tickets/${id}/assign`, { body: { ...assign, scheduledAt: assign?.scheduledAt || null } }), { success: 'Assigned — technician notified', invalidate: [['/tickets']], onSuccess: () => setAssign(null) });
+  const doAssign = useAction(() => api(`/tickets/${id}/assign`, { body: { ...assign, scheduledAt: assign?.scheduledAt || null, scheduledEnd: assign?.scheduledEnd || null } }), { success: 'Assigned — technician notified', invalidate: [['/tickets']], onSuccess: () => setAssign(null) });
   const addNote = useAction(() => api(`/tickets/${id}/notes`, { body: { note } }), { invalidate: [['/tickets']], onSuccess: () => setNote('') });
   const changeStatus = useAction(() => api(`/tickets/${id}/status`, { body: { status: statusTo!.status, note: statusTo!.note || undefined } }), { success: 'Status updated', invalidate: [['/tickets']], onSuccess: () => setStatusTo(null) });
   if (!t) return <Spinner />;
@@ -121,7 +122,7 @@ export function TicketDetail() {
     <div className="space-y-4">
       <PageHeader back="/tickets" title={<>{t.number} <Status s={t.status} /> <Status s={t.priority} /></>} subtitle={t.title}
         actions={<>
-          {open && can('tickets:assign') && <Button onClick={() => setAssign({ assignedToId: t.assignedToId, scheduledAt: '' })}>{t.assignedTo ? 'Reassign' : 'Assign technician'}</Button>}
+          {open && can('tickets:assign') && <Button onClick={() => setAssign({ assignedToId: t.assignedToId, scheduledAt: '', scheduledEnd: '' })}>{t.assignedTo ? 'Reassign' : 'Assign technician'}</Button>}
           {(open || can('tickets:assign')) && can('tickets:edit') && <Select className="w-40" value="" onChange={(e) => e.target.value && setStatusTo({ status: e.target.value, note: '' })} options={nextStatuses.filter((s) => s !== t.status)} placeholder="Change status…" />}
           {can('requisitions:create') && <Link to={`/requisitions?new=1&siteId=${t.siteId}&ticketId=${t.id}`}><Button>Requisition</Button></Link>}
         </>} />
@@ -130,7 +131,7 @@ export function TicketDetail() {
         <Card title="Ticket" className="lg:col-span-2">
           <KV items={[['Client', <Link className="text-brand-700" to={`/clients/${t.client.id}`}>{t.client.name}</Link>], ['Site', t.site.name], ['Address', [t.site.address, t.site.city].filter(Boolean).join(', ')],
             ['Type', label(t.type)], ['System', t.category?.name], ['Coverage', t.amc ? <Badge t="green">AMC {t.amc.number}</Badge> : t.isBillable ? <Badge t="amber">Chargeable</Badge> : 'Non-chargeable'],
-            ['Technician', t.assignedTo ? `${t.assignedTo.name}${t.assignedTo.phone ? ` · ${t.assignedTo.phone}` : ''}` : null], ['Scheduled', fmtDateTime(t.scheduledAt)], ['SLA due', <span className={new Date(t.slaDueAt) < new Date() && open ? 'text-red-600' : ''}>{fmtDateTime(t.slaDueAt)}</span>],
+            ['Technician', t.assignedTo ? `${t.assignedTo.name}${t.assignedTo.phone ? ` · ${t.assignedTo.phone}` : ''}` : null], ['Scheduled', t.scheduledAt ? `${fmtDateTime(t.scheduledAt)}${t.scheduledEnd ? ` → ${fmtDateTime(t.scheduledEnd)}` : ''}` : null], ['SLA due', <span className={new Date(t.slaDueAt) < new Date() && open ? 'text-red-600' : ''}>{fmtDateTime(t.slaDueAt)}</span>],
             ['Reported by', [t.reportedBy, t.reportedPhone].filter(Boolean).join(' · ') || null], ['Raised by', `${t.raisedBy?.name ?? '—'} via ${label(t.source)}`], ['Resolved', fmtDateTime(t.resolvedAt)]]} />
           {t.description && <p className="mt-4 text-sm whitespace-pre-line text-slate-700">{t.description}</p>}
         </Card>
@@ -153,7 +154,8 @@ export function TicketDetail() {
       <Modal open={!!assign} onClose={() => setAssign(null)} title="Assign technician" footer={<><Button onClick={() => setAssign(null)}>Cancel</Button><Button variant="primary" disabled={!assign?.assignedToId} loading={doAssign.isPending} onClick={() => doAssign.mutate(undefined)}>Assign & notify</Button></>}>
         {assign && <div className="grid gap-3">
           <Field label="Technician"><Combo options={(users.data ?? []).map((u) => ({ value: u.id, label: u.name, sub: u.designation ?? (u.isFieldStaff ? 'Field staff' : '') }))} value={assign.assignedToId} onChange={(v) => setAssign({ ...assign, assignedToId: v })} /></Field>
-          <Field label="Scheduled visit"><Input type="datetime-local" value={assign.scheduledAt} onChange={(e) => setAssign({ ...assign, scheduledAt: e.target.value })} /></Field>
+          <Field label="Scheduled visit (start)"><Input type="datetime-local" value={assign.scheduledAt} onChange={(e) => setAssign({ ...assign, scheduledAt: e.target.value })} /></Field>
+          <Field label="End" hint="Optional — keeps the person booked till then"><Input type="datetime-local" value={assign.scheduledEnd} min={assign.scheduledAt || undefined} onChange={(e) => setAssign({ ...assign, scheduledEnd: e.target.value })} /></Field>
         </div>}
       </Modal>
       <Modal open={!!statusTo} onClose={() => setStatusTo(null)} title={`Mark ${label(statusTo?.status)}`} footer={<><Button onClick={() => setStatusTo(null)}>Cancel</Button><Button variant="primary" loading={changeStatus.isPending} onClick={() => changeStatus.mutate(undefined)}>Update</Button></>}>

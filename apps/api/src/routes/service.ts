@@ -118,15 +118,23 @@ r.get('/orders/:id/installation', requirePerm('tickets:view'), async (req, res) 
   });
   const challans = await db.query.deliveryChallans.findMany({ where: and(eq(deliveryChallans.orderId, req.params.id), eq(deliveryChallans.type, 'SUPPLY')), columns: { id: true, number: true, date: true, status: true }, orderBy: [desc(deliveryChallans.date)] });
   const ord = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), columns: { projectInchargeId: true } });
-  res.json({ ...inst, projectInchargeId: ord?.projectInchargeId ?? null, challans: challans.filter((c) => c.status !== 'CANCELLED'), tickets: list.map((t) => ({ id: t.id, number: t.number, title: t.title, status: t.status, scheduledAt: t.scheduledAt, assignedTo: t.assignedTo, challan: t.challan, createdAt: t.createdAt })) });
+  res.json({ ...inst, projectInchargeId: ord?.projectInchargeId ?? null, challans: challans.filter((c) => c.status !== 'CANCELLED'), tickets: list.map((t) => ({ id: t.id, number: t.number, title: t.title, status: t.status, scheduledAt: t.scheduledAt, scheduledEnd: t.scheduledEnd, assignedTo: t.assignedTo, challan: t.challan, createdAt: t.createdAt })) });
 });
+
+/** an end date needs a start, and comes after it */
+function checkSchedule(start?: Date | null, end?: Date | null) {
+  if (end && !start) throw badRequest('Give the start date as well as the end date');
+  if (start && end && end < start) throw badRequest('The end date is before the start date');
+}
+const rangeText = (start?: Date | null, end?: Date | null) => (start ? `${fmtDateTime(start)}${end ? ` to ${fmtDateTime(end)}` : ''}` : '');
 
 /** After material is delivered: an installation ticket for the order's site, assigned to someone from the projects team. */
 r.post('/orders/:id/installation-ticket', requirePerm('tickets:create'), async (req, res) => {
   const d = z.object({
-    assignedToId: opt, scheduledAt: z.coerce.date().nullish(), priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).default('MEDIUM'),
+    assignedToId: opt, scheduledAt: z.coerce.date().nullish(), scheduledEnd: z.coerce.date().nullish(), priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).default('MEDIUM'),
     title: opt, description: opt, challanId: opt,
   }).parse(req.body ?? {});
+  checkSchedule(d.scheduledAt, d.scheduledEnd);
   if (d.assignedToId && !can(req.user, 'tickets:assign') && d.assignedToId !== req.user.id) throw forbidden('Only the projects head / a manager can assign installation work to others');
   const order = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), with: { site: true } });
   if (!order) throw notFound('Order');
@@ -145,8 +153,8 @@ r.post('/orders/:id/installation-ticket', requirePerm('tickets:create'), async (
     const [t] = await tx.insert(tickets).values({
       number: await nextNumber(tx, 'TICKET'), type: 'INSTALLATION', priority: d.priority, clientId: order.clientId, siteId: order.siteId!, orderId: order.id, challanId: dc?.id ?? null,
       title: d.title ?? `Installation — ${order.number}${dc ? ` (DC ${dc.number})` : ''}`, description, isBillable: false,
-      source: req.headers['x-client'] === 'mobile' ? 'MOBILE' : 'WEB', raisedById: req.user.id, assignedToId: d.assignedToId ?? null, scheduledAt: d.scheduledAt ?? null,
-      status: d.assignedToId ? 'ASSIGNED' : 'OPEN', slaDueAt: d.scheduledAt ?? addDays(new Date(), 7),
+      source: req.headers['x-client'] === 'mobile' ? 'MOBILE' : 'WEB', raisedById: req.user.id, assignedToId: d.assignedToId ?? null, scheduledAt: d.scheduledAt ?? null, scheduledEnd: d.scheduledEnd ?? null,
+      status: d.assignedToId ? 'ASSIGNED' : 'OPEN', slaDueAt: d.scheduledEnd ?? d.scheduledAt ?? addDays(new Date(), 7),
     }).returning();
     await tx.insert(ticketUpdates).values({ ticketId: t.id, userId: req.user.id, status: t.status, note: `Installation ticket raised for order ${order.number}${dc ? ` / challan ${dc.number}` : ''}` });
     return t;
@@ -188,11 +196,12 @@ const ticketSchema = z.object({
   siteId: z.string(), type: z.enum(['COMPLAINT', 'PREVENTIVE_MAINTENANCE', 'PAID_VISIT', 'INSTALLATION', 'SITE_SURVEY', 'VISIT', 'DEMO', 'OTHER']).default('COMPLAINT'),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']).default('MEDIUM'), categoryId: opt, title: z.string().trim().min(3), description: opt,
   reportedBy: opt, reportedPhone: opt, source: z.enum(['WEB', 'MOBILE', 'PHONE', 'EMAIL']).optional(), assignedToId: opt,
-  scheduledAt: z.coerce.date().nullish(), isBillable: z.boolean().optional(), visitCharge: z.coerce.number().nullish(),
+  scheduledAt: z.coerce.date().nullish(), scheduledEnd: z.coerce.date().nullish(), isBillable: z.boolean().optional(), visitCharge: z.coerce.number().nullish(),
 });
 
 r.post('/tickets', requirePerm('tickets:create'), async (req, res) => {
   const d = ticketSchema.parse(req.body);
+  checkSchedule(d.scheduledAt, d.scheduledEnd);
   if (d.assignedToId && !can(req.user, 'tickets:assign') && d.assignedToId !== req.user.id) throw forbidden('Only service managers can assign tickets to others');
   const site = await db.query.sites.findFirst({ where: eq(sites.id, d.siteId) });
   if (!site) throw badRequest('Site not found');
@@ -219,19 +228,24 @@ r.post('/tickets', requirePerm('tickets:create'), async (req, res) => {
 r.patch('/tickets/:id', requirePerm('tickets:edit'), async (req, res) => {
   await loadTicketFor(req, req.params.id);
   const d = ticketSchema.partial().omit({ siteId: true, assignedToId: true }).parse(req.body);
+  if (d.scheduledAt !== undefined || d.scheduledEnd !== undefined) {
+    const cur = await db.query.tickets.findFirst({ where: eq(tickets.id, req.params.id), columns: { scheduledAt: true, scheduledEnd: true } });
+    checkSchedule(d.scheduledAt !== undefined ? d.scheduledAt : cur?.scheduledAt, d.scheduledEnd !== undefined ? d.scheduledEnd : cur?.scheduledEnd);
+  }
   const [t] = await db.update(tickets).set(d).where(eq(tickets.id, req.params.id)).returning();
   res.json(t);
 });
 
 r.post('/tickets/:id/assign', requirePerm('tickets:assign'), async (req, res) => {
-  const d = z.object({ assignedToId: z.string(), scheduledAt: z.coerce.date().nullish(), note: opt }).parse(req.body);
+  const d = z.object({ assignedToId: z.string(), scheduledAt: z.coerce.date().nullish(), scheduledEnd: z.coerce.date().nullish(), note: opt }).parse(req.body);
+  checkSchedule(d.scheduledAt, d.scheduledEnd);
   const tech = await db.query.users.findFirst({ where: and(eq(users.id, d.assignedToId), eq(users.active, true)) });
   if (!tech) throw badRequest('Technician not found');
   const t0 = await loadTicketFor(req, req.params.id);
   if (!OPEN.includes(t0.status)) throw badRequest(`Ticket is ${t0.status.toLowerCase()}`);
-  const [t] = await db.update(tickets).set({ assignedToId: tech.id, scheduledAt: d.scheduledAt ?? t0.scheduledAt, status: t0.status === 'OPEN' ? 'ASSIGNED' : t0.status })
+  const [t] = await db.update(tickets).set({ assignedToId: tech.id, scheduledAt: d.scheduledAt ?? t0.scheduledAt, scheduledEnd: d.scheduledAt ? d.scheduledEnd ?? null : t0.scheduledEnd, status: t0.status === 'OPEN' ? 'ASSIGNED' : t0.status })
     .where(eq(tickets.id, t0.id)).returning();
-  await db.insert(ticketUpdates).values({ ticketId: t.id, userId: req.user.id, status: t.status, note: `Assigned to ${tech.name}${d.scheduledAt ? ` for ${fmtDateTime(d.scheduledAt)}` : ''}${d.note ? ` — ${d.note}` : ''}` });
+  await db.insert(ticketUpdates).values({ ticketId: t.id, userId: req.user.id, status: t.status, note: `Assigned to ${tech.name}${d.scheduledAt ? ` for ${rangeText(d.scheduledAt, d.scheduledEnd)}` : ''}${d.note ? ` — ${d.note}` : ''}` });
   await notifyUsers([tech.id], { title: `Ticket ${t.number} assigned to you`, body: t.title, type: 'TICKET', link: `/tickets/${t.id}`, entityType: 'TICKET', entityId: t.id }, req.user.id);
   res.json(t);
 });

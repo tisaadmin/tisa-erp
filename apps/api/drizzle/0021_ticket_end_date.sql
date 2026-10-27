@@ -1,0 +1,1 @@
+ALTER TABLE "tickets" ADD COLUMN "scheduled_end" timestamp with time zone;

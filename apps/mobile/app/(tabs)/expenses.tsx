@@ -13,7 +13,7 @@ export default function Expenses() {
           <Row title={`${c.title} · ${inr(c.total)}`} sub={`${c.number} · ${fmtDate(c.periodFrom)} – ${fmtDate(c.periodTo)} · ${c.lines.length} item(s)${c.approvedTotal != null && c.approvedTotal !== c.total ? ` · approved ${inr(c.approvedTotal)}` : ''}`}
             right={<Badge text={c.status} />} />
         )}
-        ListEmptyComponent={list.data ? <Empty text="No claims yet" /> : null} />
+        ListEmptyComponent={list.data ? <Empty text="No claims yet" /> : undefined} />
     </Screen>
   );
 }

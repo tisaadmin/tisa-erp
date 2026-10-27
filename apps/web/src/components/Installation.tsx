@@ -9,7 +9,7 @@ import { Combo } from './Combo';
 import { Button, Card, Field, Input, Modal, Select, Status, Table, Textarea } from './ui';
 
 type InstLine = { orderItemId: string; description: string; unit: string; qty: number; deliveredQty: number; installedQty: number; pending: number };
-type Installation = { order: { id: string; number: string }; projectInchargeId: string | null; lines: InstLine[]; challans: { id: string; number: string }[]; tickets: { id: string; number: string; title: string; status: string; scheduledAt: string | null; assignedTo: { id: string; name: string } | null; challan: { id: string; number: string } | null }[] };
+type Installation = { order: { id: string; number: string }; projectInchargeId: string | null; lines: InstLine[]; challans: { id: string; number: string }[]; tickets: { id: string; number: string; title: string; status: string; scheduledAt: string | null; scheduledEnd?: string | null; assignedTo: { id: string; name: string } | null; challan: { id: string; number: string } | null }[] };
 
 /** People of the Projects department first (the usual installers); everyone else on request. */
 function useInstallers(all: boolean) {
@@ -28,12 +28,12 @@ export function OrderInstallationCard({ orderId }: { orderId: string }) {
   const { can } = useAuth();
   const [sp, setSp] = useSearchParams();
   const inst = useGet<Installation>(can('tickets:view') ? `/orders/${orderId}/installation` : null);
-  const [form, setForm] = useState<{ assignedToId: string | null; scheduledAt: string; priority: string; challanId: string; description: string; all: boolean } | null>(null);
+  const [form, setForm] = useState<{ assignedToId: string | null; scheduledAt: string; scheduledEnd: string; priority: string; challanId: string; description: string; all: boolean } | null>(null);
   const installers = useInstallers(!!form?.all);
-  const create = useAction(() => api(`/orders/${orderId}/installation-ticket`, { body: { assignedToId: form!.assignedToId, scheduledAt: form!.scheduledAt || null, priority: form!.priority, challanId: form!.challanId || null, description: form!.description || null } }),
+  const create = useAction(() => api(`/orders/${orderId}/installation-ticket`, { body: { assignedToId: form!.assignedToId, scheduledAt: form!.scheduledAt || null, scheduledEnd: form!.scheduledEnd || null, priority: form!.priority, challanId: form!.challanId || null, description: form!.description || null } }),
     { success: 'Installation ticket created — assignee notified', invalidate: [['/orders'], ['/tickets']], onSuccess: () => setForm(null) });
   const supply = inst.data?.challans ?? [];
-  const open = (challanId?: string | null) => setForm({ assignedToId: inst.data?.projectInchargeId ?? null, scheduledAt: '', priority: 'MEDIUM', challanId: challanId ?? supply[0]?.id ?? '', description: '', all: false });
+  const open = (challanId?: string | null) => setForm({ assignedToId: inst.data?.projectInchargeId ?? null, scheduledAt: '', scheduledEnd: '', priority: 'MEDIUM', challanId: challanId ?? supply[0]?.id ?? '', description: '', all: false });
   // arriving from a challan ("Assign installation") opens the form for that challan
   useEffect(() => {
     const c = sp.get('install');
@@ -48,7 +48,7 @@ export function OrderInstallationCard({ orderId }: { orderId: string }) {
       {inst.data.tickets.length > 0 && <Table rows={inst.data.tickets} to={(t) => `/tickets/${t.id}`} cols={[
         { key: 'number', label: 'Ticket', render: (t) => <>{t.number}<div className="text-xs text-slate-400">{t.challan ? `DC ${t.challan.number}` : ''}</div></> },
         { key: 'assignedTo', label: 'Assigned to', render: (t) => t.assignedTo?.name ?? <span className="text-amber-700">not assigned</span> },
-        { key: 'scheduledAt', label: 'Scheduled', render: (t) => (t.scheduledAt ? fmtDateTime(t.scheduledAt) : '—') },
+        { key: 'scheduledAt', label: 'Scheduled', render: (t) => (t.scheduledAt ? `${fmtDateTime(t.scheduledAt)}${t.scheduledEnd ? ` → ${fmtDateTime(t.scheduledEnd)}` : ''}` : '—') },
         { key: 'status', label: 'Status', render: (t) => <Status s={t.status} /> },
       ]} />}
       <Table rows={inst.data.lines.map((l) => ({ ...l, id: l.orderItemId }))} cols={[
@@ -66,7 +66,10 @@ export function OrderInstallationCard({ orderId }: { orderId: string }) {
           </Field>
           {installers.hasProjects && <label className="-mt-1 flex items-center gap-2 text-xs text-slate-500"><input type="checkbox" checked={form.all} onChange={(e) => setForm({ ...form, all: e.target.checked })} /> Show people from other departments</label>}
           <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Scheduled for"><Input type="datetime-local" value={form.scheduledAt} onChange={(e) => setForm({ ...form, scheduledAt: e.target.value })} /></Field>
+            <Field label="Start"><Input type="datetime-local" value={form.scheduledAt} onChange={(e) => setForm({ ...form, scheduledAt: e.target.value })} /></Field>
+            <Field label="End" hint="Optional — for work over several days"><Input type="datetime-local" value={form.scheduledEnd} min={form.scheduledAt || undefined} onChange={(e) => setForm({ ...form, scheduledEnd: e.target.value })} />
+              {form.scheduledEnd && form.scheduledAt && form.scheduledEnd < form.scheduledAt && <p className="mt-1 text-xs text-red-600">End is before the start</p>}
+              {form.scheduledEnd && !form.scheduledAt && <p className="mt-1 text-xs text-red-600">Give the start too</p>}</Field>
             <Field label="Priority"><Select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} options={['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']} /></Field>
           </div>
           {supply.length > 0 && <Field label="For delivery challan"><Select value={form.challanId} onChange={(e) => setForm({ ...form, challanId: e.target.value })} options={[{ value: '', label: 'Whole order' }, ...supply.map((c) => ({ value: c.id, label: c.number }))]} /></Field>}

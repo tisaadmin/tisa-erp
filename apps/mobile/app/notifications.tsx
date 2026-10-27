@@ -19,7 +19,7 @@ export default function Notifications() {
       <FlatList data={list.data?.data ?? []} keyExtractor={(n) => n.id} onRefresh={list.reload} refreshing={list.loading}
         ListHeaderComponent={<Btn variant="ghost" title="Mark all read" onPress={async () => { await api('/notifications/read-all', { body: {} }); list.reload(); }} />}
         renderItem={({ item: n }) => <Row icon={n.readAt ? 'mail-open-outline' : 'mail-unread'} title={n.title} sub={`${n.body ? `${n.body}\n` : ''}${fmtDateTime(n.createdAt)}`} onPress={() => open(n)} />}
-        ListEmptyComponent={list.data ? <Empty text="You're all caught up" /> : null} />
+        ListEmptyComponent={list.data ? <Empty text="You're all caught up" /> : undefined} />
     </Screen>
   );
 }
