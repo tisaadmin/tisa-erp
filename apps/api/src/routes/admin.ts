@@ -9,7 +9,7 @@ import { audit } from '../lib/audit';
 import { badRequest, notFound, pageParams } from '../lib/http';
 import { ALL_PERMISSIONS, MODULES } from '../lib/permissions';
 import { invalidateUserCache, requirePerm } from '../middleware/auth';
-import { clearCompanyCache } from '../services/company';
+import { clearCompanyCache, getCompany } from '../services/company';
 import { GSTIN_REGEX, INDIAN_STATES } from '../lib/gst';
 import { FIELD_ENTITIES, REGISTRY, resolvedFields, saveFieldConfig, type FieldEntity } from '../lib/fields';
 
@@ -203,10 +203,22 @@ r.put('/settings/costing', requirePerm('settings:edit'), async (req, res) => {
   }).parse(req.body);
   const keys = d.manpowerRoles.map((m) => m.key.toUpperCase());
   if (new Set(keys).size !== keys.length) throw badRequest('Each manpower role needs a different name');
-  await db.update(companySettings).set({ costingConfig: { ...d, manpowerRoles: d.manpowerRoles.map((m) => ({ ...m, key: m.key.toUpperCase() })) } }).where(eq(companySettings.id, 1));
+  const prev = ((await getCompany()).costingConfig ?? {}) as Record<string, unknown>;
+  await db.update(companySettings).set({ costingConfig: { ...prev, ...d, manpowerRoles: d.manpowerRoles.map((m) => ({ ...m, key: m.key.toUpperCase() })) } }).where(eq(companySettings.id, 1));
   clearCompanyCache();
   audit(req, 'update', 'settings', 'costing', d);
   res.json(await costingConfig());
+});
+
+// ── Purchase: POs below this total go to the purchase team without approval ──
+r.get('/settings/purchase', async (_req, res) => { res.json({ poNoApprovalBelow: (await costingConfig()).poNoApprovalBelow }); });
+r.put('/settings/purchase', requirePerm('settings:edit'), async (req, res) => {
+  const d = z.object({ poNoApprovalBelow: z.coerce.number().min(0).max(10000000) }).parse(req.body);
+  const prev = ((await getCompany()).costingConfig ?? {}) as Record<string, unknown>;
+  await db.update(companySettings).set({ costingConfig: { ...prev, poNoApprovalBelow: d.poNoApprovalBelow } }).where(eq(companySettings.id, 1));
+  clearCompanyCache();
+  audit(req, 'update', 'settings', 'purchase', d);
+  res.json({ poNoApprovalBelow: (await costingConfig()).poNoApprovalBelow });
 });
 
 r.get('/settings/login', requirePerm('users:view'), async (_req, res) => {

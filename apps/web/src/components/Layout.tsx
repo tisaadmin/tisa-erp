@@ -10,7 +10,7 @@ import { api, apiBase, session } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDateTime } from '../lib/format';
 import { useAction, useGet } from '../lib/hooks';
-import { cx } from './ui';
+import { Button, Modal, cx } from './ui';
 
 type NavItem = { to: string; label: string; icon: ReactNode; perm: string };
 const NAV: { group: string; items: NavItem[] }[] = [
@@ -63,7 +63,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
   ] },
 ];
 
-type Notif = { id: string; title: string; body?: string; link?: string; readAt?: string | null; createdAt: string; type: string };
+type Notif = { id: string; title: string; body?: string; link?: string; readAt?: string | null; createdAt: string; type: string; entityType?: string | null };
 
 function Notifications() {
   const [open, setOpen] = useState(false);
@@ -86,8 +86,21 @@ function Notifications() {
   }, [qc, nav]);
 
   const unread = q.data?.unread ?? 0;
+  // several small POs to one vendor on one day: a pop-up for Management until they mark it noted
+  const splitAlerts = (q.data?.data ?? []).filter((n) => !n.readAt && n.entityType === 'PO_SPLIT');
+  const noted = async () => {
+    await Promise.all(splitAlerts.map((n) => api(`/notifications/${n.id}/read`, { body: {} }).catch(() => undefined)));
+    qc.invalidateQueries({ queryKey: ['/notifications'] });
+  };
   return (
     <div className="relative">
+      <Modal open={splitAlerts.length > 0} onClose={noted} title="Multiple small POs to one vendor"
+        footer={<><Button onClick={() => { const l = splitAlerts[0]?.link; noted(); if (l) nav(l); }}>See the POs</Button><Button variant="primary" onClick={noted}>Noted</Button></>}>
+        <div className="space-y-3">
+          {splitAlerts.map((n) => <div key={n.id} className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900"><b>{n.title}</b><p className="mt-1">{n.body}</p><p className="mt-1 text-xs text-amber-700">{new Date(n.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</p></div>)}
+          <p className="text-xs text-slate-500">These POs were each below the no-approval limit, so none of them came to you for approval.</p>
+        </div>
+      </Modal>
       <button onClick={() => setOpen(!open)} className="relative rounded-full p-2 text-slate-600 hover:bg-slate-100" aria-label="Notifications">
         <Bell className="size-5" />
         {unread > 0 && <span className="absolute top-0.5 right-0.5 min-w-4 rounded-full bg-red-600 px-1 text-[10px] leading-4 font-bold text-white">{unread > 99 ? '99+' : unread}</span>}

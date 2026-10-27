@@ -353,6 +353,23 @@ const EXCEPTION_LABEL: Record<string, string> = {
   'orders:without_quote': 'Order Forms → Without quote', 'purchase_orders:without_order': 'Purchase Orders → Without order', 'challans:without_order': 'Challans → Without order',
 };
 
+/** POs below this total (incl. GST) go to the purchase team without approval. */
+function SmallPoCard({ canEdit }: { canEdit: boolean }) {
+  const q = useGet<{ poNoApprovalBelow: number }>('/settings/purchase');
+  const [v, setV] = useState<string | null>(null);
+  const save = useAction(() => api('/settings/purchase', { method: 'PUT', body: { poNoApprovalBelow: Number(v) } }), { success: 'Saved', invalidate: [['/settings/purchase']], onSuccess: () => setV(null) });
+  const cur = q.data?.poNoApprovalBelow;
+  return (
+    <Card title="Small purchase orders — no approval">
+      <p className="text-sm text-slate-600">A PO whose total (incl. GST) is below this amount is approved on submit and goes straight to the purchase team to send to the vendor. If two or more such POs are made to the same vendor on the same day, Management gets a pop-up. Set 0 to send every PO for approval.</p>
+      <div className="mt-3 flex items-end gap-2">
+        <Field label="No approval below (₹)"><Input type="number" min={0} step="1" className="w-40" disabled={!canEdit} value={v ?? String(cur ?? '')} onChange={(e) => setV(e.target.value)} /></Field>
+        {v !== null && Number(v) !== cur && <Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Save</Button>}
+      </div>
+    </Card>
+  );
+}
+
 export function WorkflowPage() {
   const { can } = useAuth();
   const rules = useGet<Rule[]>('/settings/workflow');
@@ -381,6 +398,7 @@ export function WorkflowPage() {
           </ul>
         )}
       </Card>
+      <SmallPoCard canEdit={can('settings:edit')} />
       <Card title="Accessories approval">
         <p className="text-sm text-slate-600">Accessory sheets are approved by roles with <b>Accessories → Approve</b> (Roles &amp; Access). Nobody can approve a sheet they prepared.</p>
       </Card>

@@ -1,0 +1,1 @@
+ALTER TABLE "purchase_orders" ADD COLUMN "auto_approved" boolean DEFAULT false NOT NULL;

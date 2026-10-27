@@ -20,6 +20,7 @@ export const DEFAULT_COSTING: Required<CostingConfig> = {
   transportPresets: [{ label: 'Local trip (tempo)', amount: 1500 }, { label: 'Outstation trip', amount: 5000 }],
   servicePct: 5,
   minGpPct: 20,
+  poNoApprovalBelow: 20000,
 };
 
 export async function costingConfig(): Promise<Required<CostingConfig>> {
@@ -29,6 +30,7 @@ export async function costingConfig(): Promise<Required<CostingConfig>> {
     transportPresets: c.transportPresets ?? DEFAULT_COSTING.transportPresets,
     servicePct: c.servicePct ?? DEFAULT_COSTING.servicePct,
     minGpPct: c.minGpPct ?? DEFAULT_COSTING.minGpPct,
+    poNoApprovalBelow: c.poNoApprovalBelow ?? DEFAULT_COSTING.poNoApprovalBelow,
   };
 }
 

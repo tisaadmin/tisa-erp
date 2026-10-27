@@ -385,6 +385,8 @@ export type CostingConfig = {
   servicePct?: number;
   /** gross margin % below which the approver is warned */
   minGpPct?: number;
+  /** POs with a total (incl. GST) below this go straight to the purchase team — no approval (0 = off) */
+  poNoApprovalBelow?: number;
 };
 export type QuoteCosting = {
   manpower?: { role: string; label: string; dayRate: number; people: number; days: number }[];
@@ -546,6 +548,8 @@ export const purchaseOrders = pgTable('purchase_orders', {
   ...totals(),
   createdById: text(),
   approvedById: text(),
+  /** under the small-PO limit (Settings → Workflow rules): went to the purchase team without approval */
+  autoApproved: boolean().notNull().default(false),
   /** raised from this requisition (site request) */
   requisitionId: text(),
   createdAt: createdAt(),

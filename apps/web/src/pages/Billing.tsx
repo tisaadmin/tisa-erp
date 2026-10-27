@@ -2,7 +2,7 @@ import { OwnDescription } from '../components/PrintDescription';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { FileDown, Mail, Plus, Upload } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { emptyLine, LineItemsEditor, type Line } from '../components/LineItems';
 import { RequisitionBanner, useRequisition } from '../components/FromRequisition';
@@ -10,7 +10,7 @@ import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Search
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, inr, inrShort, label, toInputDate } from '../lib/format';
-import { useAction, useGet, type Page, useListQuery, useSessionState } from '../lib/hooks';
+import { useAction, useGet, useItems, type Page, useListQuery, useSessionState } from '../lib/hooks';
 import { DocLines, PartyPicker, useCompanyState } from './Sales';
 import { DateFilter } from '../components/DateFilter';
 
@@ -88,6 +88,8 @@ export function InvoiceEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rq.ready]);
   const inter = !!d.stateCode && d.stateCode !== companyState;
+  const itemsQ = useItems();
+  const serviceIds = useMemo(() => (itemsQ.data?.data ?? []).filter((i) => i.type === 'SERVICE').map((i) => i.id), [itemsQ.data]);
   const save = useAction(() => api('/invoices', { body: { ...d, dueDate: d.dueDate || null, requisitionId } }), { success: 'Draft invoice created', invalidate: [['/invoices']], onSuccess: (i: any) => nav(`/invoices/${i.id}`) });
   if (rq.loading) return <Spinner />;
   return (
@@ -96,13 +98,14 @@ export function InvoiceEditor() {
       <PageHeader back="/invoices" title="New invoice" actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Save draft</Button>} />
       <Card>
         <div className="grid gap-3 md:grid-cols-5">
-          <Field label="Type"><Select value={d.type} onChange={(e) => setD({ ...d, type: e.target.value })} options={['SERVICE', 'AMC', 'TAX_INVOICE', 'PROFORMA']} /></Field>
+          <Field label="Type"><Select value={d.type} onChange={(e) => setD({ ...d, type: e.target.value })} options={[{ value: 'SERVICE', label: 'Service visit' }, { value: 'INSTALLATION', label: 'Installation charges' }, { value: 'AMC', label: 'AMC' }, { value: 'PROFORMA', label: 'Proforma (services)' }]} /></Field>
           <PartyPicker clientId={d.clientId} siteId={d.siteId} lockClient={!!rq.req?.clientId} lockSite={!!rq.req?.siteId} lockedFrom={rq.req ? `requisition ${rq.req.number}` : undefined} onChange={(v) => setD((x) => ({ ...x, ...v, stateCode: v.stateCode ?? x.stateCode }))} />
           <Field label="Invoice date"><Input type="date" value={d.date} onChange={(e) => setD({ ...d, date: e.target.value })} /></Field>
           <Field label="Due date (blank = credit days)"><Input type="date" value={d.dueDate} onChange={(e) => setD({ ...d, dueDate: e.target.value })} /></Field>
         </div>
       </Card>
-      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} ownDescription /></Card>
+      <div className="rounded-md bg-sky-50 px-4 py-2 text-sm text-sky-800">Without a sales order, only <b>services</b> can be invoiced — service visits, installation charges, AMC (service items, or a SAC code 99…). Material is billed from its sales order: open the order → <b>Running bill</b>.</div>
+      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} ownDescription onlyItemIds={serviceIds} /></Card>
       <Card title="Notes"><Textarea value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} /></Card>
     </div>
   );

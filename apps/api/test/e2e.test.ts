@@ -630,7 +630,7 @@ test('bulk order import: many product-details files matched by SO number; ready 
 
 test('workflow rules: PO / challan need a sales order (no role can skip), orders need a quote; rules can be switched off', async () => {
   const rules = await ok('admin', 'GET', '/settings/workflow');
-  assert.deepEqual(rules.map((r: any) => [r.key, r.enabled]), [['quoteRequiresApproval', true], ['quoteRequiresCosting', true], ['orderRequiresQuote', true], ['poRequiresOrder', true], ['poRequiresAccessories', false], ['poOnlyOrderItems', true], ['dcRequiresOrder', true]]);
+  assert.deepEqual(rules.map((r: any) => [r.key, r.enabled]), [['quoteRequiresApproval', true], ['quoteRequiresCosting', true], ['orderRequiresQuote', true], ['poRequiresOrder', true], ['poRequiresAccessories', false], ['poOnlyOrderItems', true], ['invoiceRequiresOrder', true], ['dcRequiresOrder', true]]);
   const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
   // a PO without a sales order: blocked for everyone, even with the old "without order" permission
   for (const who of ['stores', 'director', 'admin']) {
@@ -1054,7 +1054,7 @@ test('requisitions: raised without a site, assigned later, then converted into q
   assert.equal(r.status, 'IN_PROGRESS');
   // wrong client on a converted document → refused
   const otherClient = (await ok('admin', 'GET', '/clients?pageSize=200')).data.find((c: any) => c.id !== ctx.client.id);
-  assert.equal((await call('accounts', 'POST', '/invoices', { clientId: otherClient.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] })).status, 400);
+  assert.equal((await call('accounts', 'POST', '/invoices', { clientId: otherClient.id, requisitionId: r0.id, lines: [{ itemId: ctx.svcItem.id, qty: 1 }] })).status, 400);
   // a PO needs a sales order — a service requisition is not enough; a challan for an approved service requisition (ticket) is allowed
   const vendor = (await ok('stores', 'GET', '/vendors?pageSize=1')).data[0];
   assert.equal((await call('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] })).status, 403);
@@ -1066,7 +1066,11 @@ test('requisitions: raised without a site, assigned later, then converted into q
   r = await ok('svc', 'GET', `/requisitions/${r0.id}`);
   assert.equal(r.status, 'FULFILLED', 'everything sent → fulfilled');
   // invoice from it (still allowed once fulfilled)
-  const inv = await ok('accounts', 'POST', '/invoices', { type: 'TAX_INVOICE', clientId: ctx.client.id, siteId: ctx.site.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] });
+  // material cannot be invoiced without a sales order; the service work can
+  assert.equal((await call('accounts', 'POST', '/invoices', { type: 'TAX_INVOICE', clientId: ctx.client.id, siteId: ctx.site.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] })).status, 403);
+  assert.equal((await call('accounts', 'POST', '/invoices', { type: 'SERVICE', clientId: ctx.client.id, siteId: ctx.site.id, requisitionId: r0.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] })).status, 403, 'a product item, even on a service invoice');
+  assert.equal((await call('accounts', 'POST', '/invoices', { type: 'SERVICE', clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ description: 'Camera supplied', qty: 1, rate: 3000, gstRate: 18, hsnSac: '85258900' }] })).status, 403, 'goods HSN on a free-text line');
+  const inv = await ok('accounts', 'POST', '/invoices', { type: 'INSTALLATION', clientId: ctx.client.id, siteId: ctx.site.id, requisitionId: r0.id, lines: [{ itemId: ctx.svcItem.id, qty: 3 }] });
   assert.equal(inv.requisitionId, r0.id);
   r = await ok('svc', 'GET', `/requisitions/${r0.id}`);
   assert.deepEqual(r.docs.map((d: any) => d.kind).sort(), ['Delivery challan', 'Delivery challan', 'Invoice', 'Quotation']);
@@ -1767,4 +1771,24 @@ test('installation ticket from the project: start and end date (booked for sever
   const tech = (await ok('admin', 'GET', '/users/lookup')).find((u: any) => u.isFieldStaff);
   const a = await ok('admin', 'POST', `/tickets/${t.id}/assign`, { assignedToId: tech.id, scheduledAt: start, scheduledEnd: '2026-11-08T18:00:00+05:30' });
   assert.equal(new Date(a.scheduledEnd).toISOString(), new Date('2026-11-08T18:00:00+05:30').toISOString());
+});
+
+test('small POs: under the limit go to the purchase team without approval; several to one vendor on one day alert Management', async () => {
+  const set = await ok('admin', 'GET', '/settings/purchase');
+  assert.equal(set.poNoApprovalBelow, 20000);
+  const vendor = (await ok('admin', 'POST', '/vendors', { name: 'Small PO Traders', stateCode: '27' }));
+  const mk = (rate: number) => ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: ctx.order.id, submit: true, lines: [{ itemId: ctx.svcItem.id, qty: 1, rate, gstRate: 18 }] });
+  const a = await mk(10000);
+  assert.equal(a.status, 'APPROVED'); assert.equal(a.autoApproved, true); assert.equal(a.smallPoAlert, null);
+  const big = await mk(20000);
+  assert.equal(big.status, 'PENDING_APPROVAL', 'Rs. 23,600 incl. GST needs approval');
+  const b = await mk(12000);
+  assert.equal(b.status, 'APPROVED');
+  assert.equal(b.smallPoAlert.count, 2); assert.equal(b.smallPoAlert.vendor, 'Small PO Traders');
+  const notes = await ok('director', 'GET', '/notifications');
+  assert.ok((notes.data ?? notes).some((n: any) => n.entityType === 'PO_SPLIT' && /Small PO Traders/.test(n.title)), 'Management told');
+  // limit changed in settings
+  await ok('admin', 'PUT', '/settings/purchase', { poNoApprovalBelow: 0 });
+  assert.equal((await mk(100)).status, 'PENDING_APPROVAL', 'limit 0 = every PO needs approval');
+  await ok('admin', 'PUT', '/settings/purchase', { poNoApprovalBelow: 20000 });
 });

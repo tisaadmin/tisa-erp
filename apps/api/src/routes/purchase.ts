@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
-import { and, desc, eq, ilike, inArray, notInArray, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, lte, notInArray, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, type Tx } from '../db';
 import { accessorySheets, goodsReceiptItems, goodsReceipts, vendorBills, items, purchaseOrderItems, purchaseOrders, requisitions, salesOrders, stockMovements, vendors } from '../db/schema';
@@ -12,6 +12,7 @@ import { nextNumber } from '../lib/numbering';
 import { notifyPermission, notifyUsers } from '../lib/notify';
 import { can, requirePerm } from '../middleware/auth';
 import { getCompany } from '../services/company';
+import { costingConfig } from '../services/quoteCosting';
 import { purchaseOrderPdf } from '../services/documents';
 import { lineSchema, priceLines } from '../services/lines';
 import { postStock } from '../services/stock';
@@ -140,6 +141,38 @@ r.get('/purchase-orders/:id', requirePerm('purchase_orders:view'), async (req, r
   res.json({ ...po, grns });
 });
 
+/** On submit: a PO whose total (incl. GST) is below the small-PO limit goes straight to the purchase team — no approval. */
+async function submitState(total: number) {
+  const limit = (await costingConfig()).poNoApprovalBelow;
+  return limit > 0 && total < limit ? { status: 'APPROVED', autoApproved: true } : { status: 'PENDING_APPROVAL', autoApproved: false };
+}
+
+/**
+ * Several small (no-approval) POs to the same vendor on the same day: Management is told, and the person raising the PO sees it too —
+ * buying split into small POs to stay under the limit.
+ */
+async function smallPoAlert(poId: string, userId: string) {
+  const po = await db.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, poId), with: { vendor: { columns: { name: true } } } });
+  if (!po?.autoApproved) return null;
+  const day = new Date(po.date.getTime() + 330 * 60000).toISOString().slice(0, 10);
+  const from = new Date(`${day}T00:00:00+05:30`), to = new Date(`${day}T23:59:59.999+05:30`);
+  const same = await db.query.purchaseOrders.findMany({
+    where: and(eq(purchaseOrders.vendorId, po.vendorId), eq(purchaseOrders.autoApproved, true), notInArray(purchaseOrders.status, ['DRAFT', 'CANCELLED']), gte(purchaseOrders.date, from), lte(purchaseOrders.date, to)),
+    columns: { id: true, number: true, total: true }, orderBy: [asc(purchaseOrders.createdAt)],
+  });
+  if (same.length < 2) return null;
+  const limit = (await costingConfig()).poNoApprovalBelow;
+  const total = Math.round(same.reduce((a, x) => a + Number(x.total), 0) * 100) / 100;
+  const rs = (n: number) => `Rs. ${Number(n).toLocaleString('en-IN')}`;
+  const alert = { vendor: po.vendor.name, date: day, count: same.length, total, limit, pos: same.map((x) => ({ id: x.id, number: x.number, total: Number(x.total) })) };
+  await notifyPermission('purchase_orders:approve', {
+    type: 'APPROVAL', title: `${same.length} POs under ${rs(limit)} to ${po.vendor.name} today`,
+    body: `${same.map((x) => `${x.number} ${rs(Number(x.total))}`).join(' · ')} — together ${rs(total)}. Each went without approval.`,
+    link: `/purchase-orders?vendorId=${po.vendorId}`, entityType: 'PO_SPLIT', entityId: po.id,
+  }, userId);
+  return alert;
+}
+
 r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, res) => {
   const d = poSchema.parse(req.body);
   // a PO from a project requisition is against that project's order (its items / quantities apply)
@@ -157,10 +190,11 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
   const po = await db.transaction(async (tx) => {
     const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, undefined, d.deliverToSiteId || undefined) : null;
     const { rows, totals } = await priceLines(tx, d.lines, interState, 'purchasePrice');
+    const sub = d.submit ? await submitState(totals.total) : { status: 'DRAFT', autoApproved: false };
     const [po] = await tx.insert(purchaseOrders).values({
       number: await nextNumber(tx, 'PURCHASE_ORDER', d.date), date: d.date ?? new Date(), vendorId: d.vendorId, salesOrderId: d.salesOrderId,
       deliverToSiteId: d.deliverToSiteId, expectedDate: d.expectedDate, terms: d.terms ?? company.poTerms, notes: d.notes, isInterState: interState,
-      ...totals, status: d.submit ? 'PENDING_APPROVAL' : 'DRAFT', createdById: req.user.id, requisitionId: rq?.id ?? null,
+      ...totals, ...sub, createdById: req.user.id, requisitionId: rq?.id ?? null,
     }).returning();
     await tx.insert(purchaseOrderItems).values(rows.map(({ paymentTerms: _p, ...l }) => ({ ...l, poId: po.id })));
     if (rq) await markRequisitionUsed(tx, rq, { kind: 'Purchase order', number: po.number }, req.user.id);
@@ -169,8 +203,9 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
   if (po.status === 'PENDING_APPROVAL') {
     await notifyPermission('purchase_orders:approve', { title: `PO ${po.number} awaiting approval`, body: `Rs. ${po.total.toLocaleString('en-IN')}`, type: 'APPROVAL', link: `/purchase-orders/${po.id}`, entityType: 'PURCHASE_ORDER', entityId: po.id }, req.user.id);
   }
-  audit(req, 'create', 'purchase_order', po.id);
-  res.status(201).json(po);
+  const alert = await smallPoAlert(po.id, req.user.id);
+  audit(req, 'create', 'purchase_order', po.id, po.autoApproved ? { autoApproved: true } : undefined);
+  res.status(201).json({ ...po, smallPoAlert: alert });
 });
 
 r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, res) => {
@@ -191,16 +226,19 @@ r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, r
     if (!ex) throw notFound('Purchase order');
     if (!['DRAFT', 'PENDING_APPROVAL'].includes(ex.status)) throw badRequest('Only draft / pending POs can be edited');
     const { rows, totals } = await priceLines(tx, d.lines, interState, 'purchasePrice');
+    const sub = d.submit ? await submitState(totals.total) : { status: ex.status, autoApproved: false };
     const [po] = await tx.update(purchaseOrders).set({
       vendorId: d.vendorId, salesOrderId: d.salesOrderId, deliverToSiteId: d.deliverToSiteId, date: d.date ?? ex.date, expectedDate: d.expectedDate,
-      terms: d.terms, notes: d.notes, isInterState: interState, ...totals, status: d.submit ? 'PENDING_APPROVAL' : ex.status,
+      terms: d.terms, notes: d.notes, isInterState: interState, ...totals, ...sub,
     }).where(eq(purchaseOrders.id, ex.id)).returning();
     await tx.delete(purchaseOrderItems).where(eq(purchaseOrderItems.poId, ex.id));
     await tx.insert(purchaseOrderItems).values(rows.map(({ paymentTerms: _p, ...l }) => ({ ...l, poId: po.id })));
     return po;
   });
+  if (po.status === 'PENDING_APPROVAL' && d.submit) await notifyPermission('purchase_orders:approve', { title: `PO ${po.number} awaiting approval`, body: `Rs. ${po.total.toLocaleString('en-IN')}`, type: 'APPROVAL', link: `/purchase-orders/${po.id}`, entityType: 'PURCHASE_ORDER', entityId: po.id }, req.user.id);
+  const alert = await smallPoAlert(po.id, req.user.id);
   audit(req, 'update', 'purchase_order', po.id);
-  res.json(po);
+  res.json({ ...po, smallPoAlert: alert });
 });
 
 const PO_FLOW: Record<string, { to: string[]; perm: string }> = {
@@ -230,17 +268,18 @@ r.post('/purchase-orders/:id/:action', async (req, res) => {
     const received = await db.$count(goodsReceipts, and(eq(goodsReceipts.poId, po.id), eq(goodsReceipts.status, 'POSTED')));
     if (received) throw badRequest('Goods already received against this PO — close it instead');
   }
-  const status = PO_FLOW[action].to[0];
-  const [row] = await db.update(purchaseOrders).set({ status, approvedById: action === 'approve' ? req.user.id : po.approvedById })
+  const sub = action === 'submit' ? await submitState(po.total) : { status: PO_FLOW[action].to[0], autoApproved: po.autoApproved };
+  const [row] = await db.update(purchaseOrders).set({ ...sub, approvedById: action === 'approve' ? req.user.id : po.approvedById })
     .where(eq(purchaseOrders.id, po.id)).returning();
   if (action === 'approve' || action === 'reject') {
     await notifyUsers([po.createdById], { title: `PO ${po.number} ${action === 'approve' ? 'approved' : 'sent back'}`, body: comment ?? undefined, type: 'APPROVAL', link: `/purchase-orders/${po.id}`, entityType: 'PURCHASE_ORDER', entityId: po.id }, req.user.id);
   }
-  if (action === 'submit') {
+  if (action === 'submit' && row.status === 'PENDING_APPROVAL') {
     await notifyPermission('purchase_orders:approve', { title: `PO ${po.number} awaiting approval`, type: 'APPROVAL', link: `/purchase-orders/${po.id}`, entityType: 'PURCHASE_ORDER', entityId: po.id }, req.user.id);
   }
-  audit(req, action, 'purchase_order', po.id, { comment });
-  res.json(row);
+  const alert = action === 'submit' ? await smallPoAlert(po.id, req.user.id) : null;
+  audit(req, action, 'purchase_order', po.id, { comment, ...(row.autoApproved && action === 'submit' ? { autoApproved: true } : {}) });
+  res.json({ ...row, smallPoAlert: alert });
 });
 
 r.get('/purchase-orders/:id/pdf', requirePerm('purchase_orders:view'), async (req, res) => {

@@ -4,12 +4,13 @@ import { randomBytes } from 'node:crypto';
 import { and, desc, eq, gt, ilike, inArray, isNull, lt, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, type Tx } from '../db';
-import { amcContracts, clients, invoiceItems, invoices, paymentReceipts, salesOrderItems, salesOrders, sites, type MilestoneStage } from '../db/schema';
+import { amcContracts, clients, invoiceItems, invoices, items, paymentReceipts, salesOrderItems, salesOrders, sites, type MilestoneStage } from '../db/schema';
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { addDays, dayRange } from '../lib/dates';
 import { calcTotals, r2, r3 } from '../lib/gst';
-import { badRequest, notFound, pageParams } from '../lib/http';
+import { badRequest, HttpError, notFound, pageParams } from '../lib/http';
+import { workflowRules } from '../services/workflow';
 import { sendMail } from '../lib/mailer';
 import { nextNumber } from '../lib/numbering';
 import { pdfToBuffer, STAGE_LABEL } from '../lib/pdf';
@@ -79,13 +80,23 @@ r.patch('/invoices/:id/items/:itemId', requirePerm('invoices:create'), async (re
 
 // ── Manual invoice (service visit, AMC, one-off supply, proforma) ──
 const manualSchema = z.object({
-  type: z.enum(['TAX_INVOICE', 'SERVICE', 'AMC', 'PROFORMA']).default('TAX_INVOICE'),
+  type: z.enum(['TAX_INVOICE', 'SERVICE', 'INSTALLATION', 'AMC', 'PROFORMA']).default('SERVICE'),
   clientId: z.string(), siteId: opt, amcId: opt, ticketId: opt, date: z.coerce.date().optional(), dueDate: z.coerce.date().nullish(),
   notes: opt, terms: opt, requisitionId: opt, lines: z.array(lineSchema.extend({ qty: z.coerce.number().positive(), altDescription: opt, useAltDescription: z.boolean().optional() })).min(1),
 });
 
 r.post('/invoices', requirePerm('invoices:create'), async (req, res) => {
   const d = manualSchema.parse(req.body);
+  // without a sales order: services only (visit, installation, AMC …) — material goes through its order
+  if ((await workflowRules()).invoiceRequiresOrder) {
+    if (d.type === 'TAX_INVOICE') throw new HttpError(403, 'A supply invoice is made from the sales order (order → Running bill). Without an order you can invoice only services — choose Service visit, Installation or AMC.');
+    const ids = [...new Set(d.lines.map((l) => l.itemId).filter((x): x is string => !!x))];
+    const goods = ids.length ? await db.select({ id: items.id, name: items.name, type: items.type }).from(items).where(inArray(items.id, ids)) : [];
+    const material = goods.filter((g) => g.type !== 'SERVICE');
+    if (material.length) throw new HttpError(403, `${material.map((g) => g.name).slice(0, 4).join(', ')}${material.length > 4 ? '…' : ''}: material cannot be invoiced without a sales order — bill it from its order (Running bill). Only services can be invoiced here.`);
+    const hsnGoods = d.lines.filter((l) => !l.itemId && l.hsnSac && !/^\s*99/.test(l.hsnSac));
+    if (hsnGoods.length) throw new HttpError(403, `${hsnGoods.map((l) => `${l.description ?? 'line'} (HSN ${l.hsnSac})`).slice(0, 3).join(', ')}: an HSN code means goods — material is billed from its sales order. Services use a SAC code (99…).`);
+  }
   const inv = await db.transaction(async (tx) => {
     const ctx = await resolvePlaceOfSupply(tx, d.clientId, d.siteId);
     const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId, d.siteId ?? null) : null;

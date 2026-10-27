@@ -1,9 +1,9 @@
 import { FileDown, PackageCheck, Plus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Combo } from '../components/Combo';
-import { emptyLine, LineItemsEditor, type Line } from '../components/LineItems';
+import { emptyLine, LineItemsEditor, totalsOf, type Line } from '../components/LineItems';
 import { RequisitionBanner, useRequisition } from '../components/FromRequisition';
 import { Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Select, Spinner, Status, Table, Textarea } from '../components/ui';
 import { api, openPdf } from '../lib/api';
@@ -15,7 +15,10 @@ import { DocLines, useCompanyState } from './Sales';
 export function PurchaseOrdersPage() {
   const [q, setQ] = useListQuery({ page: 1, pageSize: 50 });
   const { can } = useAuth();
-  const list = useGet<Page<any>>('/purchase-orders', q);
+  const [sp, setSp] = useSearchParams();
+  const vendorFilter = sp.get('vendorId');
+  const vendors = useVendors();
+  const list = useGet<Page<any>>('/purchase-orders', { ...q, vendorId: vendorFilter ?? undefined });
   return (
     <div>
       <PageHeader title="Purchase orders" actions={can('purchase_orders:create') && <Link to="/purchase-orders/new"><Button variant="primary" icon={<Plus className="size-4" />}>New PO</Button></Link>} />
@@ -24,11 +27,13 @@ export function PurchaseOrdersPage() {
           <SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} />
           <Select className="w-48" value={q.status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} placeholder="All statuses"
             options={['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT', 'PARTIALLY_RECEIVED', 'RECEIVED', 'CLOSED', 'CANCELLED']} />
+          {vendorFilter && <span className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm">Vendor: {vendors.data?.data.find((v) => v.id === vendorFilter)?.name ?? '…'}
+            <button type="button" className="text-slate-400 hover:text-slate-700" onClick={() => setSp({})}>×</button></span>}
         </div>
         <Table rows={list.data?.data} exportAs={{ name: 'purchase-orders', path: '/purchase-orders', query: q }} to={(r) => `/purchase-orders/${r.id}`} cols={[
           { key: 'number', label: 'PO' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) }, { key: 'vendor', label: 'Vendor', render: (r) => r.vendor?.name },
           { key: 'so', label: 'Against order', render: (r) => r.salesOrder?.number ?? '—' }, { key: 'to', label: 'Deliver to', render: (r) => r.deliverToSite?.name ?? 'Store' },
-          { key: 'total', label: 'Total', num: true, render: (r) => inr(r.total) }, { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
+          { key: 'total', label: 'Total', num: true, render: (r) => inr(r.total) }, { key: 'status', label: 'Status', render: (r) => <><Status s={r.status} />{r.autoApproved && <div className="text-[11px] text-emerald-700">small PO — no approval</div>}</> },
         ]} />
         {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
       </Card>
@@ -115,13 +120,18 @@ export function PoEditor() {
   const save = useAction((submit: boolean) => {
     const body = { ...d, requisitionId: requisitionId ?? undefined, expectedDate: d.expectedDate || null, terms: d.terms || undefined, submit, lines: d.lines.map((l) => ({ ...l, rate: l.rate || undefined })) };
     return id ? api(`/purchase-orders/${id}`, { method: 'PUT', body }) : api('/purchase-orders', { body });
-  }, { success: 'PO saved', invalidate: [['/purchase-orders']], onSuccess: (p: any) => nav(`/purchase-orders/${p.id}`) });
+  }, { invalidate: [['/purchase-orders']], onSuccess: (p: any) => { toast.success(p.autoApproved ? 'PO approved — under the no-approval limit, it can be sent to the vendor' : p.status === 'PENDING_APPROVAL' ? 'PO sent for approval' : 'PO saved'); nav(`/purchase-orders/${p.id}`, { state: { smallPoAlert: p.smallPoAlert } }); } });
+  // small POs go to the purchase team without approval
+  const limitQ = useGet<{ poNoApprovalBelow: number }>('/settings/purchase');
+  const poTotal = totalsOf(d.lines, inter).total;
+  const small = !!limitQ.data && limitQ.data.poNoApprovalBelow > 0 && poTotal > 0 && poTotal < limitQ.data.poNoApprovalBelow;
   if ((id && !existing.data) || rq.loading) return <Spinner />;
   return (
     <div className="space-y-4">
       <RequisitionBanner req={rq.req} />
       <PageHeader back="/purchase-orders" title={id ? `Edit ${existing.data.number}` : 'New purchase order'}
-        actions={<><Button disabled={accBlocked || (orderRequired && !d.salesOrderId)} loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" disabled={accBlocked || (orderRequired && !d.salesOrderId)} loading={save.isPending} onClick={() => save.mutate(true)}>Submit for approval</Button></>} />
+        actions={<><Button disabled={accBlocked || (orderRequired && !d.salesOrderId)} loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" disabled={accBlocked || (orderRequired && !d.salesOrderId)} loading={save.isPending} onClick={() => save.mutate(true)}>{small ? 'Approve & save (no approval needed)' : 'Submit for approval'}</Button></>} />
+      {small && <div className="rounded-md bg-emerald-50 px-4 py-2 text-sm text-emerald-800">Total {inr(poTotal)} is under {inr(limitQ.data!.poNoApprovalBelow)} — this PO goes to the purchase team without Management approval. (Several such POs to one vendor on the same day are flagged to Management.)</div>}
       {accBlocked && (
         <div className="rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800">
           This order needs an approved <b>accessories &amp; consumables list</b> before material can be ordered{accStatus.data?.sheet ? <> — {accStatus.data.sheet.number} is {accStatus.data.sheet.status.toLowerCase().replace('_', ' ')}</> : ''}.{' '}
@@ -169,7 +179,9 @@ export function PoDetail() {
   const { can } = useAuth();
   const { data: po } = useGet<any>(`/purchase-orders/${id}`);
   const [grn, setGrn] = useState<{ vendorInvoiceNo: string; vendorInvoiceDate: string; notes: string; overQtyReason: string; lines: Record<string, { received: number; rejected: number; serialNos: string }> } | null>(null);
-  const act = useAction((a: string) => api(`/purchase-orders/${id}/${a}`, { body: {} }), { success: 'Updated', invalidate: [['/purchase-orders']] });
+  const loc = useLocation();
+  const [smallAlert, setSmallAlert] = useState<any>((loc.state as any)?.smallPoAlert ?? null);
+  const act = useAction((a: string) => api(`/purchase-orders/${id}/${a}`, { body: {} }), { invalidate: [['/purchase-orders']], onSuccess: (r: any) => { toast.success(r.autoApproved && r.status === 'APPROVED' ? 'Approved — under the no-approval limit' : 'Updated'); if (r.smallPoAlert) setSmallAlert(r.smallPoAlert); } });
   const post = useAction(() => api('/grns', { body: { poId: id, vendorInvoiceNo: grn!.vendorInvoiceNo, vendorInvoiceDate: grn!.vendorInvoiceDate || null, notes: grn!.notes, overQtyReason: grn!.overQtyReason || null,
     lines: Object.entries(grn!.lines).filter(([, v]) => v.received > 0).map(([poItemId, v]) => ({ poItemId, receivedQty: v.received, rejectedQty: v.rejected, serialNos: v.serialNos })) } }),
   { invalidate: [['/purchase-orders'], ['/grns'], ['/items']], onSuccess: (g: any) => { toast.success(g.status === 'PENDING_APPROVAL' ? 'GRN sent to Management for approval — stock moves once approved' : 'GRN posted — stock updated'); nav(`/grns/${g.id}`); } });
@@ -179,7 +191,13 @@ export function PoDetail() {
   const overLines = grn ? po.items.filter((l: any) => { const v = grn.lines[l.id]; return v && l.receivedQty + (v.received - v.rejected) > l.qty * 1.1 + 1e-9; }) : [];
   return (
     <div className="space-y-4">
-      <PageHeader back="/purchase-orders" title={<>{po.number} <Status s={po.status} /></>} subtitle={po.vendor.name}
+      <Modal open={!!smallAlert} onClose={() => setSmallAlert(null)} title="Multiple small POs to this vendor today" footer={<Button variant="primary" onClick={() => setSmallAlert(null)}>OK</Button>}>
+        {smallAlert && <div className="space-y-2 text-sm">
+          <p><b>{smallAlert.count} POs</b> under {inr(smallAlert.limit)} have been made to <b>{smallAlert.vendor}</b> today — together <b>{inr(smallAlert.total)}</b>. Management has been told.</p>
+          <ul className="list-disc pl-5">{smallAlert.pos.map((x: any) => <li key={x.id}>{x.number} — {inr(x.total)}</li>)}</ul>
+        </div>}
+      </Modal>
+      <PageHeader back="/purchase-orders" title={<>{po.number} <Status s={po.status} />{po.autoApproved && <span className="ml-2 align-middle text-xs font-normal text-emerald-700">no approval needed (small PO)</span>}</>} subtitle={po.vendor.name}
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/purchase-orders/${po.id}/pdf`)}>PDF</Button>
           {['DRAFT', 'PENDING_APPROVAL'].includes(po.status) && can('purchase_orders:edit') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit</Button></Link>}

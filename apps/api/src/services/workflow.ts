@@ -38,6 +38,11 @@ export const WORKFLOW_RULES = {
     help: 'Purchase can order only what is on the order form or its accessories & consumables list, and no more than the quantity there less what earlier POs for the order already carry. Anything else needs the exception permission (or a separate PO for stock).',
     exception: 'purchase_orders:extra_items', default: true,
   },
+  invoiceRequiresOrder: {
+    label: 'Invoices for material only against a sales order',
+    help: 'An invoice without a sales order can only be for services — service visits, installation charges, AMC, etc. (SERVICE items or SAC codes 99…). Material (products / accessories) is billed from its sales order as a running bill. No role can skip this.',
+    exception: null, default: true,
+  },
   dcRequiresOrder: {
     label: 'Delivery challans only against a sales order, within its quantities',
     help: 'Supply and site-transfer challans must be raised against the sales order (or an approved service requisition for a ticket). Sending more than the order (or its accessories list) still has to send needs Management approval — stock moves only once approved. Returnable and job-work challans are not affected. No role can skip this.',
