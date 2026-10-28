@@ -23,7 +23,7 @@ import { postStock } from '../services/stock';
 import { mergeOrders } from '../services/orderMerge';
 import { costingConfig, costingSummary, isServiceLine, purchaseHistory, serviceItemIds, summaryText } from '../services/quoteCosting';
 import { materialKey, projectMaterialStatus } from '../services/projectStatus';
-import { createSalesOrder, orderSchema } from '../services/orders';
+import { createSalesOrder, notifyOrderCreated, orderSchema } from '../services/orders';
 
 import { enforceRule } from '../services/workflow';
 const r = Router();
@@ -275,6 +275,7 @@ r.post('/quotations/:id/convert', requirePerm('orders:create'), async (req, res)
     return o;
   });
   audit(req, 'convert', 'quotation', req.params.id, { orderId: order.id });
+  await notifyOrderCreated(order.id, req.user.id);
   res.status(201).json(order);
 });
 
@@ -323,6 +324,7 @@ r.post('/orders', requirePerm('orders:create'), async (req, res) => {
   const d = orderSchema.parse(req.body);
   const o = await db.transaction((tx) => createSalesOrder(tx, d, req.user.id));
   audit(req, 'create', 'order', o.id);
+  await notifyOrderCreated(o.id, req.user.id);
   res.status(201).json(o);
 });
 

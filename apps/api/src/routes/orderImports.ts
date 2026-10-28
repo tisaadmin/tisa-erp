@@ -19,7 +19,7 @@ import { enforceRule } from '../services/workflow';
 import { UNIT_MAP } from '../import/engine';
 import { parseOrderDocument, type ParsedOrderDoc } from '../import/orderDoc';
 import { guessItemType, suggestClients, suggestItems, suggestSites, systemGuesser } from '../import/orderMatch';
-import { createSalesOrder, replaceOrderLines, termsSchema } from '../services/orders';
+import { createSalesOrder, notifyOrderCreated, replaceOrderLines, termsSchema } from '../services/orders';
 import { getCompany, resolvePlaceOfSupply } from '../services/company';
 import { priceLines } from '../services/lines';
 import { validateTerms } from '../services/billing';
@@ -397,6 +397,7 @@ r.post('/order-imports/:id/commit', perm, async (req, res) => {
   const { job, doc } = await loadJob(req.params.id);
   const result = await commitOrderImport(job, doc, commitSchema.parse(req.body), req.user);
   audit(req, 'import', 'quotationId' in result.summary ? 'quotation' : 'order', result.order.id, { file: job.fileName, sourceRef: result.sourceRef, ...result.summary });
+  if (!('quotationId' in result.summary) && !(result.summary as { filledIn?: boolean }).filledIn) await notifyOrderCreated(result.order.id, req.user.id);
   res.status(201).json(result.summary);
 });
 

@@ -37,10 +37,11 @@ export async function notifyUsers(userIds: (string | null | undefined)[], payloa
 }
 
 /** Notify every active user whose role grants the permission (e.g. all who can approve requisitions). */
-export async function notifyPermission(permission: string, payload: NotifyPayload, exceptUserId?: string) {
+export async function notifyPermission(permission: string, payload: NotifyPayload, exceptUserId?: string, opts: { unless?: string } = {}) {
   const rows = await db.select({ id: users.id, perms: roles.permissions }).from(users)
     .innerJoin(roles, eq(users.roleId, roles.id)).where(eq(users.active, true));
-  const ids = rows.filter((r) => !r.perms.includes('*') && hasPermission(r.perms, permission)).map((r) => r.id);
+  // `unless`: skip people who also hold that permission (e.g. tell the purchase team, not the directors who approve POs)
+  const ids = rows.filter((r) => !r.perms.includes('*') && hasPermission(r.perms, permission) && !(opts.unless && hasPermission(r.perms, opts.unless))).map((r) => r.id);
   // Super admins only get it if nobody else holds the permission, to avoid flooding the owner.
   const fallback = ids.length ? [] : rows.filter((r) => r.perms.includes('*')).map((r) => r.id);
   await notifyUsers([...ids, ...fallback], payload, exceptUserId);

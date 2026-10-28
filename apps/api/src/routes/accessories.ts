@@ -259,6 +259,12 @@ r.post('/accessory-sheets/:id/decide', requirePerm('accessories:approve'), async
     title: d.decision === 'APPROVE' ? `Accessories approved for ${sheet.order.number}` : `Accessories sent back for ${sheet.order.number}`,
     body: d.comment ?? sheet.number, type: 'APPROVAL', link: `/accessories/${sheet.id}`, entityType: 'ACCESSORY_SHEET', entityId: sheet.id,
   }, req.user.id);
+  if (d.decision === 'APPROVE') {
+    await notifyPermission('purchase_orders:create', {
+      title: `Accessories approved for ${sheet.order.number} — raise POs`, body: `${sheet.order.client.name} · ${sheet.lines.length} accessory lines`,
+      type: 'APPROVAL', link: `/orders/${sheet.orderId}`, entityType: 'ORDER', entityId: sheet.orderId,
+    }, req.user.id, { unless: 'purchase_orders:approve' });
+  }
   audit(req, d.decision.toLowerCase(), 'accessory_sheet', sheet.id, { comment: d.comment });
   res.json(await loadSheet(sheet.id));
 });

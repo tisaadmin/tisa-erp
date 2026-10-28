@@ -8,6 +8,9 @@ import { validateTerms } from './billing';
 import { resolvePlaceOfSupply } from './company';
 import { lineSchema, priceLines } from './lines';
 import { calcTotals } from '../lib/gst';
+import { db } from '../db';
+import { notifyPermission } from '../lib/notify';
+import { accessoriesRequiredFor, workflowRules } from './workflow';
 
 export const STAGE_KEYS = ['ADVANCE', 'DELIVERY', 'INSTALLATION', 'TESTING', 'COMMISSIONING', 'HANDOVER'] as const;
 export const termsSchema = z.array(z.object({ stage: z.enum(STAGE_KEYS), percent: z.coerce.number() }));
@@ -76,3 +79,19 @@ export async function recalcOrder(tx: DbOrTx, orderId: string) {
   await tx.update(salesOrders).set(totals).where(eq(salesOrders.id, orderId));
 }
 
+
+
+/**
+ * A new sales order: tell the purchase team (people who raise POs, not the approvers) so material gets planned.
+ * If the order needs an approved accessories list before POs, they're told that too — and told again when it is approved.
+ */
+export async function notifyOrderCreated(orderId: string, byUserId: string) {
+  const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, orderId), with: { client: { columns: { name: true } }, site: { columns: { name: true } }, items: { columns: { id: true } } } });
+  if (!o) return;
+  const needsAccessories = accessoriesRequiredFor(o) && (await workflowRules()).poRequiresAccessories;
+  await notifyPermission('purchase_orders:create', {
+    title: `New order ${o.number} — ${o.client?.name ?? ''}`,
+    body: `${o.site?.name ? `${o.site.name} · ` : ''}${o.items.length} item(s) · Rs. ${Math.round(o.total).toLocaleString('en-IN')}${needsAccessories ? ' · accessories list to be approved before POs' : ' · plan purchase / raise POs'}`,
+    type: 'APPROVAL', link: `/orders/${o.id}`, entityType: 'ORDER', entityId: o.id,
+  }, byUserId, { unless: 'purchase_orders:approve' });
+}

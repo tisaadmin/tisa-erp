@@ -1997,3 +1997,10 @@ test('payroll: holidays, leave balance (paid + unpaid), hours rule → salary sh
   await ok('director', 'PUT', '/payroll/settings', { leaveAccrual: { CASUAL: 0, SICK: 0, EARNED: 0 } });
   await ok('hr', 'DELETE', `/payroll/runs/${month}`);
 });
+
+test('a new sales order notifies the purchase team (not the PO approvers)', async () => {
+  const stores = await ok('stores', 'GET', '/notifications');
+  assert.ok(stores.data.some((n: any) => n.title.startsWith(`New order ${ctx.order.number}`)), 'purchase told about the order');
+  const dir = await ok('director', 'GET', '/notifications?pageSize=500');
+  assert.ok(!dir.data.some((n: any) => n.title.startsWith(`New order ${ctx.order.number}`)), 'directors not flooded');
+});
