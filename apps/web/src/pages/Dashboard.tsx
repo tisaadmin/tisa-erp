@@ -20,19 +20,20 @@ type Dash = {
 };
 
 const SERIES = { billed: '#2a78d6', collected: '#eb6834' }; // categorical slots 1 & 2 (validated palette)
-const PENDING_LINKS: Record<string, [string, string]> = {
-  requisitions: ['Material / work requisitions', '/requisitions'], purchaseOrders: ['Purchase orders to approve', '/purchase-orders'],
-  quotations: ['Quotations to approve', '/quotations'], expenses: ['Team expense claims', '/expenses?tab=approvals'],
-  expensesFinance: ['Expense claims for accounts', '/expenses?tab=approvals'],
+/** Same list the mobile Approve tab shows (GET /approvals/inbox). */
+type InboxItem = { kind: string; id: string; number: string | null; title: string; sub: string; amount: number | null; date: string; by: string | null; note: string | null; link: string };
+const KIND_LABEL: Record<string, string> = {
+  PURCHASE_ORDER: 'Purchase orders', QUOTATION: 'Quotations', GRN: 'Goods receipts over the PO', CHALLAN: 'Delivery challans over the order',
+  ORDER_QTY: 'Extra order quantities', ACCESSORY_SHEET: 'Accessories lists', REQUISITION: 'Requisitions', EXPENSE: 'Expense claims', LEAVE: 'Leave requests',
 };
 
 export default function Dashboard() {
   const { user } = useAuth();
   const { data: d } = useGet<Dash>('/dashboard', undefined, { refetchInterval: 120_000 });
+  const inbox = useGet<{ items: InboxItem[]; counts: Record<string, number>; total: number }>('/approvals/inbox', undefined, { refetchInterval: 60_000 });
   if (!d) return <Spinner />;
   const openTickets = d.tickets?.byStatus.reduce((s, x) => s + x.n, 0) ?? 0;
   const pipeline = d.leads?.byStatus.filter((s) => !['WON', 'LOST'].includes(s.status)).reduce((s, x) => s + x.value, 0) ?? 0;
-  const pendingEntries = Object.entries(d.pending).filter(([, n]) => n > 0);
   const trend = (d.billing?.trend ?? []).map((t) => ({ ...t, label: new Date(`${t.month}-01`).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' }) }));
 
   return (
@@ -73,15 +74,25 @@ export default function Dashboard() {
           </Card>
         )}
 
-        <Card title="Waiting on you">
-          {pendingEntries.length ? (
-            <ul className="divide-y divide-slate-100">
-              {pendingEntries.map(([k, n]) => (
-                <li key={k}><Link to={PENDING_LINKS[k]?.[1] ?? '/'} className="flex items-center justify-between py-2 text-sm hover:text-brand-700">
-                  <span>{PENDING_LINKS[k]?.[0] ?? label(k)}</span><Badge t="amber">{n}</Badge></Link></li>
+        <Card title={<span className="flex items-center gap-2">Waiting on you{inbox.data?.total ? <Badge t="amber">{inbox.data.total}</Badge> : null}</span>} pad={false}>
+          {!inbox.data ? <Spinner /> : inbox.data.items.length ? (
+            <div className="max-h-[420px] divide-y divide-slate-100 overflow-y-auto">
+              {Object.keys(inbox.data.counts).map((kind) => (
+                <div key={kind} className="px-4 py-2">
+                  <div className="mb-1 flex items-center justify-between text-xs font-semibold tracking-wide text-slate-500 uppercase"><span>{KIND_LABEL[kind] ?? label(kind)}</span><span>{inbox.data!.counts[kind]}</span></div>
+                  <ul>
+                    {inbox.data!.items.filter((x) => x.kind === kind).slice(0, 6).map((x) => (
+                      <li key={x.id}><Link to={x.link} className="block rounded px-1 py-1 text-sm hover:bg-slate-50 hover:text-brand-700">
+                        <div className="truncate font-medium">{x.title}</div>
+                        <div className="truncate text-xs text-slate-500">{[x.sub, x.amount != null ? inr(x.amount, 0) : null, x.by && `by ${x.by}`].filter(Boolean).join(' · ')}</div>
+                      </Link></li>
+                    ))}
+                    {inbox.data!.counts[kind] > 6 && <li className="px-1 text-xs text-slate-400">and {inbox.data!.counts[kind] - 6} more</li>}
+                  </ul>
+                </div>
               ))}
-            </ul>
-          ) : <div className="py-6 text-center text-sm text-slate-400">No pending approvals</div>}
+            </div>
+          ) : <div className="py-6 text-center text-sm text-slate-400">Nothing waiting for your approval</div>}
         </Card>
       </div>
 
