@@ -26,7 +26,10 @@ export const MODULES = {
   tickets: ['view', 'view_all', 'create', 'edit', 'assign'],
   service_reports: ['view', 'view_all', 'create', 'review'],
   attendance: ['view', 'view_all', 'mark', 'edit'],
-  leaves: ['view', 'apply', 'approve'],
+  /** balances: set opening balances, adjust, and enter leave for anyone */
+  leaves: ['view', 'apply', 'approve', 'balances'],
+  /** view: salary sheets and every slip; manage: salaries, generate & adjust sheets, payroll settings; finalise: release slips / mark paid */
+  payroll: ['view', 'manage', 'finalise'],
   requisitions: ['view', 'view_all', 'create', 'approve'],
   expenses: ['view', 'create', 'approve', 'finance'],
   users: ['view', 'create', 'edit'],
@@ -94,7 +97,7 @@ export const DEFAULT_ROLES: { name: string; description: string; permissions: st
   },
   {
     name: 'HR', description: 'Attendance, leaves, employees',
-    permissions: ['dashboard:view', ...all('attendance'), ...all('leaves'), 'users:view', 'users:create', 'users:edit',
+    permissions: ['dashboard:view', ...all('attendance'), ...all('leaves'), 'payroll:view', 'payroll:manage', 'users:view', 'users:create', 'users:edit',
       'expenses:view', 'expenses:create', 'expenses:approve'],
   },
   {

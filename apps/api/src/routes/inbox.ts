@@ -6,6 +6,7 @@
 import { Router } from 'express';
 import { and, asc, desc, eq, inArray, isNull, ne, or, type SQL } from 'drizzle-orm';
 import { db } from '../db';
+import { leaveBalances } from '../services/payroll';
 import {
   accessorySheets, deliveryChallans, expenseClaims, goodsReceipts, leaveRequests, orderQtyRequests, purchaseOrders, quotations, requisitions,
   salesOrderItems, salesOrders, users,
@@ -164,9 +165,12 @@ r.get('/approvals/inbox', async (req, res) => {
       : team.length ? and(eq(leaveRequests.status, 'PENDING'), inArray(leaveRequests.userId, team)) : undefined;
     if (!where) return;
     const rows = await db.query.leaveRequests.findMany({ where, orderBy: [asc(leaveRequests.createdAt)], with: { user: { columns: { name: true } } } });
+    const bal = await leaveBalances(db, [...new Set(rows.map((l) => l.userId))]);
     for (const l of rows) out.push({
       kind: 'LEAVE', id: l.id, number: null, title: `Leave — ${l.user.name}`, amount: null, date: l.createdAt, by: l.user.name,
-      sub: `${l.type.toLowerCase()} · ${l.fromDate} to ${l.toDate}`, note: l.reason ?? null, lines: [], link: '/attendance?tab=leaves',
+      sub: `${l.type.toLowerCase()}${l.halfDay ? ' (half day)' : ''} · ${l.fromDate} to ${l.toDate}${l.days != null ? ` · ${l.days} day(s)` : ''}`,
+      note: [l.reason, l.type !== 'UNPAID' ? `Balance ${bal.get(l.userId)?.[l.type as 'CASUAL'] ?? 0}${l.days != null && (bal.get(l.userId)?.[l.type as 'CASUAL'] ?? 0) < l.days ? ' — short, the rest will be without pay' : ''}` : null].filter(Boolean).join(' · ') || null,
+      lines: [], link: '/attendance?tab=leaves',
       approve: { label: 'Approve', path: `/leaves/${l.id}/approve`, body: {} },
       reject: { label: 'Reject', path: `/leaves/${l.id}/reject`, body: {}, field: 'note', required: false },
     });

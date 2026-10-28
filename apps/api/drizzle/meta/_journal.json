@@ -169,6 +169,13 @@
       "when": 1793113859565,
       "tag": "0023_tasks_messages",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1793161324537,
+      "tag": "0024_payroll",
+      "breakpoints": true
     }
   ]
 }

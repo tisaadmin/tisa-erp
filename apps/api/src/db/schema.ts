@@ -82,6 +82,8 @@ export const companySettings = pgTable('company_settings', {
   loginDomains: text().array().notNull().default(['tisa.in']),
   /** rate card for quotation costing: manpower roles (₹/man-day), transport presets, service cost % of project value */
   costingConfig: jsonb().$type<CostingConfig>().notNull().default({}),
+  /** payroll policy: hours rule, weekly offs, per-day basis, statutory deductions, leave accrual (see services/payroll.ts) */
+  payrollConfig: jsonb().$type<Record<string, unknown>>().notNull().default({}),
   updatedAt: updatedAt(),
 });
 
@@ -881,10 +883,120 @@ export const leaveRequests = pgTable('leave_requests', {
   toDate: date({ mode: 'string' }).notNull(),
   type: text().notNull(), // CASUAL, SICK, EARNED, UNPAID
   reason: text(),
-  status: text().notNull().default('PENDING'),
+  status: text().notNull().default('PENDING'), // PENDING, APPROVED, REJECTED, CANCELLED
   approverId: text(),
+  /** a single half day (fromDate = toDate) */
+  halfDay: boolean().notNull().default(false),
+  /** working days asked for (weekly offs and holidays excluded) */
+  days: numeric({ precision: 6, scale: 1, mode: 'number' }),
+  /** set on approval: each date, the portion of the day, and whether it is paid from the leave balance */
+  dayPlan: jsonb().$type<{ date: string; portion: number; paid: boolean }[]>(),
+  paidDays: numeric({ precision: 6, scale: 1, mode: 'number' }),
+  unpaidDays: numeric({ precision: 6, scale: 1, mode: 'number' }),
+  /** HR entering leave on someone's behalf */
+  appliedById: text(),
   createdAt: createdAt(),
 });
+
+/** Company holiday calendar — paid days off for everyone. */
+export const holidays = pgTable('holidays', {
+  id: id(),
+  date: date({ mode: 'string' }).notNull().unique(),
+  name: text().notNull(),
+  createdAt: createdAt(),
+});
+
+export type PayComponent = { name: string; amount: number; pf?: boolean };
+
+/** Salary & statutory details per employee (one row each). Only payroll:manage can see it. */
+export const employeePay = pgTable('employee_pay', {
+  userId: text().primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  dateOfJoining: date({ mode: 'string' }),
+  dateOfLeaving: date({ mode: 'string' }),
+  gender: text(), // M, F
+  pan: text(),
+  uan: text(),
+  pfNumber: text(),
+  esiNumber: text(),
+  bankName: text(),
+  bankAccount: text(),
+  bankIfsc: text(),
+  paymentMode: text().notNull().default('BANK'), // BANK, CASH, CHEQUE
+  /** weekly offs for this person (0 = Sunday … 6 = Saturday); null = company default */
+  weeklyOffs: integer().array(),
+  /** monthly earnings at full attendance: Basic, HRA, … (pf = counts towards the PF wage) */
+  components: jsonb().$type<PayComponent[]>().notNull().default([]),
+  pfApplicable: boolean().notNull().default(true),
+  /** PF on wages up to ₹15,000 only (statutory ceiling) */
+  pfCapped: boolean().notNull().default(true),
+  esiApplicable: boolean().notNull().default(true),
+  ptApplicable: boolean().notNull().default(true),
+  tdsMonthly: money().notNull().default(0),
+  updatedById: text(),
+  updatedAt: updatedAt(),
+});
+
+/** Every change to a leave balance: opening, adjustment, accrual, leave taken / given back. Balance = sum of days. */
+export const leaveLedger = pgTable('leave_ledger', {
+  id: id(),
+  userId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
+  type: text().notNull(), // CASUAL, SICK, EARNED
+  date: date({ mode: 'string' }).notNull(),
+  days: numeric({ precision: 6, scale: 1, mode: 'number' }).notNull(),
+  kind: text().notNull(), // OPENING, ADJUSTMENT, ACCRUAL, TAKEN, RETURNED
+  note: text(),
+  refId: text(),
+  createdById: text(),
+  createdAt: createdAt(),
+}, (t) => [index().on(t.userId, t.type), index().on(t.refId)]);
+
+/** One salary sheet per month. DRAFT → FINALISED (slips released) → PAID. */
+export const payrollRuns = pgTable('payroll_runs', {
+  id: id(),
+  month: text().notNull().unique(), // YYYY-MM
+  status: text().notNull().default('DRAFT'),
+  generatedAt: ts(),
+  generatedById: text(),
+  finalisedAt: ts(),
+  finalisedById: text(),
+  paidOn: date({ mode: 'string' }),
+  notes: text(),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+});
+
+export type PayLine = { name: string; amount: number; rate?: number; key?: string };
+export type PayDays = {
+  inMonth: number; divisor: number; weeklyOffs: number; holidays: number; present: number; halfDays: number; paidLeave: number;
+  unpaidLeave: number; absent: number; notEmployed: number; projected: number; missingCheckout: number; lop: number; payable: number;
+};
+
+/** One employee's row in a month's salary sheet — a snapshot, so later salary changes never alter a past slip. */
+export const payrollLines = pgTable('payroll_lines', {
+  id: id(),
+  runId: text().notNull().references(() => payrollRuns.id, { onDelete: 'cascade' }),
+  userId: text().notNull().references(() => users.id),
+  /** name, code, designation, department, DOJ, bank, PAN, UAN … as on the sheet */
+  employee: jsonb().$type<Record<string, string | null>>().notNull().default({}),
+  days: jsonb().$type<PayDays>().notNull(),
+  dayDetail: jsonb().$type<{ date: string; code: string; payable: number; note?: string }[]>().notNull().default([]),
+  earnings: jsonb().$type<PayLine[]>().notNull().default([]),
+  extraEarnings: jsonb().$type<PayLine[]>().notNull().default([]),
+  deductions: jsonb().$type<PayLine[]>().notNull().default([]),
+  extraDeductions: jsonb().$type<PayLine[]>().notNull().default([]),
+  employer: jsonb().$type<PayLine[]>().notNull().default([]),
+  /** HR overrides kept across regeneration */
+  lopOverride: numeric({ precision: 6, scale: 1, mode: 'number' }),
+  tdsOverride: money(),
+  rateGross: money().notNull().default(0),
+  gross: money().notNull().default(0),
+  totalDeductions: money().notNull().default(0),
+  net: money().notNull().default(0),
+  remarks: text(),
+  warnings: text().array().notNull().default([]),
+  createdAt: createdAt(),
+  updatedAt: updatedAt(),
+}, (t) => [uniqueIndex().on(t.runId, t.userId), index().on(t.userId)]);
 
 /** Any uploaded file. Geo-stamped site photos carry lat/lng/time plus a watermarked copy. */
 export const attachments = pgTable('attachments', {
@@ -1218,6 +1330,13 @@ export const expenseClaimsRel = relations(expenseClaims, ({ one, many }) => ({
 }));
 export const expenseLinesRel = relations(expenseLines, ({ one }) => ({ claim: one(expenseClaims, { fields: [expenseLines.claimId], references: [expenseClaims.id] }) }));
 export const leaveRel = relations(leaveRequests, ({ one }) => ({ user: one(users, { fields: [leaveRequests.userId], references: [users.id] }) }));
+export const employeePayRel = relations(employeePay, ({ one }) => ({ user: one(users, { fields: [employeePay.userId], references: [users.id] }) }));
+export const leaveLedgerRel = relations(leaveLedger, ({ one }) => ({ user: one(users, { fields: [leaveLedger.userId], references: [users.id] }) }));
+export const payrollRunsRel = relations(payrollRuns, ({ many }) => ({ lines: many(payrollLines) }));
+export const payrollLinesRel = relations(payrollLines, ({ one }) => ({
+  run: one(payrollRuns, { fields: [payrollLines.runId], references: [payrollRuns.id] }),
+  user: one(users, { fields: [payrollLines.userId], references: [users.id] }),
+}));
 
 export const tasksRel = relations(tasks, ({ one, many }) => ({
   createdBy: one(users, { fields: [tasks.createdById], references: [users.id] }),

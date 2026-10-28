@@ -6,7 +6,7 @@ import { db } from '../db';
 import { approverFor, manages, teamIds } from '../lib/team';
 import { myProjectOrderIds, projectMaterialStatus, projectSummaries } from '../services/projectStatus';
 import { classifyProjectLines, decideExcess, projectRequestable } from '../services/projectRequisitions';
-import { attachments, attendance, conversationMembers, auditLogs, departments, projectMembers, salesOrders, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
+import { attachments, attendance, employeePay, payrollRuns, conversationMembers, auditLogs, departments, projectMembers, salesOrders, clients, deliveryChallans, invoices, leaveRequests, purchaseOrders, quotations, requisitionItems, requisitions, sites, ticketUpdates, tickets, users } from '../db/schema';
 import { rel, searchWords, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { istDate, istTime, dayRange } from '../lib/dates';
@@ -17,6 +17,7 @@ import { nextNumber } from '../lib/numbering';
 import { notifyPermission, notifyUsers } from '../lib/notify';
 import { can, requirePerm } from '../middleware/auth';
 import { getCompany } from '../services/company';
+import { approveLeave, balanceOf, dow, holidayMap, leaveBalances, leaveDates, payrollConfig, returnLeave } from '../services/payroll';
 
 const r = Router();
 const opt = z.string().trim().nullish().transform((v) => (v === '' ? null : v));
@@ -96,9 +97,11 @@ r.post('/attendance/check-out', requirePerm('attendance:mark'), upload.single('p
   const photo = req.file ? await storeGeoPhoto(req, req.file, geo, 'ATTENDANCE', row.id) : null;
   const now = new Date();
   const minutes = Math.round((now.getTime() - row.checkInAt.getTime()) / 60000);
+  const cfg = await payrollConfig();
   const [updated] = await db.update(attendance).set({
     checkOutAt: now, checkOutLat: geo.latitude, checkOutLng: geo.longitude, checkOutPhoto: photo?.path, workMinutes: minutes,
-    status: minutes < 240 && row.status !== 'LATE' ? 'HALF_DAY' : row.status,
+    // short day by the hours rule (payroll re-reads the minutes, so this is only the register's label)
+    status: minutes < cfg.fullDayMinutes ? (minutes < cfg.halfDayMinutes ? 'ABSENT' : 'HALF_DAY') : row.status,
   }).where(eq(attendance.id, row.id)).returning();
   res.json(updated);
 });
@@ -137,13 +140,18 @@ r.get('/attendance/muster', requirePerm('attendance:view'), async (req, res) => 
   const rows = await db.select().from(attendance).where(and(gte(attendance.date, `${month}-01`), lte(attendance.date, `${month}-${String(days).padStart(2, '0')}`),
     visible ? inArray(attendance.userId, visible) : undefined));
   const map = new Map(rows.map((a) => [`${a.userId}|${a.date}`, a]));
+  const cfg = await payrollConfig();
+  const hol = await holidayMap(db, `${month}-01`, `${month}-${String(days).padStart(2, '0')}`);
+  const pays = await db.select({ userId: employeePay.userId, weeklyOffs: employeePay.weeklyOffs }).from(employeePay);
+  const offsOf = (uid: string) => pays.find((p) => p.userId === uid)?.weeklyOffs ?? cfg.weeklyOffs;
   res.json({
-    month, days,
+    month, days, holidays: Object.fromEntries(hol),
     rows: staff.map((s) => {
       const daysArr = Array.from({ length: days }, (_, i) => {
         const date = `${month}-${String(i + 1).padStart(2, '0')}`;
         const a = map.get(`${s.id}|${date}`);
-        return a ? { date, status: a.status, in: a.checkInAt ? istTime(a.checkInAt) : null, out: a.checkOutAt ? istTime(a.checkOutAt) : null, onSite: a.onSite } : { date, status: null };
+        if (a) return { date, status: a.status, in: a.checkInAt ? istTime(a.checkInAt) : null, out: a.checkOutAt ? istTime(a.checkOutAt) : null, onSite: a.onSite, minutes: a.workMinutes };
+        return { date, status: hol.has(date) ? 'HOLIDAY' : offsOf(s.id).includes(dow(date)) ? 'WEEK_OFF' : null };
       });
       const count = (st: string[]) => daysArr.filter((d) => d.status && st.includes(d.status)).length;
       return { user: s, days: daysArr, present: count(['PRESENT', 'LATE']), late: count(['LATE']), halfDay: count(['HALF_DAY']), leave: count(['LEAVE']), absent: count(['ABSENT']) };
@@ -171,19 +179,79 @@ r.get('/leaves', requirePerm('leaves:view'), async (req, res) => {
     where = can(req.user, 'leaves:approve') ? eq(leaveRequests.status, 'PENDING')
       : team.length ? and(eq(leaveRequests.status, 'PENDING'), inArray(leaveRequests.userId, team)) : eq(leaveRequests.id, '__none__');
   }
-  res.json(await db.query.leaveRequests.findMany({ where, orderBy: [desc(leaveRequests.createdAt)], with: { user: { columns: { id: true, name: true } } } }));
+  if (scope === 'all') {
+    if (!can(req.user, 'leaves:balances')) throw forbidden();
+    where = undefined;
+  }
+  const rows = await db.query.leaveRequests.findMany({ where, orderBy: [desc(leaveRequests.createdAt)], with: { user: { columns: { id: true, name: true } } }, limit: scope === 'all' ? 300 : undefined });
+  if (scope !== 'approvals') return res.json(rows);
+  // approvers see what each person has left
+  const bal = await leaveBalances(db, [...new Set(rows.map((x) => x.userId))]);
+  res.json(rows.map((x) => ({ ...x, balance: x.type === 'UNPAID' ? null : bal.get(x.userId)?.[x.type as 'CASUAL'] ?? 0 })));
 });
 
 r.post('/leaves', requirePerm('leaves:apply'), async (req, res) => {
-  const d = z.object({ fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), type: z.enum(['CASUAL', 'SICK', 'EARNED', 'UNPAID']), reason: opt }).parse(req.body);
+  const d = z.object({
+    fromDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), toDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), type: z.enum(['CASUAL', 'SICK', 'EARNED', 'UNPAID']), reason: opt,
+    halfDay: z.boolean().default(false),
+    /** HR entering leave for someone else — approved straight away */
+    userId: z.string().optional(),
+  }).parse(req.body);
   if (d.toDate < d.fromDate) throw badRequest('To date is before from date');
-  const [row] = await db.insert(leaveRequests).values({ ...d, userId: req.user.id }).returning();
-  const payload = { title: `Leave request — ${req.user.name}`, body: `${d.type} ${d.fromDate} → ${d.toDate}`, type: 'LEAVE' as const, link: '/attendance?tab=leaves', entityType: 'LEAVE', entityId: row.id };
+  if (d.halfDay && d.toDate !== d.fromDate) throw badRequest('A half day is for one date only');
+  const forOther = !!d.userId && d.userId !== req.user.id;
+  if (forOther && !can(req.user, 'leaves:balances')) throw forbidden('You cannot enter leave for someone else');
+  const userId = forOther ? d.userId! : req.user.id;
+  const overlap = await db.query.leaveRequests.findFirst({ where: and(eq(leaveRequests.userId, userId), inArray(leaveRequests.status, ['PENDING', 'APPROVED']), lte(leaveRequests.fromDate, d.toDate), gte(leaveRequests.toDate, d.fromDate)) });
+  if (overlap) throw badRequest(`Already has leave from ${overlap.fromDate} to ${overlap.toDate} (${overlap.status.toLowerCase()})`);
+  const dates = await leaveDates(db, userId, d.fromDate, d.toDate, d.halfDay);
+  if (!dates.length) throw badRequest('Those dates are all weekly offs or holidays');
+  const days = dates.reduce((s, x) => s + x.portion, 0);
+  const balance = d.type === 'UNPAID' ? null : await balanceOf(db, userId, d.type);
+  const row = await db.transaction(async (tx) => {
+    const [lr] = await tx.insert(leaveRequests).values({ fromDate: d.fromDate, toDate: d.toDate, type: d.type, reason: d.reason, halfDay: d.halfDay, days, userId, appliedById: forOther ? req.user.id : null }).returning();
+    if (!forOther) return lr;
+    const plan = await approveLeave(tx, lr, req.user.id);
+    const [upd] = await tx.update(leaveRequests).set({ status: 'APPROVED', approverId: req.user.id, dayPlan: plan.plan, paidDays: plan.paidDays, unpaidDays: plan.unpaidDays }).where(eq(leaveRequests.id, lr.id)).returning();
+    return upd;
+  });
+  if (forOther) {
+    await notifyUsers([userId], { title: 'Leave recorded', body: `${d.type.toLowerCase()} ${d.fromDate} → ${d.toDate}${row.unpaidDays ? ` · ${row.unpaidDays} day(s) without pay` : ''}`, type: 'LEAVE', link: '/attendance?tab=leaves' });
+    audit(req, 'leave_for', 'leave', row.id, d);
+    return res.status(201).json(row);
+  }
+  const short = balance != null && balance < days ? ` · balance ${balance}, ${Math.round((days - Math.max(0, balance)) * 10) / 10} day(s) would be without pay` : '';
+  const payload = { title: `Leave request — ${req.user.name}`, body: `${d.type} ${d.fromDate} → ${d.toDate} (${days} day${days === 1 ? '' : 's'})${short}`, type: 'LEAVE' as const, link: '/attendance?tab=leaves', entityType: 'LEAVE', entityId: row.id };
   const approver = await approverFor(req.user.id);
   if (approver) await notifyUsers([approver], payload);
   else await notifyPermission('leaves:approve', payload, req.user.id);
-  res.status(201).json(row);
+  res.status(201).json({ ...row, balance, withoutPay: balance != null ? Math.max(0, Math.round((days - Math.max(0, balance)) * 10) / 10) : days });
 });
+
+/** Withdraw a pending request, or (HR) cancel an approved one — the paid days go back to the balance. */
+r.post('/leaves/:id/cancel', async (req, res) => {
+  const lr = await db.query.leaveRequests.findFirst({ where: eq(leaveRequests.id, req.params.id) });
+  if (!lr) throw notFound('Leave request');
+  if (lr.status === 'PENDING') {
+    if (lr.userId !== req.user.id && !can(req.user, 'leaves:balances')) throw forbidden();
+  } else if (lr.status === 'APPROVED') {
+    if (!can(req.user, 'leaves:balances')) throw forbidden('Ask HR to cancel an approved leave');
+  } else throw badRequest(`This request is ${lr.status.toLowerCase()}`);
+  const locked = await lockedMonths([lr.fromDate.slice(0, 7), lr.toDate.slice(0, 7)]);
+  if (lr.status === 'APPROVED' && locked.length) throw badRequest(`The salary sheet for ${locked.join(', ')} is finalised — reopen it first`);
+  await db.transaction(async (tx) => {
+    if (lr.status === 'APPROVED') await returnLeave(tx, lr, req.user.id);
+    await tx.update(leaveRequests).set({ status: 'CANCELLED' }).where(eq(leaveRequests.id, lr.id));
+  });
+  if (lr.userId !== req.user.id) await notifyUsers([lr.userId], { title: 'Leave cancelled', body: `${lr.fromDate} → ${lr.toDate}`, type: 'LEAVE', link: '/attendance?tab=leaves' });
+  audit(req, 'cancel', 'leave', lr.id, {});
+  res.json({ ok: true });
+});
+
+async function lockedMonths(months: string[]) {
+  const rows = await db.select({ month: payrollRuns.month }).from(payrollRuns).where(and(inArray(payrollRuns.month, [...new Set(months)]), inArray(payrollRuns.status, ['FINALISED', 'PAID'])));
+  return rows.map((x) => x.month);
+}
 
 r.post('/leaves/:id/:decision', async (req, res) => {
   const decision = req.params.decision;
@@ -194,18 +262,22 @@ r.post('/leaves/:id/:decision', async (req, res) => {
   if (lr.userId === req.user.id) throw forbidden('You cannot approve your own leave');
   if (!(can(req.user, 'leaves:approve') || (await manages(req.user.id, lr.userId)))) throw forbidden();
   const status = decision === 'approve' ? 'APPROVED' : 'REJECTED';
+  if (status === 'APPROVED') {
+    const locked = await lockedMonths([lr.fromDate.slice(0, 7), lr.toDate.slice(0, 7)]);
+    if (locked.length) throw badRequest(`The salary sheet for ${locked.join(', ')} is already finalised — ask HR to reopen it first`);
+  }
+  let unpaid = 0;
   await db.transaction(async (tx) => {
-    await tx.update(leaveRequests).set({ status, approverId: req.user.id }).where(eq(leaveRequests.id, lr.id));
     if (status === 'APPROVED') {
-      for (let d = new Date(`${lr.fromDate}T00:00:00Z`); d <= new Date(`${lr.toDate}T00:00:00Z`); d = new Date(d.getTime() + 86400000)) {
-        const date = d.toISOString().slice(0, 10);
-        await tx.insert(attendance).values({ userId: lr.userId, date, status: 'LEAVE', source: 'MANUAL', remarks: `${lr.type} leave` })
-          .onConflictDoUpdate({ target: [attendance.userId, attendance.date], set: { status: 'LEAVE', remarks: `${lr.type} leave` } });
-      }
+      const plan = await approveLeave(tx, lr, req.user.id);
+      unpaid = plan.unpaidDays;
+      await tx.update(leaveRequests).set({ status, approverId: req.user.id, dayPlan: plan.plan, paidDays: plan.paidDays, unpaidDays: plan.unpaidDays, days: plan.days }).where(eq(leaveRequests.id, lr.id));
+    } else {
+      await tx.update(leaveRequests).set({ status, approverId: req.user.id }).where(eq(leaveRequests.id, lr.id));
     }
   });
-  await notifyUsers([lr.userId], { title: `Leave ${status.toLowerCase()}`, body: `${lr.fromDate} → ${lr.toDate}`, type: 'LEAVE', link: '/attendance?tab=leaves' });
-  res.json({ ok: true, status });
+  await notifyUsers([lr.userId], { title: `Leave ${status.toLowerCase()}`, body: `${lr.fromDate} → ${lr.toDate}${unpaid ? ` · ${unpaid} day(s) without pay (not enough balance)` : ''}`, type: 'LEAVE', link: '/attendance?tab=leaves' });
+  res.json({ ok: true, status, unpaidDays: unpaid });
 });
 
 // ═══════════════════════ Attachments & geo photos ═══════════════════════

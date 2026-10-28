@@ -293,3 +293,98 @@ export function pdfToBuffer(doc: PDFKit.PDFDocument): Promise<Buffer> {
     doc.end();
   });
 }
+
+export type PayslipPdf = {
+  monthLabel: string;
+  employee: Record<string, string | null>;
+  days: { inMonth: number; payable: number; lop: number; paidLeave: number; present: number; halfDays: number; weeklyOffs: number; holidays: number };
+  earnings: { name: string; rate?: number; amount: number }[];
+  deductions: { name: string; amount: number }[];
+  gross: number; totalDeductions: number; net: number;
+  leave?: { label: string; balance: string }[];
+  note?: string | null;
+};
+
+/** Monthly salary slip (A4, one page). */
+export function renderPayslip(company: Company, p: PayslipPdf): PDFKit.PDFDocument {
+  const doc = new PDFDocument({ size: 'A4', margin: 40, bufferPages: true, info: { Title: `Salary slip ${p.monthLabel} — ${p.employee.name ?? ''}`, Author: company.name } });
+  header(doc, company, 'SALARY SLIP');
+  doc.font('Helvetica-Bold').fontSize(11).fillColor(ACCENT).text(`Pay slip for ${p.monthLabel}`, 40, doc.y + 2);
+  doc.moveDown(0.5);
+
+  const e = p.employee;
+  const mask = (a?: string | null) => (a ? `XXXX${a.slice(-4)}` : null);
+  const info: [string, string | null | undefined][] = [
+    ['Employee', e.name], ['Employee code', e.code], ['Designation', e.designation], ['Department', e.department],
+    ['Date of joining', e.dateOfJoining ? fmtDate(e.dateOfJoining) : null], ['PAN', e.pan], ['UAN', e.uan], ['ESI no.', e.esiNumber],
+    ['Bank', [e.bankName, mask(e.bankAccount)].filter(Boolean).join(' ') || (e.paymentMode && e.paymentMode !== 'BANK' ? e.paymentMode : null)],
+    ['Days in month', String(p.days.inMonth)], ['Paid days', String(p.days.payable)], ['Loss of pay days', String(p.days.lop)],
+  ];
+  const top = doc.y;
+  const shown = info.filter(([, v]) => v);
+  doc.fontSize(8.5);
+  shown.forEach(([k, v], i) => {
+    const col = i % 2, row = Math.floor(i / 2);
+    const x = 40 + col * 260, y = top + row * 14;
+    doc.font('Helvetica').fillColor(GREY).text(`${k}:`, x, y, { width: 95 });
+    doc.font('Helvetica-Bold').fillColor('#000').text(String(v), x + 95, y, { width: 160 });
+  });
+  doc.y = top + Math.ceil(shown.length / 2) * 14 + 10;
+
+  // Earnings | Deductions
+  const t = doc.y;
+  const colW = 255;
+  const head = (x: number, a: string, b: string, c?: string) => {
+    doc.rect(x, t, colW, 16).fill('#eef3f7');
+    doc.fillColor(ACCENT).font('Helvetica-Bold').fontSize(8.5).text(a, x + 6, t + 4, { width: 120 });
+    if (c) doc.text(c, x + 120, t + 4, { width: 65, align: 'right' });
+    doc.text(b, x + 185, t + 4, { width: 64, align: 'right' });
+  };
+  head(40, 'EARNINGS', 'Earned', 'Full month');
+  head(40 + colW + 5, 'DEDUCTIONS', 'Amount');
+  const rows = Math.max(p.earnings.length, p.deductions.length, 1);
+  doc.font('Helvetica').fontSize(8.5).fillColor('#000');
+  for (let i = 0; i < rows; i++) {
+    const y = t + 20 + i * 15;
+    const er = p.earnings[i];
+    if (er) {
+      doc.text(er.name, 46, y, { width: 115 });
+      if (er.rate != null) doc.fillColor(GREY).text(inr(er.rate), 160, y, { width: 65, align: 'right' }).fillColor('#000');
+      doc.text(inr(er.amount), 225, y, { width: 64, align: 'right' });
+    }
+    const de = p.deductions[i];
+    if (de) {
+      doc.text(de.name, 306, y, { width: 170 });
+      doc.text(inr(de.amount), 485, y, { width: 64, align: 'right' });
+    }
+  }
+  const ty = t + 24 + rows * 15;
+  doc.moveTo(40, ty - 3).lineTo(555, ty - 3).strokeColor(LINE).lineWidth(0.6).stroke();
+  doc.font('Helvetica-Bold').fontSize(9);
+  doc.text('Gross earnings', 46, ty, { width: 150 }).text(inr(p.gross), 225, ty, { width: 64, align: 'right' });
+  doc.text('Total deductions', 306, ty, { width: 150 }).text(inr(p.totalDeductions), 485, ty, { width: 64, align: 'right' });
+  doc.rect(40, ty - 22 - rows * 15 - 4, 515, rows * 15 + 42).strokeColor(LINE).lineWidth(0.6).stroke();
+  doc.moveTo(40 + colW + 2, t).lineTo(40 + colW + 2, ty + 14).strokeColor(LINE).stroke();
+
+  // Net pay
+  const ny = ty + 26;
+  doc.rect(40, ny, 515, 34).fill('#0f3d5e');
+  doc.fillColor('#fff').font('Helvetica-Bold').fontSize(12).text('NET PAY', 52, ny + 10, { width: 200 });
+  doc.fontSize(14).text(`Rs. ${inr(p.net)}`, 300, ny + 9, { width: 243, align: 'right' });
+  doc.fillColor('#000').font('Helvetica').fontSize(8.5).text(`In words: ${amountInWords(p.net)}`, 40, ny + 42, { width: 515 });
+
+  // Attendance summary & leave balance
+  doc.moveDown(1);
+  const d = p.days;
+  doc.font('Helvetica-Bold').fontSize(9).fillColor(ACCENT).text('Attendance', 40, doc.y);
+  doc.font('Helvetica').fontSize(8.5).fillColor('#222')
+    .text(`Present ${d.present}  ·  Half days ${d.halfDays}  ·  Paid leave ${d.paidLeave}  ·  Weekly offs ${d.weeklyOffs}  ·  Holidays ${d.holidays}  ·  Loss of pay ${d.lop}`, { width: 515 });
+  if (p.leave?.length) {
+    doc.moveDown(0.5);
+    doc.font('Helvetica-Bold').fontSize(9).fillColor(ACCENT).text('Leave balance', 40, doc.y);
+    doc.font('Helvetica').fontSize(8.5).fillColor('#222').text(p.leave.map((l) => `${l.label}: ${l.balance}`).join('   ·   '), { width: 515 });
+  }
+  if (p.note) doc.moveDown(1.2).font('Helvetica').fontSize(7.5).fillColor(GREY).text(p.note, 40, doc.y, { width: 515 });
+  pageNumbers(doc);
+  return doc;
+}

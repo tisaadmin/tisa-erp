@@ -313,7 +313,7 @@ test('attendance: geo check-in / check-out, muster', async () => {
   const r2 = await call('tech', 'POST', '/attendance/check-out', undefined, fd2);
   assert.ok(r2.status === 200 || /Already checked out/.test(r2.data.error));
   const muster = await ok('svc', 'GET', '/attendance/muster');
-  assert.ok(muster.rows.some((r: any) => r.user.name === 'Imran Shaikh' && r.present + r.halfDay + r.late >= 1));
+  assert.ok(muster.rows.some((r: any) => r.user.name === 'Imran Shaikh' && r.present + r.halfDay + r.late + r.absent >= 1));
   assert.equal((await call('tech', 'GET', '/attendance/muster')).data.rows.length, 1, 'technician sees only self');
 });
 
@@ -1875,4 +1875,125 @@ test('messages: one-to-one (same chat every time), groups, record threads; unrea
   const acc = people.find((p: any) => p.role === 'Accounts');
   if (acc && !limited.some((p: any) => p.id === acc.id)) assert.equal((await call('tech', 'POST', '/chats/direct', { userId: acc.id })).status, 403);
   await ok('admin', 'PUT', '/settings/team', { messaging: 'ALL' });
+});
+
+test('payroll: holidays, leave balance (paid + unpaid), hours rule → salary sheet with PF / PT; slips released on finalise; accrual', async () => {
+  const { db } = await import('../src/db');
+  const { attendance: att } = await import('../src/db/schema');
+  const { and: andOp, eq: eqOp, gte: gteOp, lte: lteOp } = await import('drizzle-orm');
+  const tech = await ok('tech', 'GET', '/auth/me');
+  const techId = tech.id ?? tech.user?.id;
+  // previous month — complete, so nothing is "projected"
+  const now = new Date(Date.now() + 5.5 * 3600000);
+  const pm = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const month = pm.toISOString().slice(0, 7);
+  const days = new Date(Date.UTC(pm.getUTCFullYear(), pm.getUTCMonth() + 1, 0)).getUTCDate();
+  const iso = (d: number) => `${month}-${String(d).padStart(2, '0')}`;
+  const dowOf = (d: number) => new Date(`${iso(d)}T00:00:00Z`).getUTCDay();
+  const working = Array.from({ length: days }, (_, i) => i + 1).filter((d) => dowOf(d) !== 0);
+  const holiday = working.find((d) => d >= 10)!;
+  const work = working.filter((d) => d !== holiday);
+  const [l1, l2, half, short, noOut, none] = [work[0], work[1], work[3], work[4], work[5], work[6]];
+
+  // holiday calendar (HR), visible to everyone
+  assert.equal((await call('tech', 'POST', '/holidays', { date: iso(holiday), name: 'Test Festival' })).status, 403);
+  await ok('hr', 'POST', '/holidays', { date: iso(holiday), name: 'Test Festival' });
+  assert.ok((await ok('tech', 'GET', `/holidays?year=${month.slice(0, 4)}`)).holidays.some((h: any) => h.date === iso(holiday)));
+
+  // salary (only payroll:manage)
+  assert.equal((await call('tech', 'GET', '/payroll/employees')).status, 403);
+  await ok('hr', 'PUT', `/payroll/employees/${techId}`, {
+    dateOfJoining: '2020-01-01', gender: 'M', pan: 'abcde1234f', uan: '100200300400', bankName: 'HDFC', bankAccount: '50100123456789', bankIfsc: 'hdfc0001234',
+    paymentMode: 'BANK', components: [{ name: 'Basic', amount: 15000, pf: true }, { name: 'HRA', amount: 6000 }, { name: 'Special allowance', amount: 4000 }],
+    pfApplicable: true, pfCapped: true, esiApplicable: true, ptApplicable: true, tdsMonthly: 0,
+  });
+
+  // opening leave balance: 1 casual leave
+  await ok('hr', 'POST', '/leave-balances/set', { entries: [{ userId: techId, type: 'CASUAL', balance: 1 }] });
+  assert.equal((await ok('tech', 'GET', '/leave-balances/me')).balances.CASUAL, 1);
+
+  // clean slate for the month, then attendance: full days 9h30, a 5h day (half), a 3h day (absent), a day with no check-out, a day with nothing
+  await db.delete(att).where(andOp(eqOp(att.userId, techId), gteOp(att.date, iso(1)), lteOp(att.date, iso(days))));
+  const at = (d: number, h: number, m = 0) => new Date(`${iso(d)}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00+05:30`);
+  for (const d of work) {
+    if ([l1, l2, none].includes(d)) continue;
+    const mins = d === half ? 300 : d === short ? 180 : 570;
+    await db.insert(att).values({ userId: techId, date: iso(d), checkInAt: at(d, 9, 30), checkOutAt: d === noOut ? null : new Date(at(d, 9, 30).getTime() + mins * 60000), workMinutes: d === noOut ? null : mins, status: 'PRESENT', source: 'MOBILE' });
+  }
+
+  // two days of casual leave with a balance of one → one paid, one without pay
+  const lr = await ok('tech', 'POST', '/leaves', { fromDate: iso(l1), toDate: iso(l2), type: 'CASUAL', reason: 'Family function' });
+  assert.equal(lr.days, 2);
+  assert.equal(lr.withoutPay, 1);
+  const inbox = await ok('svc', 'GET', '/approvals/inbox');
+  assert.match(inbox.items.find((i: any) => i.id === lr.id).note, /Balance 1 — short/);
+  const dec = await ok('svc', 'POST', `/leaves/${lr.id}/approve`, {});
+  assert.equal(dec.unpaidDays, 1);
+  assert.equal((await ok('tech', 'GET', '/leave-balances/me')).balances.CASUAL, 0);
+
+  // sheet
+  assert.equal((await call('tech', 'GET', `/payroll/runs/${month}`)).status, 403);
+  await ok('hr', 'POST', `/payroll/runs/${month}/generate`);
+  const sheet = await ok('hr', 'GET', `/payroll/runs/${month}`);
+  const line = sheet.lines.find((x: any) => x.userId === techId);
+  assert.ok(line, 'tech on the sheet');
+  assert.equal(line.days.holidays, 1);
+  assert.equal(line.days.paidLeave, 1);
+  assert.equal(line.days.unpaidLeave, 1);
+  assert.equal(line.days.missingCheckout, 1);
+  assert.equal(line.days.lop, 4, 'unpaid leave 1 + half day ½ + short day 1 + no check-out ½ + nothing 1');
+  const earned = (amt: number) => Math.round((amt - (amt / days) * 4) * 100) / 100;
+  assert.equal(line.earnings.find((e: any) => e.name === 'Basic').amount, earned(15000));
+  const pf = Math.round(earned(15000) * 0.12);
+  assert.equal(line.deductions.find((d: any) => d.key === 'PF').amount, pf);
+  assert.ok(!line.deductions.some((d: any) => d.key === 'ESI'), 'gross above ₹21,000 → no ESI');
+  const pt = pm.getUTCMonth() === 1 ? 300 : 200;
+  assert.equal(line.deductions.find((d: any) => d.key === 'PT').amount, pt);
+  const gross = earned(15000) + earned(6000) + earned(4000);
+  assert.ok(Math.abs(line.gross - gross) < 0.02);
+  assert.equal(line.net, Math.round(gross - pf - pt));
+  assert.ok(line.dayDetail.find((d: any) => d.date === iso(holiday)).code === 'H');
+
+  // HR adjustment: salary advance recovered
+  const adj = await ok('hr', 'PATCH', `/payroll/lines/${line.id}`, { extraDeductions: [{ name: 'Salary advance', amount: 1000 }], remarks: 'Advance of Sept' });
+  assert.equal(adj.net, line.net - 1000);
+  await ok('hr', 'POST', `/payroll/runs/${month}/generate`);
+  assert.equal((await ok('hr', 'GET', `/payroll/runs/${month}`)).lines.find((x: any) => x.userId === techId).net, line.net - 1000, 'adjustment kept on regenerate');
+
+  // not visible to the employee until finalised; HR cannot finalise
+  assert.equal((await ok('tech', 'GET', '/payslips')).filter((p: any) => p.month === month).length, 0);
+  assert.equal((await call('tech', 'GET', `/payslips/${line.id}/pdf`)).status, 404);
+  assert.equal((await call('hr', 'POST', `/payroll/runs/${month}/finalise`)).status, 403);
+  await ok('director', 'PUT', '/payroll/settings', { leaveAccrual: { CASUAL: 1.5, SICK: 0, EARNED: 0 } });
+  await ok('director', 'POST', `/payroll/runs/${month}/finalise`);
+  assert.equal((await ok('tech', 'GET', '/leave-balances/me')).balances.CASUAL, 1.5, 'monthly credit');
+  assert.equal((await call('hr', 'POST', `/payroll/runs/${month}/generate`)).status, 400, 'finalised sheet is locked');
+
+  const slips = await ok('tech', 'GET', '/payslips');
+  const slip = slips.find((p: any) => p.month === month);
+  assert.equal(slip.net, line.net - 1000);
+  const pdf = await call('tech', 'GET', `/payslips/${slip.id}/pdf`);
+  assert.equal(pdf.status, 200);
+  assert.match(pdf.ct, /pdf/);
+  assert.equal((await call('sales', 'GET', `/payslips/${slip.id}/pdf`)).status, 403, 'not someone else\'s slip');
+  const xl = await call('hr', 'GET', `/payroll/runs/${month}/export`);
+  assert.equal(xl.status, 200);
+  assert.match(xl.ct, /spreadsheet/);
+
+  // a leave in a finalised month cannot be approved
+  const late = await ok('tech', 'POST', '/leaves', { fromDate: iso(work[8]), toDate: iso(work[8]), type: 'SICK', halfDay: true });
+  assert.equal(late.days, 0.5);
+  assert.equal((await call('svc', 'POST', `/leaves/${late.id}/approve`, {})).status, 400);
+  await ok('tech', 'POST', `/leaves/${late.id}/cancel`, {});
+
+  // reopen → back to draft, credit reversed, slip hidden again
+  await ok('director', 'POST', `/payroll/runs/${month}/reopen`);
+  assert.equal((await ok('tech', 'GET', '/leave-balances/me')).balances.CASUAL, 0);
+  assert.equal((await ok('tech', 'GET', '/payslips')).filter((p: any) => p.month === month).length, 0);
+
+  // HR cancels the approved leave → the paid day goes back
+  await ok('hr', 'POST', `/leaves/${lr.id}/cancel`, {});
+  assert.equal((await ok('tech', 'GET', '/leave-balances/me')).balances.CASUAL, 1);
+  await ok('director', 'PUT', '/payroll/settings', { leaveAccrual: { CASUAL: 0, SICK: 0, EARNED: 0 } });
+  await ok('hr', 'DELETE', `/payroll/runs/${month}`);
 });

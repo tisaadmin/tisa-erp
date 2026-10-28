@@ -11,7 +11,7 @@ const expo = new Expo({ accessToken: env.EXPO_ACCESS_TOKEN });
 export type NotifyPayload = {
   title: string;
   body?: string;
-  type: 'REQUISITION' | 'EXPENSE' | 'TICKET' | 'SERVICE_REPORT' | 'APPROVAL' | 'ATTENDANCE' | 'SYSTEM' | 'LEAVE' | 'TASK' | 'MESSAGE';
+  type: 'REQUISITION' | 'EXPENSE' | 'TICKET' | 'SERVICE_REPORT' | 'APPROVAL' | 'ATTENDANCE' | 'SYSTEM' | 'LEAVE' | 'TASK' | 'MESSAGE' | 'PAYROLL';
   link?: string;
   entityType?: string;
   entityId?: string;
