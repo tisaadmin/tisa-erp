@@ -28,6 +28,9 @@ export const KIND_LABEL: Record<string, string> = {
 /** web link → app screen (push notifications, inbox items) */
 export function appRouteFor(link?: string | null): string | null {
   if (!link) return null;
+  if (link.startsWith('/payslips')) return '/payslips';
+  if (link.startsWith('/attendance?tab=leaves')) return '/leave';
+  if (link.startsWith('/holidays')) return '/holidays';
   const m = link.match(/^\/(tickets|requisitions|expenses|purchase-orders|quotations|orders|invoices|grns|challans|vendor-bills|leads|clients|tasks|messages)\/([\w-]+)/);
   if (!m) return null;
   const doc: Record<string, string> = { 'purchase-orders': 'po', quotations: 'quote', orders: 'order', invoices: 'invoice', grns: 'grn', challans: 'challan', 'vendor-bills': 'vendorbill' };

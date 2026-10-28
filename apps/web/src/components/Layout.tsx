@@ -1,6 +1,6 @@
 import {
   Bell, Boxes, ListChecks, Upload, Building2, Camera, ClipboardCheck, ClipboardList, FileSignature, FileText, Gauge, HandCoins, LifeBuoy, LogOut, MapPin, Menu,
-  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText, HardHat, Calculator, Hash, ListTodo, MessagesSquare } from 'lucide-react';
+  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText, HardHat, Calculator, Hash, ListTodo, MessagesSquare, CalendarDays, IndianRupee } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -45,7 +45,10 @@ const NAV: { group: string; items: NavItem[] }[] = [
     { to: '/site-photos', label: 'Geo Site Photos', icon: <Camera />, perm: 'sites:view' },
   ] },
   { group: 'Field & HR', items: [
-    { to: '/attendance', label: 'Attendance', icon: <UserCheck />, perm: 'attendance:view' },
+    { to: '/attendance', label: 'Attendance & Leave', icon: <UserCheck />, perm: 'attendance:view' },
+    { to: '/holidays', label: 'Holidays', icon: <CalendarDays />, perm: '' },
+    { to: '/payroll', label: 'Payroll', icon: <IndianRupee />, perm: 'payroll:view' },
+    { to: '/payslips', label: 'My Salary Slips', icon: <FileText />, perm: '' },
     { to: '/requisitions', label: 'Requisitions', icon: <Wrench />, perm: 'requisitions:view' },
     { to: '/expenses', label: 'Expenses', icon: <Wallet />, perm: 'expenses:view' },
   ] },

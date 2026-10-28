@@ -7,7 +7,7 @@ import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, Select
 import { api, fileUrl, pathUrl } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { fmtDate, fmtDateTime, fmtTime, inr, label, qty, today } from '../lib/format';
-import { useAction, useGet, useItems, useSites, type Page, useListQuery, useSessionState } from '../lib/hooks';
+import { useAction, useGet, useItems, useSites, useUsers, type Page, useListQuery, useSessionState } from '../lib/hooks';
 import { PhotoGrid } from './Service';
 import { PartyPicker } from './Sales';
 import { DateFilter } from '../components/DateFilter';
@@ -50,9 +50,11 @@ export function AttendancePage() {
   const [month, setMonth] = useState(today().slice(0, 7));
   const log = useGet<any[]>(tab === 'today' || tab === 'log' ? '/attendance' : null, tab === 'today' ? { from: today(), to: today() } : range, { refetchInterval: tab === 'today' ? 60_000 : undefined });
   const muster = useGet<any>(tab === 'muster' ? '/attendance/muster' : null, { month });
+  const [fix, setFix] = useState<any>(null);
+  const saveFix = useAction(() => api('/attendance/manual', { method: 'PUT', body: { userId: fix.user.id, date: fix.date, status: fix.status, remarks: fix.remarks || null } }), { success: 'Attendance corrected', invalidate: [['/attendance']], onSuccess: () => setFix(null) });
   return (
     <div className="space-y-4">
-      <PageHeader title="Attendance" />
+      <PageHeader title="Attendance & Leave" />
       {can('attendance:mark') && <MyDay />}
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'today', label: 'Today' }, { value: 'log', label: 'Log' }, { value: 'muster', label: 'Monthly muster' }, { value: 'leaves', label: 'Leaves' }]} />
       {(tab === 'today' || tab === 'log') && (
@@ -73,19 +75,25 @@ export function AttendancePage() {
       )}
       {tab === 'muster' && (
         <Card pad={false}>
-          <div className="border-b border-slate-100 p-3"><Input type="month" className="w-44" value={month} onChange={(e) => setMonth(e.target.value)} /></div>
+          <div className="flex flex-wrap items-center gap-3 border-b border-slate-100 p-3">
+            <Input type="month" className="w-44" value={month} onChange={(e) => setMonth(e.target.value)} />
+            <span className="text-xs text-slate-500">P present · L late · ½ half / short day · A absent · Lv leave · H holiday · W weekly off{can('attendance:edit') ? ' — click a day to correct it' : ''}</span>
+          </div>
           {!muster.data ? <Spinner /> : (
             <div className="overflow-x-auto">
               <table className="tbl text-xs">
-                <thead><tr><th>Employee</th>{Array.from({ length: muster.data.days }, (_, i) => <th key={i} className="px-1 text-center">{i + 1}</th>)}<th>P</th><th>L</th><th>½</th><th>Lv</th></tr></thead>
+                <thead><tr><th>Employee</th>{Array.from({ length: muster.data.days }, (_, i) => <th key={i} className="px-1 text-center">{i + 1}</th>)}<th>P</th><th>L</th><th>½</th><th>Lv</th><th>A</th></tr></thead>
                 <tbody>
                   {muster.data.rows.map((r: any) => (
                     <tr key={r.user.id}>
                       <td className="whitespace-nowrap">{r.user.name}</td>
-                      {r.days.map((d: any) => <td key={d.date} title={d.in ? `${d.in}–${d.out ?? ''}` : ''} className={cx('px-1 text-center font-semibold',
-                        d.status === 'PRESENT' && 'text-emerald-700', d.status === 'LATE' && 'text-amber-600', d.status === 'HALF_DAY' && 'text-amber-700', d.status === 'LEAVE' && 'text-violet-600', d.status === 'ABSENT' && 'text-red-600')}>
+                      {r.days.map((d: any) => <td key={d.date} onClick={() => can('attendance:edit') && setFix({ user: r.user, ...d, status: d.status ?? 'ABSENT', remarks: '' })}
+                        title={[fmtDate(d.date), d.in ? `${d.in}–${d.out ?? 'no check-out'}` : '', d.minutes ? `${Math.floor(d.minutes / 60)}h ${d.minutes % 60}m` : '', muster.data.holidays?.[d.date] ?? ''].filter(Boolean).join(' · ')}
+                        className={cx('px-1 text-center font-semibold', can('attendance:edit') && 'cursor-pointer hover:bg-brand-50',
+                        d.status === 'PRESENT' && 'text-emerald-700', d.status === 'LATE' && 'text-amber-600', d.status === 'HALF_DAY' && 'text-amber-700', d.status === 'LEAVE' && 'text-violet-600', d.status === 'ABSENT' && 'text-red-600',
+                        d.status === 'HOLIDAY' && 'bg-orange-50 text-orange-600', d.status === 'WEEK_OFF' && 'bg-slate-50 text-slate-400', d.in && !d.out && d.date < today() && 'underline decoration-red-400')}>
                         {({ PRESENT: 'P', LATE: 'L', HALF_DAY: '½', LEAVE: 'Lv', ABSENT: 'A', HOLIDAY: 'H', WEEK_OFF: 'W' } as Record<string, string>)[d.status] ?? '·'}</td>)}
-                      <td className="font-semibold">{r.present}</td><td>{r.late}</td><td>{r.halfDay}</td><td>{r.leave}</td>
+                      <td className="font-semibold">{r.present}</td><td>{r.late}</td><td>{r.halfDay}</td><td>{r.leave}</td><td>{r.absent}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -94,34 +102,128 @@ export function AttendancePage() {
           )}
         </Card>
       )}
+      <Modal open={!!fix} onClose={() => setFix(null)} title={fix ? `${fix.user.name} — ${fmtDate(fix.date)}` : ''} footer={<><Button onClick={() => setFix(null)}>Cancel</Button><Button variant="primary" loading={saveFix.isPending} onClick={() => saveFix.mutate(undefined)}>Save</Button></>}>
+        {fix && <div className="space-y-3">
+          <p className="text-sm text-slate-600">{fix.in ? <>Checked in {fix.in}{fix.out ? `, out ${fix.out}` : ' — no check-out'}{fix.minutes ? ` (${Math.floor(fix.minutes / 60)}h ${fix.minutes % 60}m)` : ''}</> : 'No check-in recorded.'}</p>
+          <Field label="Count this day as"><Select value={fix.status} onChange={(e) => setFix({ ...fix, status: e.target.value })} options={[{ value: 'PRESENT', label: 'Present — full day' }, { value: 'HALF_DAY', label: 'Half day' }, { value: 'ABSENT', label: 'Absent' }, { value: 'WEEK_OFF', label: 'Weekly off (paid)' }, { value: 'HOLIDAY', label: 'Holiday (paid)' }]} /></Field>
+          <Field label="Reason" hint="Shown on the salary sheet"><Input value={fix.remarks} onChange={(e) => setFix({ ...fix, remarks: e.target.value })} placeholder="e.g. Forgot to check out — confirmed by manager" /></Field>
+          <p className="text-xs text-slate-500">Your choice overrides the hours rule for payroll. For leave, use Leaves → Enter leave for someone (it uses the leave balance).</p>
+        </div>}
+      </Modal>
       {tab === 'leaves' && <Leaves />}
     </div>
   );
 }
 
+const LEAVE_TYPES = [{ value: 'CASUAL', label: 'Casual leave' }, { value: 'SICK', label: 'Sick leave' }, { value: 'EARNED', label: 'Earned leave' }, { value: 'UNPAID', label: 'Leave without pay' }];
+const leaveName = (t: string) => LEAVE_TYPES.find((x) => x.value === t)?.label ?? label(t);
+const leaveDays = (l: any) => (l.days != null ? `${l.days} day${l.days === 1 ? '' : 's'}` : '');
+
 function Leaves() {
   const { can } = useAuth();
   const mine = useGet<any[]>('/leaves', { scope: 'mine' });
   const approvals = useGet<any[]>('/leaves', { scope: 'approvals' });
+  const myBal = useGet<{ balances: Record<string, number> }>('/leave-balances/me');
   const [apply, setApply] = useState<any>(null);
-  const doApply = useAction(() => api('/leaves', { body: apply }), { success: 'Leave applied', invalidate: [['/leaves']], onSuccess: () => setApply(null) });
-  const decide = useAction(({ id, d }: { id: string; d: string }) => api(`/leaves/${id}/${d}`, { body: {} }), { success: 'Done', invalidate: [['/leaves'], ['/attendance']] });
+  const hr = can('leaves:balances');
+  const inv = [['/leaves'], ['/leave-balances'], ['/attendance'], ['/approvals']];
+  const doApply = useAction(() => api('/leaves', { body: { ...apply, halfDay: apply.fromDate === apply.toDate && apply.halfDay, userId: apply.userId || undefined } }), {
+    invalidate: inv, onSuccess: (r: any) => { setApply(null); toast.success(r.status === 'APPROVED' ? `Leave recorded${r.unpaidDays ? ` — ${r.unpaidDays} day(s) without pay` : ''}` : r.withoutPay ? `Leave applied — ${r.withoutPay} day(s) will be without pay (not enough balance)` : 'Leave applied'); },
+  });
+  const decide = useAction(({ id, d }: { id: string; d: string }) => api(`/leaves/${id}/${d}`, { body: {} }), { invalidate: inv, onSuccess: (r: any) => toast.success(r.unpaidDays ? `Approved — ${r.unpaidDays} day(s) without pay` : 'Done') });
+  const cancel = useAction((id: string) => api(`/leaves/${id}/cancel`, { body: {} }), { success: 'Leave cancelled', invalidate: inv });
+  const b = myBal.data?.balances;
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <Card title="My leave requests" actions={can('leaves:apply') && <Button size="sm" onClick={() => setApply({ fromDate: today(), toDate: today(), type: 'CASUAL', reason: '' })}>Apply</Button>} pad={false}>
-        <Table rows={mine.data} empty="No leave requests" cols={[{ key: 'type', label: 'Type', render: (l: any) => label(l.type) }, { key: 'dates', label: 'Dates', render: (l: any) => `${fmtDate(l.fromDate)} → ${fmtDate(l.toDate)}` }, { key: 'reason', label: 'Reason', render: (l: any) => l.reason ?? '' }, { key: 'status', label: 'Status', render: (l: any) => <Status s={l.status} /> }]} />
-      </Card>
-      <Card title="Awaiting my approval" pad={false}>
-        <Table rows={approvals.data} empty="Nothing to approve" cols={[{ key: 'user', label: 'Employee', render: (l: any) => l.user.name }, { key: 'dates', label: 'Dates', render: (l: any) => `${label(l.type)} · ${fmtDate(l.fromDate)} → ${fmtDate(l.toDate)}` }, { key: 'reason', label: 'Reason', render: (l: any) => l.reason ?? '' },
-          { key: 'act', label: '', render: (l: any) => <div className="flex gap-1"><Button size="sm" variant="success" onClick={() => decide.mutate({ id: l.id, d: 'approve' })}>Approve</Button><Button size="sm" onClick={() => decide.mutate({ id: l.id, d: 'reject' })}>Reject</Button></div> }]} />
-      </Card>
-      <Modal open={!!apply} onClose={() => setApply(null)} title="Apply for leave" footer={<><Button onClick={() => setApply(null)}>Cancel</Button><Button variant="primary" loading={doApply.isPending} onClick={() => doApply.mutate(undefined)}>Submit</Button></>}>
+    <div className="space-y-4">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card title="My leave" actions={can('leaves:apply') && <Button size="sm" onClick={() => setApply({ fromDate: today(), toDate: today(), type: 'CASUAL', reason: '', halfDay: false })}>Apply</Button>} pad={false}>
+          {b && <div className="flex flex-wrap gap-2 border-b border-slate-100 px-3 py-2 text-sm">
+            {['CASUAL', 'SICK', 'EARNED'].map((t) => <span key={t} className="rounded bg-slate-50 px-2 py-1">{leaveName(t)}: <b>{b[t] ?? 0}</b></span>)}
+          </div>}
+          <Table rows={mine.data} empty="No leave requests" cols={[
+            { key: 'type', label: 'Type', render: (l: any) => <>{leaveName(l.type)}{l.halfDay && <span className="text-xs text-slate-500"> (half day)</span>}</> },
+            { key: 'dates', label: 'Dates', render: (l: any) => <>{fmtDate(l.fromDate)}{l.toDate !== l.fromDate && ` → ${fmtDate(l.toDate)}`}<div className="text-xs text-slate-400">{leaveDays(l)}{l.unpaidDays ? ` · ${l.unpaidDays} without pay` : ''}</div></> },
+            { key: 'reason', label: 'Reason', render: (l: any) => l.reason ?? '' },
+            { key: 'status', label: 'Status', render: (l: any) => <Status s={l.status} /> },
+            { key: 'x', label: '', render: (l: any) => l.status === 'PENDING' ? <Button size="sm" variant="ghost" onClick={() => cancel.mutate(l.id)}>Withdraw</Button> : null },
+          ]} />
+        </Card>
+        <Card title="Awaiting my approval" pad={false}>
+          <Table rows={approvals.data} empty="Nothing to approve" cols={[
+            { key: 'user', label: 'Employee', render: (l: any) => l.user.name },
+            { key: 'dates', label: 'Leave', render: (l: any) => <>{leaveName(l.type)}{l.halfDay ? ' (half day)' : ''} · {fmtDate(l.fromDate)}{l.toDate !== l.fromDate && ` → ${fmtDate(l.toDate)}`}<div className="text-xs text-slate-400">{leaveDays(l)}{l.reason ? ` · ${l.reason}` : ''}</div></> },
+            { key: 'bal', label: 'Balance', render: (l: any) => l.balance == null ? '—' : <span className={cx(l.days != null && l.balance < l.days && 'font-semibold text-red-600')} title={l.days != null && l.balance < l.days ? 'Not enough balance — the rest will be without pay' : ''}>{l.balance}</span> },
+            { key: 'act', label: '', render: (l: any) => <div className="flex gap-1"><Button size="sm" variant="success" onClick={() => decide.mutate({ id: l.id, d: 'approve' })}>Approve</Button><Button size="sm" onClick={() => decide.mutate({ id: l.id, d: 'reject' })}>Reject</Button></div> }]} />
+        </Card>
+      </div>
+      {hr && <LeaveAdmin onEnter={() => setApply({ fromDate: today(), toDate: today(), type: 'CASUAL', reason: '', halfDay: false, userId: '' })} onCancel={(id) => confirm('Cancel this approved leave? Paid days go back to the balance.') && cancel.mutate(id)} />}
+      <Modal open={!!apply} onClose={() => setApply(null)} title={apply?.userId !== undefined ? 'Enter leave for someone' : 'Apply for leave'} footer={<><Button onClick={() => setApply(null)}>Cancel</Button><Button variant="primary" disabled={apply?.userId === ''} loading={doApply.isPending} onClick={() => doApply.mutate(undefined)}>{apply?.userId !== undefined ? 'Save (approved)' : 'Submit'}</Button></>}>
         {apply && <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="From"><Input type="date" value={apply.fromDate} onChange={(e) => setApply({ ...apply, fromDate: e.target.value })} /></Field>
-          <Field label="To"><Input type="date" value={apply.toDate} onChange={(e) => setApply({ ...apply, toDate: e.target.value })} /></Field>
-          <Field label="Type"><Select value={apply.type} onChange={(e) => setApply({ ...apply, type: e.target.value })} options={['CASUAL', 'SICK', 'EARNED', 'UNPAID']} /></Field>
+          {apply.userId !== undefined && <Field label="Employee" className="sm:col-span-2"><EmployeePick value={apply.userId} onChange={(userId) => setApply({ ...apply, userId })} /></Field>}
+          <Field label="From"><Input type="date" value={apply.fromDate} onChange={(e) => setApply({ ...apply, fromDate: e.target.value, toDate: e.target.value > apply.toDate ? e.target.value : apply.toDate })} /></Field>
+          <Field label="To"><Input type="date" value={apply.toDate} min={apply.fromDate} onChange={(e) => setApply({ ...apply, toDate: e.target.value })} /></Field>
+          <Field label="Type"><Select value={apply.type} onChange={(e) => setApply({ ...apply, type: e.target.value })} options={LEAVE_TYPES} /></Field>
+          <label className="flex items-center gap-2 pt-6 text-sm"><input type="checkbox" disabled={apply.fromDate !== apply.toDate} checked={apply.fromDate === apply.toDate && apply.halfDay} onChange={(e) => setApply({ ...apply, halfDay: e.target.checked })} /> Half day</label>
+          {apply.userId === undefined && b && apply.type !== 'UNPAID' && <p className="text-xs text-slate-500 sm:col-span-2">Your {leaveName(apply.type).toLowerCase()} balance: <b>{b[apply.type] ?? 0}</b> day(s). Weekly offs and holidays are not counted; days beyond your balance are without pay.</p>}
           <Field label="Reason" className="sm:col-span-2"><Textarea value={apply.reason} onChange={(e) => setApply({ ...apply, reason: e.target.value })} /></Field>
         </div>}
+      </Modal>
+    </div>
+  );
+}
+
+function EmployeePick({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  const users = useUsers();
+  return <Select value={value} onChange={(e) => onChange(e.target.value)} placeholder="Choose…" options={(users.data ?? []).map((u) => ({ value: u.id, label: u.name }))} />;
+}
+
+/** HR: everyone's balances (set opening / correct), all leave with cancel. */
+function LeaveAdmin({ onEnter, onCancel }: { onEnter: () => void; onCancel: (id: string) => void }) {
+  const bal = useGet<{ id: string; name: string; employeeCode: string | null; department: string | null; balances: Record<string, number> }[]>('/leave-balances');
+  const all = useGet<any[]>('/leaves', { scope: 'all' });
+  const [edit, setEdit] = useState<Record<string, Record<string, string>> | null>(null);
+  const [ledger, setLedger] = useState<{ id: string; name: string } | null>(null);
+  const led = useGet<any[]>(ledger ? `/leave-balances/${ledger.id}/ledger` : null);
+  const save = useAction(() => api('/leave-balances/set', { body: { entries: Object.entries(edit ?? {}).flatMap(([userId, v]) => Object.entries(v).filter(([, x]) => x !== '').map(([type, x]) => ({ userId, type, balance: Number(x) }))) } }),
+    { success: 'Balances saved', invalidate: [['/leave-balances']], onSuccess: () => setEdit(null) });
+  const T = ['CASUAL', 'SICK', 'EARNED'];
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <Card title="Leave balances" pad={false} actions={<div className="flex gap-2">
+        <Button size="sm" onClick={onEnter}>Enter leave for someone</Button>
+        {edit ? <><Button size="sm" onClick={() => setEdit(null)}>Cancel</Button><Button size="sm" variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Save balances</Button></>
+          : <Button size="sm" variant="primary" onClick={() => setEdit({})}>Set balances</Button>}
+      </div>}>
+        {edit && <p className="border-b border-slate-100 bg-amber-50 px-3 py-2 text-xs text-amber-800">Type the balance each person has today. The first entry becomes their opening balance; later changes are recorded as corrections.</p>}
+        {!bal.data ? <Spinner /> : (
+          <div className="overflow-x-auto"><table className="tbl text-sm">
+            <thead><tr><th>Employee</th>{T.map((t) => <th key={t} className="text-right">{leaveName(t).replace(' leave', '')}</th>)}</tr></thead>
+            <tbody>{bal.data.map((r) => (
+              <tr key={r.id}>
+                <td><button className="text-left font-medium text-brand-700 hover:underline" onClick={() => setLedger({ id: r.id, name: r.name })}>{r.name}</button><div className="text-xs text-slate-400">{[r.employeeCode, r.department].filter(Boolean).join(' · ')}</div></td>
+                {T.map((t) => <td key={t} className="num">{edit
+                  ? <Input type="number" step="0.5" className="ml-auto w-20 text-right" placeholder={String(r.balances[t] ?? 0)} value={edit[r.id]?.[t] ?? ''} onChange={(e) => setEdit({ ...edit, [r.id]: { ...(edit[r.id] ?? {}), [t]: e.target.value } })} />
+                  : <span className={cx((r.balances[t] ?? 0) < 0 && 'text-red-600')}>{r.balances[t] ?? 0}</span>}</td>)}
+              </tr>
+            ))}</tbody>
+          </table></div>
+        )}
+      </Card>
+      <Card title="All leave" pad={false}>
+        <Table rows={all.data} empty="No leave yet" cols={[
+          { key: 'u', label: 'Employee', render: (l: any) => l.user?.name },
+          { key: 'd', label: 'Leave', render: (l: any) => <>{leaveName(l.type)}{l.halfDay ? ' (½)' : ''} · {fmtDate(l.fromDate)}{l.toDate !== l.fromDate && ` → ${fmtDate(l.toDate)}`}<div className="text-xs text-slate-400">{leaveDays(l)}{l.unpaidDays ? ` · ${l.unpaidDays} without pay` : ''}</div></> },
+          { key: 's', label: 'Status', render: (l: any) => <Status s={l.status} /> },
+          { key: 'x', label: '', render: (l: any) => (l.status === 'APPROVED' || l.status === 'PENDING') ? <Button size="sm" variant="ghost" onClick={() => onCancel(l.id)}>Cancel</Button> : null },
+        ]} />
+      </Card>
+      <Modal open={!!ledger} onClose={() => setLedger(null)} title={`Leave history — ${ledger?.name ?? ''}`}>
+        <Table rows={led.data} empty="No entries yet" cols={[
+          { key: 'd', label: 'Date', render: (x: any) => fmtDate(x.date) },
+          { key: 't', label: 'Type', render: (x: any) => leaveName(x.type) },
+          { key: 'k', label: 'Entry', render: (x: any) => <>{label(x.kind)}<div className="text-xs text-slate-400">{x.note}</div></> },
+          { key: 'n', label: 'Days', num: true, render: (x: any) => <span className={cx(x.days < 0 ? 'text-red-600' : 'text-emerald-700')}>{x.days > 0 ? '+' : ''}{x.days}</span> },
+        ]} />
       </Modal>
     </div>
   );

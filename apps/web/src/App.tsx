@@ -16,6 +16,7 @@ import { CleanupPage } from './pages/Cleanup';
 import { TestDataPage } from './pages/TestData';
 import { TaskDetail, TasksPage } from './pages/Tasks';
 import { MessagesPage } from './pages/Messages';
+import { HolidaysPage, PayrollPage, PayslipsPage } from './pages/Payroll';
 import { AccessorySheetDetail, AccessorySheetsPage, AccessoryTemplatesPage } from './pages/Accessories';
 import { GrnDetail, GrnsPage, PoDetail, PoEditor, PurchaseOrdersPage } from './pages/Purchase';
 import { VendorBillDetail, VendorBillEditor, VendorBillsPage } from './pages/VendorBills';
@@ -80,6 +81,9 @@ export default function App() {
         <Route path="amc" element={<AmcPage />} />
         <Route path="site-photos" element={<SitePhotosPage />} />
         <Route path="attendance" element={<AttendancePage />} />
+        <Route path="holidays" element={<HolidaysPage />} />
+        <Route path="payroll" element={<PayrollPage />} />
+        <Route path="payslips" element={<PayslipsPage />} />
         <Route path="requisitions" element={<RequisitionsPage />} />
         <Route path="requisitions/:id" element={<RequisitionDetail />} />
         <Route path="expenses" element={<ExpensesPage />} />
