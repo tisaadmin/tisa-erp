@@ -6,8 +6,9 @@ import { useAuth } from '../../src/lib/auth';
 import { fmtDateTime, label } from '../../src/lib/format';
 
 export default function Tickets() {
-  const { can } = useAuth();
-  const [scope, setScope] = useState<'MINE' | 'OPEN' | 'DONE'>('MINE');
+  const { can, user } = useAuth();
+  // office / management see all open tickets first; technicians their own
+  const [scope, setScope] = useState<'MINE' | 'OPEN' | 'DONE'>(can('tickets:view_all') && !user?.isFieldStaff ? 'OPEN' : 'MINE');
   const q = scope === 'MINE' ? 'mine=1&status=OPEN_ALL' : scope === 'OPEN' ? 'status=OPEN_ALL' : 'status=RESOLVED,CLOSED';
   const list = useFetch<{ data: any[] }>(`/tickets?${q}&pageSize=100`);
   return (

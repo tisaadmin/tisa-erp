@@ -63,6 +63,9 @@ function Gate() {
       <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
       <Stack.Screen name="task/new" options={{ title: 'New task' }} />
       <Stack.Screen name="leave" options={{ title: 'Leave' }} />
+      <Stack.Screen name="ticket-list" options={{ title: 'Tickets' }} />
+      <Stack.Screen name="expense-list" options={{ title: 'My expenses' }} />
+      <Stack.Screen name="request-list" options={{ title: 'Requisitions' }} />
       <Stack.Screen name="holidays" options={{ title: 'Holidays' }} />
       <Stack.Screen name="payslips" options={{ title: 'Salary slips' }} />
     </Stack>

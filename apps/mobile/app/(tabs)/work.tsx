@@ -104,8 +104,8 @@ export default function Work() {
       {desk && x?.tickets && <>
         <Section title="Service desk" />
         <Grid>
-          <Tile icon="person-add" label="Unassigned tickets" value={String(x.tickets.unassigned)} tone={x.tickets.unassigned ? 'amber' : undefined} onPress={() => router.push('/(tabs)/tickets')} />
-          <Tile icon="alarm" label="Past SLA" value={String(x.tickets.slaBreached)} tone={x.tickets.slaBreached ? 'red' : undefined} onPress={() => router.push('/(tabs)/tickets')} />
+          <Tile icon="person-add" label="Unassigned tickets" value={String(x.tickets.unassigned)} tone={x.tickets.unassigned ? 'amber' : undefined} onPress={() => router.push('/ticket-list')} />
+          <Tile icon="alarm" label="Past SLA" value={String(x.tickets.slaBreached)} tone={x.tickets.slaBreached ? 'red' : undefined} onPress={() => router.push('/ticket-list')} />
         </Grid>
       </>}
 

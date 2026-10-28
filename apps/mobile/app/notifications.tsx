@@ -3,15 +3,16 @@ import { FlatList } from 'react-native';
 import { Btn, Empty, Row, Screen, useFetch } from '../src/components/ui';
 import { api } from '../src/lib/api';
 import { fmtDateTime } from '../src/lib/format';
+import { appRouteFor } from '../src/lib/manage';
 
 export default function Notifications() {
   const list = useFetch<{ data: any[] }>('/notifications');
   const open = async (n: any) => {
     await api(`/notifications/${n.id}/read`, { body: {} }).catch(() => {});
-    const m = n.link?.match(/^\/tickets\/([\w-]+)/);
-    if (m) router.push(`/ticket/${m[1]}`);
-    else if (n.link?.startsWith('/requisitions')) router.push('/(tabs)/requests');
-    else if (n.link?.startsWith('/expenses')) router.push(/^Expense claim|ready for accounts/.test(n.title) ? '/approvals' : '/(tabs)/expenses');
+    const to = n.link?.startsWith('/expenses') ? (/^Expense claim|ready for accounts/.test(n.title) ? '/approvals' : '/expense-list') : appRouteFor(n.link);
+    if (to) router.push(to as never);
+    else if (n.link?.startsWith('/requisitions')) router.push('/request-list');
+    else if (n.link?.startsWith('/tickets')) router.push('/ticket-list');
     else list.reload();
   };
   return (

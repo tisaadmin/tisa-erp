@@ -101,7 +101,7 @@ export default function Overview() {
           {x.orders && <Kpi label="Orders this month" value={short(x.orders.thisMonth.value)} sub={`${x.orders.thisMonth.n} orders · ${x.orders.open} open`} onPress={() => router.push('/list/order')} />}
           {x.quotations && <Kpi label="Quotations this month" value={short(x.quotations.thisMonth.value)} sub={`${x.quotations.thisMonth.n} quotes · ${x.quotations.pendingApproval} to approve`} onPress={() => router.push('/list/quote')} />}
           {x.leads && <Kpi label="Lead pipeline" value={short(pipeline)} sub={`${x.leads.followUpsDue} follow-ups due`} tone="amber" />}
-          {x.tickets && <Kpi label="Open tickets" value={String(openTickets)} sub={`${x.tickets.slaBreached} past SLA · ${x.tickets.unassigned} unassigned`} tone={x.tickets.slaBreached ? 'red' : undefined} onPress={() => router.push('/(tabs)/tickets')} />}
+          {x.tickets && <Kpi label="Open tickets" value={String(openTickets)} sub={`${x.tickets.slaBreached} past SLA · ${x.tickets.unassigned} unassigned`} tone={x.tickets.slaBreached ? 'red' : undefined} onPress={() => router.push('/ticket-list')} />}
           {x.attendance && <Kpi label="Present today" value={`${x.attendance.present}/${x.attendance.staff}`} sub={`${x.attendance.onSite} on site · ${x.attendance.late} late · ${x.attendance.onLeave} leave`} />}
           {x.amc && <Kpi label="Active AMCs" value={String(x.amc.active)} sub={`${x.amc.expiring.length} expiring in 45 days`} tone={x.amc.expiring.length ? 'amber' : undefined} />}
         </View>
