@@ -2004,3 +2004,42 @@ test('a new sales order notifies the purchase team (not the PO approvers)', asyn
   const dir = await ok('director', 'GET', '/notifications?pageSize=500');
   assert.ok(!dir.data.some((n: any) => n.title.startsWith(`New order ${ctx.order.number}`)), 'directors not flooded');
 });
+
+test('merge keeping this order\'s value: old orders\' POs / challans move here, lines stay with them; no-rate lines become the approved accessories list; preview saves nothing', async () => {
+  const mk = (lines: any[]) => ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines });
+  const t = await mk([{ itemId: ctx.cam.id, qty: 10 }]);
+  const s1 = await mk([{ itemId: ctx.cam.id, qty: 4 }, { itemId: ctx.nvr.id, qty: 6, rate: 0 }]);
+  const s2 = await mk([{ itemId: ctx.svcItem.id, qty: 2 }]);
+  const s1Full = await ok('sales', 'GET', `/orders/${s1.id}`);
+  const camLine = s1Full.items.find((l: any) => l.itemId === ctx.cam.id);
+  const nvrLine = s1Full.items.find((l: any) => l.itemId === ctx.nvr.id);
+  const dc = await ok('stores', 'POST', '/challans', { orderId: s1.id, clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ orderItemId: camLine.id, qty: 2 }, { orderItemId: nvrLine.id, qty: 1 }] });
+
+  // preview: worked out, nothing saved
+  const pv = await ok('sales', 'POST', `/orders/${t.id}/absorb`, { sourceIds: [s1.id, s2.id], preview: true });
+  assert.equal(pv.preview, true);
+  assert.equal(pv.valueAfter, t.total, 'value unchanged');
+  assert.equal(pv.moved.challans, 1);
+  assert.deepEqual(pv.sourceLines.filter((l: any) => l.suggested).map((l: any) => l.id), [nvrLine.id], 'only the no-rate line not on the BOQ is suggested');
+  assert.equal(pv.accessories.linesAdded, 1); assert.equal(pv.accessories.challanLinesCountedAsSent, 1);
+  assert.notEqual((await ok('sales', 'GET', `/orders/${s1.id}`)).status, 'MERGED', 'preview rolled back');
+  assert.equal((await ok('stores', 'GET', `/challans/${dc.id}`)).orderId, s1.id);
+
+  const out = await ok('sales', 'POST', `/orders/${t.id}/absorb`, { sourceIds: [s1.id, s2.id] });
+  assert.equal(out.valueAfter, t.total);
+  const T = await ok('sales', 'GET', `/orders/${t.id}`);
+  assert.equal(T.total, t.total); assert.equal(T.items.length, 1, 'lines of this order only');
+  assert.equal(T.items[0].deliveredQty, 0, 'old deliveries are not added to this order\'s lines');
+  assert.equal(T.mergedFrom.length, 2);
+  const S1 = await ok('sales', 'GET', `/orders/${s1.id}`);
+  assert.equal(S1.status, 'MERGED'); assert.equal(S1.total, 0); assert.equal(S1.items.length, 2, 'old lines kept as history'); assert.equal(S1.mergedInto.number, t.number);
+  assert.equal((await ok('stores', 'GET', `/challans/${dc.id}`)).orderId, t.id, 'challan now under this order');
+  const st = await ok('admin', 'GET', `/projects/${t.id}`);
+  assert.equal(st.accessorySheet.status, 'APPROVED');
+  const acc = st.accessories.find((a: any) => a.itemId === ctx.nvr.id);
+  assert.equal(acc.required, 6); assert.equal(acc.sent, 1); assert.equal(acc.pending, 5);
+  // the rest of the consumable goes out under the project without approval
+  const dc2 = await ok('stores', 'POST', '/challans', { orderId: t.id, clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ itemId: ctx.nvr.id, description: ctx.nvr.name, unit: 'Nos', qty: 2 }] });
+  assert.notEqual(dc2.status, 'PENDING_APPROVAL');
+  assert.equal((await call('sales', 'POST', `/orders/${t.id}/absorb`, { sourceIds: [s1.id] })).status, 400, 'already merged');
+});

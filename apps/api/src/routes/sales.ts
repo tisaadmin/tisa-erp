@@ -20,7 +20,7 @@ import { getCompany, resolvePlaceOfSupply } from '../services/company';
 import { challanPdf, orderPdf, quotationPdf } from '../services/documents';
 import { lineSchema, priceLines } from '../services/lines';
 import { postStock } from '../services/stock';
-import { mergeOrders } from '../services/orderMerge';
+import { absorbOrders, autoAccessoryLines, mergeOrders, PreviewRollback } from '../services/orderMerge';
 import { costingConfig, costingSummary, isServiceLine, purchaseHistory, serviceItemIds, summaryText } from '../services/quoteCosting';
 import { materialKey, projectMaterialStatus } from '../services/projectStatus';
 import { createSalesOrder, notifyOrderCreated, orderSchema } from '../services/orders';
@@ -385,6 +385,37 @@ r.post('/orders/:id/merge', requirePerm('orders:edit'), async (req, res) => {
   const { sourceIds } = z.object({ sourceIds: z.array(z.string()).min(1) }).parse(req.body);
   const out = await db.transaction((tx) => mergeOrders(tx, req.params.id, sourceIds, !!req.body?.allowOtherSites));
   audit(req, 'merge', 'order', req.params.id, out);
+  res.json(out);
+});
+
+/**
+ * Bring other orders of the project under this one, keeping this order's lines and value (see absorbOrders).
+ * preview: true works everything out on the real data and rolls it back — nothing is saved.
+ */
+r.post('/orders/:id/absorb', requirePerm('orders:edit'), async (req, res) => {
+  const d = z.object({ sourceIds: z.array(z.string()).min(1), accessoryLineIds: z.array(z.string()).optional(), allowOtherSites: z.boolean().optional(), preview: z.boolean().optional() }).parse(req.body);
+  const run = async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+    const srcLines = await tx.query.salesOrderItems.findMany({ where: inArray(salesOrderItems.orderId, d.sourceIds), orderBy: [salesOrderItems.sortOrder] });
+    const targetLines = await tx.query.salesOrderItems.findMany({ where: eq(salesOrderItems.orderId, req.params.id), columns: { itemId: true } });
+    const auto = new Set(autoAccessoryLines(targetLines, srcLines));
+    const out = await absorbOrders(tx, req.params.id, d.sourceIds, { accessoryLineIds: d.accessoryLineIds, allowOtherSites: d.allowOtherSites, userId: req.user.id });
+    const chosen = new Set(d.accessoryLineIds ?? [...auto]);
+    const orderNo = new Map((await tx.query.salesOrders.findMany({ where: inArray(salesOrders.id, d.sourceIds), columns: { id: true, number: true } })).map((o) => [o.id, o.number]));
+    return {
+      ...out,
+      sourceLines: srcLines.map((l) => ({ id: l.id, order: orderNo.get(l.orderId), description: l.description, unit: l.unit, qty: l.qty, deliveredQty: l.deliveredQty, rate: l.rate, amount: l.amount, suggested: auto.has(l.id), accessory: chosen.has(l.id) })),
+    };
+  };
+  if (d.preview) {
+    try {
+      await db.transaction(async (tx) => { throw new PreviewRollback(await run(tx)); });
+    } catch (e) {
+      if (e instanceof PreviewRollback) return res.json({ preview: true, ...(e.result as object) });
+      throw e;
+    }
+  }
+  const out = await db.transaction((tx) => run(tx));
+  audit(req, 'absorb', 'order', req.params.id, { merged: out.merged, moved: out.moved, accessories: out.accessories });
   res.json(out);
 });
 

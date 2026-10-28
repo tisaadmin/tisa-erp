@@ -331,7 +331,7 @@ export function OrderDetail() {
           <DeleteOrderButton orderId={o.id} onDeleted={() => nav('/orders')} />
           {can('orders:edit') && o.status !== 'CLOSED' && <Select className="w-36" value="" onChange={(e) => e.target.value && setStatus.mutate(e.target.value)} options={['IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']} placeholder="Set status…" />}
         </>} />
-      {o.mergedInto && <div className="rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-800">This order was merged into <Link className="font-medium underline" to={`/orders/${o.mergedInto.id}`}>{o.mergedInto.number}</Link> — its lines, deliveries and documents are there now.</div>}
+      {o.mergedInto && <div className="rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-800">This order was merged into <Link className="font-medium underline" to={`/orders/${o.mergedInto.id}`}>{o.mergedInto.number}</Link> — its deliveries and documents are there now{o.items?.length ? '; the lines below are kept here as history' : ''}.</div>}
       {!!o.mergedFrom?.length && <div className="rounded-md bg-sky-50 px-4 py-2 text-sm text-sky-800">Includes merged orders: {o.mergedFrom.map((m: any, n: number) => <span key={m.id}>{n ? ', ' : ''}<Link className="underline" to={`/orders/${m.id}`}>{m.number}</Link></span>)}</div>}
       {can('orders:edit') && !['CLOSED', 'CANCELLED', 'MERGED'].includes(o.status) && <ProjectSwitch on={!!o.isProject} disabled={setProject.isPending} onChange={(v) => setProject.mutate(v)} />}
       {o.sourceData?.summaryOnly && (
@@ -467,43 +467,106 @@ export function ChallansPage() {
 }
 
 /** Merge other orders of the same project (client + site) into this one. */
+type AbsorbPreview = {
+  target: string; merged: { number: string; value: number; lines: number }[]; valueBefore: number; valueAfter: number; linesKept: number;
+  moved: { purchaseOrders: number; challans: number; vendorBills: number; tickets: number; requisitions: number; grns: number };
+  accessories: { sheet: string | null; created: boolean; linesAdded: number; challanLinesCountedAsSent: number };
+  sourceLines: { id: string; order: string; description: string; unit: string; qty: number; deliveredQty: number; rate: number; amount: number; suggested: boolean; accessory: boolean }[];
+};
 function MergeOrdersButton({ orderId, number }: { orderId: string; number: string }) {
   const [open, setOpen] = useState(false);
   const [sel, setSel] = useState<string[]>([]);
+  const [mode, setMode] = useState<'keep' | 'move'>('keep');
+  const [pv, setPv] = useState<AbsorbPreview | null>(null);
+  const [acc, setAcc] = useState<string[] | null>(null);
+  const [allLines, setAllLines] = useState(false);
   type Cand = { id: string; number: string; date: string; status: string; total: number; clientPoNo: string | null; title: string | null; site: { name: string } | null; sameTerms: boolean; placeOk: boolean; sameSite: boolean; otherClient: { id: string; name: string } | null };
   const cands = useGet<Cand[]>(open ? `/orders/${orderId}/merge-candidates` : null);
   const picked = (cands.data ?? []).filter((c) => sel.includes(c.id));
   const otherSites = picked.filter((c) => !c.sameSite);
-  const merge = useAction(() => api(`/orders/${orderId}/merge`, { body: { sourceIds: sel, allowOtherSites: otherSites.length > 0 } }), { success: 'Orders merged', invalidate: [['/orders'], ['/projects']], onSuccess: () => { setOpen(false); setSel([]); } });
+  const close = () => { setOpen(false); setSel([]); setPv(null); setAcc(null); };
+  const merge = useAction(() => api(`/orders/${orderId}/merge`, { body: { sourceIds: sel, allowOtherSites: otherSites.length > 0 } }), { success: 'Orders merged', invalidate: [['/orders'], ['/projects']], onSuccess: close });
+  const body = (preview: boolean) => ({ sourceIds: sel, allowOtherSites: otherSites.length > 0, preview, ...(acc ? { accessoryLineIds: acc } : {}) });
+  const preview = useAction(() => api<AbsorbPreview>(`/orders/${orderId}/absorb`, { body: body(true) }), { invalidate: [['__none__']], onSuccess: (r) => { setPv(r); if (!acc) setAcc(r.sourceLines.filter((l) => l.accessory).map((l) => l.id)); } });
+  const absorb = useAction(() => api(`/orders/${orderId}/absorb`, { body: body(false) }), { success: `Orders brought under ${number}`, invalidate: [['/orders'], ['/projects'], ['/challans'], ['/purchase-orders']], onSuccess: close });
+  const toggle = (id: string) => { setSel(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]); setPv(null); setAcc(null); };
   const ask = () => confirm(`Merge ${sel.length} order(s) into ${number}? They will be marked "Merged".${otherSites.length ? `\n\n${otherSites.map((c) => c.number).join(', ')} ${otherSites.length > 1 ? 'are' : 'is'} at another site — ${otherSites.length > 1 ? 'they' : 'it'} will become part of this project.` : ''}`);
   const same = (cands.data ?? []).filter((c) => !c.otherClient).sort((x, y) => Number(y.sameSite) - Number(x.sameSite)), dup = (cands.data ?? []).filter((c) => c.otherClient);
   const row = (c: Cand) => {
     const blocked = !c.placeOk || !!c.otherClient;
     return (
       <label key={c.id} className={cx('flex items-center gap-3 rounded-md border px-3 py-2 text-sm', blocked ? 'opacity-60' : sel.includes(c.id) ? 'border-brand-300 bg-brand-50' : 'border-slate-200')}>
-        <input type="checkbox" disabled={blocked} checked={sel.includes(c.id)} onChange={() => setSel(sel.includes(c.id) ? sel.filter((x) => x !== c.id) : [...sel, c.id])} />
-        <span className="flex-1"><b className="font-medium">{c.number}</b> · {fmtDate(c.date)}{c.clientPoNo ? ` · client PO ${c.clientPoNo}` : ''}{c.site ? ` · ${c.site.name}` : c.title ? ` · ${c.title}` : ''}
+        <input type="checkbox" disabled={blocked} checked={sel.includes(c.id)} onChange={() => toggle(c.id)} />
+        <span className="flex-1"><b className="font-medium">{c.number}</b> · {fmtDate(c.date)}{c.clientPoNo ? ` · client PO ${c.clientPoNo}` : ''}{c.title ? ` · ${c.title}` : c.site ? ` · ${c.site.name}` : ''}
           {c.otherClient && <span className="ml-2 text-xs text-red-600">filed under another client record “{c.otherClient.name}”</span>}
           {!c.otherClient && !c.sameSite && <span className="ml-2 text-xs text-amber-700">different site — will join this project</span>}
-          {!c.sameTerms && <span className="ml-2 text-xs text-amber-700">different payment schedule (kept per line)</span>}
+          {mode === 'move' && !c.sameTerms && <span className="ml-2 text-xs text-amber-700">different payment schedule (kept per line)</span>}
           {!c.placeOk && <span className="ml-2 text-xs text-red-600">different place of supply — cannot merge</span>}</span>
         <Status s={c.status} /><span className="w-28 text-right tabular-nums">{inr(c.total)}</span>
       </label>
     );
   };
+  const selectable = same.filter((c) => c.placeOk);
+  const linesShown = (pv?.sourceLines ?? []).filter((l) => allLines || !Number(l.rate) || acc?.includes(l.id));
   return (
     <>
       <Button onClick={() => setOpen(true)}>Merge orders</Button>
-      <Modal open={open} onClose={() => setOpen(false)} title={`Merge into ${number}`} wide
-        footer={<><Button onClick={() => setOpen(false)}>Cancel</Button><Button variant="primary" disabled={!sel.length} loading={merge.isPending} onClick={() => ask() && merge.mutate(undefined)}>Merge {sel.length || ''}</Button></>}>
-        <p className="mb-3 text-sm text-slate-500">Other open orders of this client. Their lines move to {number} with what has been delivered, installed and billed, and their POs, delivery challans, invoices, accessories lists, tickets, requisitions and project team move too. A line keeps its own payment schedule if it differs.</p>
+      <Modal open={open} onClose={close} title={`Merge into ${number}`} wide
+        footer={<><Button onClick={close}>Cancel</Button>
+          {mode === 'move'
+            ? <Button variant="primary" disabled={!sel.length} loading={merge.isPending} onClick={() => ask() && merge.mutate(undefined)}>Merge {sel.length || ''}</Button>
+            : <>
+              <Button disabled={!sel.length} loading={preview.isPending} onClick={() => preview.mutate(undefined)}>{pv ? 'Refresh preview' : 'Preview'}</Button>
+              <Button variant="primary" disabled={!pv || !sel.length} loading={absorb.isPending} onClick={() => confirm(`Bring ${sel.length} order(s) under ${number}? ${number} keeps its lines and value (${inr(pv!.valueBefore)}); the others are marked "Merged".`) && absorb.mutate(undefined)}>Merge {sel.length || ''}</Button>
+            </>}
+        </>}>
+        <div className="mb-3 grid gap-2 sm:grid-cols-2">
+          {([['keep', `Keep ${number}'s lines and value`, 'Their POs, GRNs, vendor bills, delivery challans, tickets, requisitions and team move here; their lines stay with them as history. Use when this order already has the full, current scope (e.g. made from the latest RA bill).'],
+            ['move', 'Move their lines here', `Their lines move to ${number} with what has been delivered, installed and billed (the value adds up), along with every document raised against them.`]] as const).map(([v, h, d]) => (
+            <label key={v} className={cx('cursor-pointer rounded-md border p-3 text-sm', mode === v ? 'border-brand-400 bg-brand-50' : 'border-slate-200')}>
+              <span className="flex items-center gap-2 font-medium"><input type="radio" checked={mode === v} onChange={() => { setMode(v); setPv(null); }} />{h}</span>
+              <span className="mt-1 block text-xs text-slate-500">{d}</span>
+            </label>
+          ))}
+        </div>
         {!cands.data ? <Spinner /> : !cands.data.length ? <p className="text-sm text-slate-500">No other open orders for this client. Orders that are closed, cancelled or already merged are not listed.</p> : (
           <div className="space-y-1">
+            {selectable.length > 1 && <button className="text-xs text-brand-700 hover:underline" onClick={() => { setSel(sel.length === selectable.length ? [] : selectable.map((c) => c.id)); setPv(null); setAcc(null); }}>{sel.length === selectable.length ? 'Clear all' : `Select all ${selectable.length}`}</button>}
             {same.map(row)}
             {dup.length > 0 && <>
               <p className="pt-3 text-xs text-slate-500">These are for a client with the same name but a separate (duplicate) client record. Merge the two clients in <Link className="text-brand-700 underline" to="/settings/cleanup">Duplicates &amp; Clean-up</Link> first, then merge the orders here.</p>
               {dup.map(row)}
             </>}
+          </div>
+        )}
+        {mode === 'keep' && pv && (
+          <div className="mt-4 space-y-3 rounded-md border border-sky-200 bg-sky-50/50 p-3 text-sm">
+            <div className="font-semibold text-sky-900">Preview — worked out on the live data, nothing saved yet</div>
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+              <div className="rounded bg-white px-3 py-2"><div className="text-xs text-slate-500">{number} value</div><div className="font-semibold">{inr(pv.valueBefore)} → {inr(pv.valueAfter)}</div><div className="text-xs text-emerald-700">{pv.valueBefore === pv.valueAfter ? 'unchanged' : 'CHANGES'}</div></div>
+              <div className="rounded bg-white px-3 py-2"><div className="text-xs text-slate-500">Lines on {number}</div><div className="font-semibold">{pv.linesKept} (unchanged)</div></div>
+              <div className="rounded bg-white px-3 py-2"><div className="text-xs text-slate-500">Moving here</div><div className="text-xs">{pv.moved.purchaseOrders} POs · {pv.moved.grns} GRNs · {pv.moved.vendorBills} vendor bills · {pv.moved.challans} challans · {pv.moved.tickets} tickets · {pv.moved.requisitions} requisitions</div></div>
+              <div className="rounded bg-white px-3 py-2"><div className="text-xs text-slate-500">Accessories & consumables list</div><div className="text-xs">{pv.accessories.created ? 'New list' : pv.accessories.sheet}, approved · {pv.accessories.linesAdded} lines · {pv.accessories.challanLinesCountedAsSent} challan lines counted as sent</div></div>
+            </div>
+            <div className="text-xs text-slate-600">Marked “Merged into {number}” (value 0, lines kept as history): {pv.merged.map((m) => `${m.number} (${inr(m.value, 0)}, ${m.lines} lines)`).join(', ')}</div>
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="font-medium">Lines that become {number}’s accessories &amp; consumables — {acc?.length ?? 0} ticked</span>
+                <label className="flex items-center gap-1 text-xs text-slate-500"><input type="checkbox" checked={allLines} onChange={(e) => setAllLines(e.target.checked)} /> show priced lines too</label>
+              </div>
+              <div className="max-h-72 overflow-y-auto rounded border border-slate-200 bg-white">
+                <table className="tbl text-xs">
+                  <thead><tr><th /><th>Order</th><th>Item</th><th className="text-right">Order qty</th><th className="text-right">Sent</th><th className="text-right">Rate</th></tr></thead>
+                  <tbody>{linesShown.map((l) => (
+                    <tr key={l.id} className={cx(!acc?.includes(l.id) && 'text-slate-400')}>
+                      <td><input type="checkbox" checked={!!acc?.includes(l.id)} onChange={() => { setAcc(acc?.includes(l.id) ? acc.filter((x) => x !== l.id) : [...(acc ?? []), l.id]); setPv({ ...pv }); }} /></td>
+                      <td className="whitespace-nowrap">{l.order}</td><td>{l.description}</td><td className="num">{l.qty} {l.unit}</td><td className="num">{l.deliveredQty}</td><td className="num">{Number(l.rate) ? inr(l.rate, 0) : '—'}</td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">Ticked by default: lines with no rate whose item is not on {number}’s BOQ (consumables, tools, extras). Untick anything that should stay as history only. Click “Refresh preview” after changing ticks to see the new counts.</p>
+            </div>
           </div>
         )}
       </Modal>
