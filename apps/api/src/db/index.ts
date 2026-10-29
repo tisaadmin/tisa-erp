@@ -44,7 +44,8 @@ export const pool = new Pool({
   ...conn,
   ssl,
   max: Number(process.env.DATABASE_POOL_MAX ?? 10),
-  idleTimeoutMillis: 20_000,
+  // opening a connection to a far-away database costs ~1 s (TLS); keep them for 10 minutes instead of 20 s
+  idleTimeoutMillis: 600_000,
   connectionTimeoutMillis: 15_000,
   keepAlive: true,
 });
@@ -52,6 +53,12 @@ export const pool = new Pool({
 // re-emits that as an unhandled 'error' event and the whole process exits.
 pool.on('error', (err) => console.error('[db] idle client error (connection will be replaced):', err.message));
 export const db = drizzle(pool, { schema, casing: 'snake_case' });
+// keep a few connections warm so the first tap after a quiet spell doesn't pay for a new connection
+if (process.env.NODE_ENV === 'production') {
+  const warm = () => Promise.all(Array.from({ length: 3 }, () => pool.query('select 1').catch(() => undefined)));
+  setInterval(warm, 45_000).unref();
+  void warm();
+}
 export type DB = typeof db;
 /** Transaction handle type (same query API as db). */
 export type Tx = Parameters<Parameters<DB['transaction']>[0]>[0];

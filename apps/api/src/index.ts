@@ -56,7 +56,7 @@ export function createApp() {
     await pool.query('select 1');
     const db = [Date.now() - t0];
     if (req.query.deep) for (let i = 0; i < 4; i++) { const t = Date.now(); await pool.query('select 1'); db.push(Date.now() - t); }
-    res.json({ ok: true, time: new Date().toISOString(), ...(req.query.deep ? { dbMs: db, region: process.env.RAILWAY_REPLICA_REGION ?? process.env.RAILWAY_REGION ?? null, dbHostKind: /railway\.internal$/.test(dbHost) ? 'railway-private' : /rlwy\.net$/.test(dbHost) ? 'railway-public-proxy' : /supabase/.test(dbHost) ? 'supabase' : 'other' } : {}) });
+    res.json({ ok: true, time: new Date().toISOString(), ...(req.query.deep ? { dbMs: db, region: process.env.RAILWAY_REPLICA_REGION ?? process.env.RAILWAY_REGION ?? null, dbRegion: dbHost.match(/aws-\d+-([a-z0-9-]+)\./)?.[1] ?? null, dbHostKind: /railway\.internal$/.test(dbHost) ? 'railway-private' : /rlwy\.net$/.test(dbHost) ? 'railway-public-proxy' : /supabase/.test(dbHost) ? 'supabase' : 'other' } : {}) });
   });
   app.use('/api/auth', authRoutes);
 
