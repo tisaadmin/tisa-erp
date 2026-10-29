@@ -1,9 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Image, KeyboardAvoidingView, Linking, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, FlatList, Image, Linking, Pressable, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { C, s } from '../../src/components/ui';
+import { C, KeyboardSafe, s } from '../../src/components/ui';
 import { api, fileUrl, filePart } from '../../src/lib/api';
 import { appRouteFor } from '../../src/lib/manage';
 import { pickReceipt } from '../../src/lib/geo';
@@ -75,7 +75,7 @@ export default function Thread() {
   return (
     <SafeAreaView edges={['bottom']} style={{ flex: 1, backgroundColor: C.bg }}>
       <Stack.Screen options={{ title: info?.title ?? 'Chat', headerRight: () => <Pressable onPress={menu} hitSlop={10}><Ionicons name="ellipsis-vertical" size={20} color="#fff" /></Pressable> }} />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
+      <KeyboardSafe>
         {!msgs ? <ActivityIndicator style={{ marginTop: 40 }} /> : (
           <FlatList ref={listRef} data={msgs} keyExtractor={(m) => m.id} contentContainerStyle={{ padding: 12, gap: 6 }}
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
@@ -101,13 +101,13 @@ export default function Thread() {
         ) : (
         <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 10, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: C.border }}>
           <Pressable onPress={photo} hitSlop={8} style={{ padding: 8 }}><Ionicons name="camera" size={24} color={C.brand} /></Pressable>
-          <TextInput value={text} onChangeText={setText} placeholder="Message" multiline placeholderTextColor="#94a3b8" style={[s.input, { flex: 1, maxHeight: 120 }]} />
+          <TextInput value={text} onChangeText={setText} placeholder="Message" multiline onFocus={() => setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 250)} placeholderTextColor="#94a3b8" style={[s.input, { flex: 1, maxHeight: 120 }]} />
           <Pressable onPress={() => send()} disabled={busy || !text.trim()} style={{ backgroundColor: C.brand, opacity: busy || !text.trim() ? 0.5 : 1, borderRadius: 22, width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
             {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="send" size={20} color="#fff" />}
           </Pressable>
         </View>
         )}
-      </KeyboardAvoidingView>
+      </KeyboardSafe>
     </SafeAreaView>
   );
 }

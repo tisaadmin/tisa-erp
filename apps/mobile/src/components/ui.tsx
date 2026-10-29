@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useState, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import {
-  ActivityIndicator, Alert, FlatList, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle,
+  ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '../lib/api';
@@ -37,13 +37,31 @@ export function useRun() {
   return { busy, run };
 }
 
+/**
+ * Keeps what is below it clear of the keyboard: pads by the keyboard height minus the space above this view
+ * (header + status bar), which it measures on screen. `platforms` limits it (iOS forms scroll by themselves).
+ */
+export function KeyboardSafe({ children, platforms = ['ios', 'android'] }: { children: ReactNode; platforms?: ('ios' | 'android')[] }) {
+  const ref = useRef<any>(null); // eslint-disable-line @typescript-eslint/no-explicit-any
+  const [offset, setOffset] = useState(Platform.OS === 'ios' ? 100 : 80);
+  const on = (platforms as string[]).includes(Platform.OS);
+  return (
+    <KeyboardAvoidingView ref={ref} enabled={on} behavior="padding" keyboardVerticalOffset={offset} style={{ flex: 1 }}
+      onLayout={() => ref.current?.measureInWindow?.((_x: number, y: number) => { if (y > 0 && Math.abs(y - offset) > 1) setOffset(y); })}>
+      {children}
+    </KeyboardAvoidingView>
+  );
+}
+
 export function Screen({ children, scroll = true, onRefresh, refreshing, style }: { children: ReactNode; scroll?: boolean; onRefresh?: () => void; refreshing?: boolean; style?: ViewStyle }) {
   return (
     <SafeAreaView edges={['bottom']} style={{ flex: 1, backgroundColor: C.bg }}>
       {scroll ? (
+        <KeyboardSafe platforms={['android']}>
         <ScrollView contentContainerStyle={[{ padding: 16, gap: 12, paddingBottom: 120 }, style]} keyboardShouldPersistTaps="handled"
           automaticallyAdjustKeyboardInsets keyboardDismissMode="interactive"
           refreshControl={onRefresh ? <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} /> : undefined}>{children}</ScrollView>
+        </KeyboardSafe>
       ) : <View style={[{ flex: 1 }, style]}>{children}</View>}
     </SafeAreaView>
   );
