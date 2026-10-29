@@ -2070,3 +2070,17 @@ test('chat safety: report a message (HR removes it), block a person (no DMs eith
   await ok('tech', 'DELETE', `/team/blocks/${svcId}`);
   await ok('svc', 'POST', `/chats/${c.id}/messages`, { body: 'back again' });
 });
+
+test('Super Admin can set a password that is kept (no change asked at first sign-in); others still get a temporary one', async () => {
+  const roles = await ok('admin', 'GET', '/roles');
+  const tech = roles.find((r: any) => r.name === 'Field Technician');
+  const u = await ok('admin', 'POST', '/users', { name: 'Review Login', email: 'review.login@tisa.in', roleId: tech.id, password: 'Review@2026', passwordFinal: true, isFieldStaff: true });
+  const l = await call('', 'POST', '/auth/login', { email: 'review.login@tisa.in', password: 'Review@2026' });
+  assert.equal(l.status, 200);
+  tokens.review = l.data.accessToken;
+  assert.equal((await call('review', 'GET', '/tickets')).status, 200, 'no forced password change');
+  await ok('admin', 'PATCH', `/users/${u.id}`, { password: 'Review@2027' });
+  const l2 = await call('', 'POST', '/auth/login', { email: 'review.login@tisa.in', password: 'Review@2027' });
+  tokens.review = l2.data.accessToken;
+  assert.equal((await call('review', 'GET', '/tickets')).status, 403, 'a plain reset is temporary again');
+});

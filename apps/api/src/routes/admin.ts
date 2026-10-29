@@ -33,6 +33,8 @@ const userSchema = z.object({
   isFieldStaff: z.boolean().default(false),
   active: z.boolean().default(true),
   password: z.string().min(8).optional(),
+  /** Super Admin only: the password given is final — no change asked at first sign-in (e.g. the App Store review login) */
+  passwordFinal: z.boolean().optional(),
 });
 
 r.get('/users', requirePerm('users:view'), async (req, res) => {
@@ -89,19 +91,19 @@ async function withDept<T extends { departmentId?: string | null; department?: s
 }
 
 r.post('/users', requirePerm('users:create'), async (req, res) => {
-  const { password, ...data0 } = userSchema.parse(req.body);
+  const { password, passwordFinal, ...data0 } = userSchema.parse(req.body);
   const data = await withDept(data0);
   if (!password) throw badRequest('Password is required (min 8 characters)');
   if ((await isSuperRole(data.roleId)) && !isSuperAdminPerms(req.user.permissions)) throw badRequest('Only the Super Admin can create another Super Admin');
   const rule = await emailRule(req, data.email);
   if (await db.query.users.findFirst({ where: eq(users.email, data.email), columns: { id: true } })) throw badRequest(`${data.email} already has a login`);
-  const [row] = await db.insert(users).values({ ...data, ...rule, mustChangePassword: true, passwordHash: await bcrypt.hash(password, 10) }).returning({ id: users.id });
+  const [row] = await db.insert(users).values({ ...data, ...rule, mustChangePassword: !(passwordFinal && isSuperAdminPerms(req.user.permissions)), passwordHash: await bcrypt.hash(password, 10) }).returning({ id: users.id });
   audit(req, 'create', 'user', row.id, { ...data, ...rule });
   res.status(201).json(row);
 });
 
 r.patch('/users/:id', requirePerm('users:edit'), async (req, res) => {
-  const { password, ...data0 } = userSchema.partial().parse(req.body);
+  const { password, passwordFinal, ...data0 } = userSchema.partial().parse(req.body);
   const data = await withDept(data0);
   if (data.managerId === req.params.id) throw badRequest('A user cannot report to themselves');
   const cur = await db.query.users.findFirst({ where: eq(users.id, req.params.id), with: { role: { columns: { permissions: true } } } });
@@ -118,7 +120,7 @@ r.patch('/users/:id', requirePerm('users:edit'), async (req, res) => {
   const losingSuper = isSuperAdminPerms(cur.role.permissions) && (data.active === false || (data.roleId && data.roleId !== cur.roleId && !(await isSuperRole(data.roleId))));
   if (losingSuper && (await activeSuperAdmins()).filter((id) => id !== cur.id).length === 0) throw badRequest('This is the only active Super Admin — make someone else Super Admin first');
   if (data.active === false && cur.id === req.user.id) throw badRequest('You cannot deactivate your own account');
-  if (password) { set.passwordHash = await bcrypt.hash(password, 10); set.mustChangePassword = cur.id !== req.user.id; }
+  if (password) { set.passwordHash = await bcrypt.hash(password, 10); set.mustChangePassword = cur.id !== req.user.id && !(passwordFinal && superCaller); }
   const [row] = await db.update(users).set(set).where(eq(users.id, req.params.id)).returning({ id: users.id });
   if (password || data.active === false || set.email) await db.delete(refreshTokens).where(eq(refreshTokens.userId, row.id));
   invalidateUserCache(row.id);

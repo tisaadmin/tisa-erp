@@ -431,7 +431,8 @@ export function UsersPage() {
     { name: 'name', label: 'Full name', required: true }, { name: 'email', label: 'Email (login)', type: 'email', required: true, hint: superAdmin ? `Official @${domains.join(' / @')} address — or any other email (allowed because you are Super Admin)` : `Must be an official @${domains.join(' / @')} address` }, { name: 'phone', label: 'Mobile' },
     { name: 'employeeCode', label: 'Employee code' }, { name: 'designation', label: 'Designation' }, { name: 'departmentId', label: 'Department', type: 'combo', options: deptOpts, hint: 'The department head approves their leave, expenses & requisitions' },
     { name: 'roleId', label: 'Role (access level)', type: 'combo', options: roleOpts, required: true }, { name: 'managerId', label: 'Reports to (approves expenses & leave)', type: 'combo', options: userOpts },
-    { name: 'password', label: 'Temporary password', hint: 'Min 8 chars. They must choose their own at first sign-in. Leave blank to keep the current one.' },
+    { name: 'password', label: 'New password', hint: 'Min 8 chars. Leave blank to keep the current one. They choose their own at first sign-in unless you tick “Keep this password”.' },
+    ...(superAdmin ? [{ name: 'passwordFinal', label: 'Keep this password', type: 'checkbox' as const, hint: 'Don’t ask them to change it (e.g. a shared review / demo login)' }] : []),
     { name: 'isFieldStaff', label: 'Field staff', type: 'checkbox', hint: 'Uses the mobile app' }, { name: 'active', label: 'Active', type: 'checkbox', hint: 'Can sign in' },
   ];
   return (
