@@ -1,6 +1,6 @@
 import { RecordTeam } from '../components/RecordTeam';
 import { FileDown, Plus, Receipt, Truck, Upload } from 'lucide-react';
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Combo } from '../components/Combo';
@@ -480,6 +480,7 @@ function MergeOrdersButton({ orderId, number }: { orderId: string; number: strin
   const [pv, setPv] = useState<AbsorbPreview | null>(null);
   const [acc, setAcc] = useState<string[] | null>(null);
   const [allLines, setAllLines] = useState(false);
+  const pvRef = useRef<HTMLDivElement>(null);
   type Cand = { id: string; number: string; date: string; status: string; total: number; clientPoNo: string | null; title: string | null; site: { name: string } | null; sameTerms: boolean; placeOk: boolean; sameSite: boolean; otherClient: { id: string; name: string } | null };
   const cands = useGet<Cand[]>(open ? `/orders/${orderId}/merge-candidates` : null);
   const picked = (cands.data ?? []).filter((c) => sel.includes(c.id));
@@ -487,7 +488,7 @@ function MergeOrdersButton({ orderId, number }: { orderId: string; number: strin
   const close = () => { setOpen(false); setSel([]); setPv(null); setAcc(null); };
   const merge = useAction(() => api(`/orders/${orderId}/merge`, { body: { sourceIds: sel, allowOtherSites: otherSites.length > 0 } }), { success: 'Orders merged', invalidate: [['/orders'], ['/projects']], onSuccess: close });
   const body = (preview: boolean) => ({ sourceIds: sel, allowOtherSites: otherSites.length > 0, preview, ...(acc ? { accessoryLineIds: acc } : {}) });
-  const preview = useAction(() => api<AbsorbPreview>(`/orders/${orderId}/absorb`, { body: body(true) }), { invalidate: [['__none__']], onSuccess: (r) => { setPv(r); if (!acc) setAcc(r.sourceLines.filter((l) => l.accessory).map((l) => l.id)); } });
+  const preview = useAction(() => api<AbsorbPreview>(`/orders/${orderId}/absorb`, { body: body(true) }), { invalidate: [['__none__']], onSuccess: (r) => { setPv(r); if (!acc) setAcc(r.sourceLines.filter((l) => l.accessory).map((l) => l.id)); setTimeout(() => pvRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60); } });
   const absorb = useAction(() => api(`/orders/${orderId}/absorb`, { body: body(false) }), { success: `Orders brought under ${number}`, invalidate: [['/orders'], ['/projects'], ['/challans'], ['/purchase-orders']], onSuccess: close });
   const toggle = (id: string) => { setSel(sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]); setPv(null); setAcc(null); };
   const ask = () => confirm(`Merge ${sel.length} order(s) into ${number}? They will be marked "Merged".${otherSites.length ? `\n\n${otherSites.map((c) => c.number).join(', ')} ${otherSites.length > 1 ? 'are' : 'is'} at another site — ${otherSites.length > 1 ? 'they' : 'it'} will become part of this project.` : ''}`);
@@ -529,6 +530,8 @@ function MergeOrdersButton({ orderId, number }: { orderId: string; number: strin
             </label>
           ))}
         </div>
+        {mode === 'keep' && preview.isPending && <p className="mb-2 rounded bg-sky-50 px-3 py-2 text-xs text-sky-800">Working out the preview on the live data (takes a few seconds)…</p>}
+        {mode === 'keep' && pv && <button className="mb-2 w-full rounded bg-sky-50 px-3 py-2 text-left text-xs text-sky-800 hover:bg-sky-100" onClick={() => pvRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>Preview ready — {pv.merged.length} orders, value {inr(pv.valueBefore)} → {inr(pv.valueAfter)}, {acc?.length ?? 0} accessory lines ticked. <b>Scroll down to see it ↓</b></button>}
         {!cands.data ? <Spinner /> : !cands.data.length ? <p className="text-sm text-slate-500">No other open orders for this client. Orders that are closed, cancelled or already merged are not listed.</p> : (
           <div className="space-y-1">
             {selectable.length > 1 && <button className="text-xs text-brand-700 hover:underline" onClick={() => { setSel(sel.length === selectable.length ? [] : selectable.map((c) => c.id)); setPv(null); setAcc(null); }}>{sel.length === selectable.length ? 'Clear all' : `Select all ${selectable.length}`}</button>}
@@ -540,7 +543,7 @@ function MergeOrdersButton({ orderId, number }: { orderId: string; number: strin
           </div>
         )}
         {mode === 'keep' && pv && (
-          <div className="mt-4 space-y-3 rounded-md border border-sky-200 bg-sky-50/50 p-3 text-sm">
+          <div ref={pvRef} className="mt-4 scroll-mt-2 space-y-3 rounded-md border border-sky-200 bg-sky-50/50 p-3 text-sm">
             <div className="font-semibold text-sky-900">Preview — worked out on the live data, nothing saved yet</div>
             <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
               <div className="rounded bg-white px-3 py-2"><div className="text-xs text-slate-500">{number} value</div><div className="font-semibold">{inr(pv.valueBefore)} → {inr(pv.valueAfter)}</div><div className="text-xs text-emerald-700">{pv.valueBefore === pv.valueAfter ? 'unchanged' : 'CHANGES'}</div></div>
