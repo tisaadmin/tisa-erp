@@ -12,10 +12,13 @@ export function AttendanceCard({ compact }: { compact?: boolean }) {
   const { busy, run } = useRun();
   const mark = (kind: 'check-in' | 'check-out') => run(async () => {
     const fix = await getFix();
-    const photo = await takePhoto({ front: true });
-    if (!photo) return;
     const fd = new FormData();
-    fd.append('photo', filePart(photo, 'selfie.jpg'));
+    // selfie at check-in only; check-out records the location alone
+    if (kind === 'check-in') {
+      const photo = await takePhoto({ front: true });
+      if (!photo) return;
+      fd.append('photo', filePart(photo, 'selfie.jpg'));
+    }
     fd.append('latitude', String(fix.latitude)); fd.append('longitude', String(fix.longitude));
     if (fix.accuracy) fd.append('accuracy', String(fix.accuracy));
     if (fix.address) fd.append('address', fix.address);
@@ -30,7 +33,7 @@ export function AttendanceCard({ compact }: { compact?: boolean }) {
         <Text style={{ color: C.text }}>In at <Text style={{ fontWeight: '700' }}>{fmtTime(a.checkInAt)}</Text>
           {a.site ? ` · ${a.site.name} ${a.onSite ? '(on site)' : `(${Math.round(a.distanceFromSite ?? 0)} m away)`}` : ''}
           {a.checkOutAt ? `  ·  Out ${fmtTime(a.checkOutAt)}` : ''}</Text>
-      ) : <Text style={s.muted}>{compact ? "You haven't checked in today." : "You haven't checked in today. A selfie and your GPS location are recorded."}</Text>}
+      ) : <Text style={s.muted}>{compact ? "You haven't checked in today." : "You haven't checked in today. A selfie and your GPS location are recorded at check-in; check-out records your location only."}</Text>}
       {!a?.checkInAt && <Btn title="Check in" icon="log-in" busy={busy} onPress={() => mark('check-in')} />}
       {a?.checkInAt && !a.checkOutAt && <Btn title="Check out" variant="secondary" icon="log-out" busy={busy} onPress={() => mark('check-out')} />}
     </Card>
