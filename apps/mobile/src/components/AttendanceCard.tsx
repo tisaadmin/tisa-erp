@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Text } from 'react-native';
 import { Badge, Btn, C, Card, s, useFetch, useRun } from './ui';
 import { api, filePart } from '../lib/api';
 import { fmtTime } from '../lib/format';
-import { getFix, takePhoto } from '../lib/geo';
+import { getFix, takePhoto, warmLocation } from '../lib/geo';
 
 type Att = { checkInAt?: string; checkOutAt?: string; status: string; onSite: boolean; site?: { name: string } | null; distanceFromSite?: number; workMinutes?: number } | null;
 
@@ -12,6 +12,8 @@ export function AttendanceCard({ compact }: { compact?: boolean }) {
   const att = useFetch<Att>('/attendance/today');
   const { busy, run } = useRun();
   const [step, setStep] = useState<string | null>(null);
+  const pending = !att.data?.checkInAt || !att.data?.checkOutAt;
+  useEffect(() => { if (att.data !== undefined && pending) warmLocation(); }, [att.data === undefined, pending]); // eslint-disable-line react-hooks/exhaustive-deps
   const mark = (kind: 'check-in' | 'check-out') => run(async () => {
     try {
       // the GPS fix runs while the selfie is being taken

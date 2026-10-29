@@ -41,7 +41,8 @@ export function Screen({ children, scroll = true, onRefresh, refreshing, style }
   return (
     <SafeAreaView edges={['bottom']} style={{ flex: 1, backgroundColor: C.bg }}>
       {scroll ? (
-        <ScrollView contentContainerStyle={[{ padding: 16, gap: 12, paddingBottom: 40 }, style]} keyboardShouldPersistTaps="handled"
+        <ScrollView contentContainerStyle={[{ padding: 16, gap: 12, paddingBottom: 120 }, style]} keyboardShouldPersistTaps="handled"
+          automaticallyAdjustKeyboardInsets keyboardDismissMode="interactive"
           refreshControl={onRefresh ? <RefreshControl refreshing={!!refreshing} onRefresh={onRefresh} /> : undefined}>{children}</ScrollView>
       ) : <View style={[{ flex: 1 }, style]}>{children}</View>}
     </SafeAreaView>
