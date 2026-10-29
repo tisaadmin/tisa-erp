@@ -1,6 +1,6 @@
 /** Internal messaging: one-to-one, groups and record threads, live. */
 import { useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, BellOff, Hash, Paperclip, Plus, Search, Send, Trash2, Users } from 'lucide-react';
+import { ArrowLeft, Ban, BellOff, Flag, Hash, Paperclip, Plus, Search, Send, ShieldAlert, Trash2, Users } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -8,11 +8,12 @@ import { Button, Field, Input, Modal, Spinner, Tabs, cx } from '../components/ui
 import { api, fileUrl } from '../lib/api';
 import { fmtDateTime } from '../lib/format';
 import { useGet } from '../lib/hooks';
+import { useAuth } from '../lib/auth';
 import { useLive } from '../lib/realtime';
 
 type Chat = { id: string; kind: 'DIRECT' | 'GROUP' | 'RECORD'; title: string | null; link: string | null; members: number; muted: boolean; unread: number; lastMessageAt: string | null; last: { text: string; by: string } | null };
 type Msg = { id: string; conversationId?: string; userId: string; user: string; body: string | null; mine: boolean; createdAt: string; deletedAt: string | null; file: { id: string; fileName: string; mimeType: string } | null };
-type ChatFull = { id: string; kind: string; title: string; link: string | null; members: { userId: string; name: string; designation: string | null }[]; muted: boolean; isAdmin: boolean };
+type ChatFull = { id: string; kind: string; title: string; link: string | null; members: { userId: string; name: string; designation: string | null }[]; muted: boolean; isAdmin: boolean; otherUserId: string | null; iBlocked: boolean; blockedMe: boolean };
 type Person = { id: string; name: string; designation: string | null; department: string | null; role: string };
 
 const initials = (n: string) => n.split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
@@ -93,6 +94,7 @@ function Thread({ id, onBack }: { id: string; onBack: () => void }) {
         </div>
         {c?.link && <Link to={c.link} className="text-sm text-brand-700 hover:underline">Open record</Link>}
         {c && c.kind !== 'DIRECT' && (c.isAdmin || c.kind === 'RECORD') && <Button size="sm" icon={<Users className="size-4" />} onClick={() => setAdding(true)}>Add people</Button>}
+        {c?.kind === 'DIRECT' && c.otherUserId && <Button size="sm" variant="ghost" icon={<Ban className="size-4" />} onClick={() => (c.iBlocked || confirm(`Block ${c.title}? You won't get their messages, and they can't message you. You can unblock any time.`)) && (c.iBlocked ? api(`/team/blocks/${c.otherUserId}`, { method: 'DELETE' }) : api('/team/blocks', { body: { userId: c.otherUserId } })).then(() => { info.refetch(); toast.success(c.iBlocked ? 'Unblocked' : 'Blocked'); }).catch((e) => toast.error(e.message))}>{c.iBlocked ? 'Unblock' : 'Block'}</Button>}
         {c && <Button size="sm" variant="ghost" icon={<BellOff className="size-4" />} onClick={() => api(`/chats/${id}/mute`, { body: { muted: !c.muted } }).then(() => { info.refetch(); toast.success(c.muted ? 'Notifications on' : 'Muted'); })}>{c.muted ? 'Unmute' : 'Mute'}</Button>}
       </div>
       <div className="flex-1 space-y-1 overflow-y-auto bg-slate-50 px-4 py-3">
@@ -112,6 +114,7 @@ function Thread({ id, onBack }: { id: string; onBack: () => void }) {
                     {m.body && <div className="whitespace-pre-wrap break-words">{m.body}</div>}</>}
                   <div className={cx('mt-0.5 flex items-center justify-end gap-2 text-[10px]', m.mine ? 'text-white/70' : 'text-slate-400')}>
                     {fmtDateTime(m.createdAt).split(', ').pop()}
+                    {!m.mine && !m.deletedAt && <button className="hidden group-hover:inline" title="Report this message" onClick={() => { const reason = prompt('What is wrong with this message? (it goes to HR / admin)'); if (reason && reason.trim().length > 1) api(`/chats/${id}/messages/${m.id}/report`, { body: { reason } }).then(() => toast.success('Reported — HR / admin will review it')).catch((e) => toast.error(e.message)); }}><Flag className="size-3" /></button>}
                     {m.mine && !m.deletedAt && Date.now() - new Date(m.createdAt).getTime() < 86400000 && <button className="hidden group-hover:inline" title="Delete" onClick={() => confirm('Delete this message for everyone?') && api(`/chats/${id}/messages/${m.id}`, { method: 'DELETE' }).catch((e) => toast.error(e.message))}><Trash2 className="size-3" /></button>}
                   </div>
                 </div>
@@ -121,13 +124,14 @@ function Thread({ id, onBack }: { id: string; onBack: () => void }) {
         })}
         <div ref={end} />
       </div>
+      {c?.iBlocked || c?.blockedMe ? <div className="border-t border-slate-200 bg-slate-50 p-3 text-center text-sm text-slate-500">{c.iBlocked ? `You blocked ${c.title}. Unblock to send messages.` : `${c.title} is not accepting messages from you.`}</div> :
       <div className="flex items-end gap-2 border-t border-slate-200 bg-white p-3">
         <label className="cursor-pointer rounded-md p-2 text-slate-500 hover:bg-slate-100" title="Send a photo or file"><Paperclip className="size-5" />
           <input type="file" className="hidden" accept="image/*,application/pdf" onChange={(e) => { const f = e.target.files?.[0]; if (f) send(f); e.target.value = ''; }} /></label>
         <textarea rows={1} className="input max-h-40 min-h-10 flex-1 resize-none" placeholder="Type a message…" value={text} onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} />
         <Button variant="primary" icon={<Send className="size-4" />} loading={sending} disabled={!text.trim()} onClick={() => send()}>Send</Button>
-      </div>
+      </div>}
       <AddPeople open={adding} chatId={id} existing={c?.members.map((m) => m.userId) ?? []} onClose={() => setAdding(false)} onDone={() => info.refetch()} />
     </div>
   );
@@ -149,6 +153,24 @@ function AddPeople({ open, chatId, existing, onClose, onDone }: { open: boolean;
   );
 }
 
+function Reports({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const q = useGet<{ id: string; reason: string; body: string | null; removed: boolean; sender: string; reportedBy: string; createdAt: string; status: string }[]>(open ? '/message-reports' : null);
+  const act = (id: string, a: 'remove' | 'dismiss') => api(`/message-reports/${id}/${a}`, { body: {} }).then(() => { q.refetch(); toast.success(a === 'remove' ? 'Message removed' : 'Dismissed'); }).catch((e) => toast.error(e.message));
+  return (
+    <Modal open={open} onClose={onClose} title="Reported messages" wide>
+      {!q.data ? <Spinner /> : !q.data.length ? <p className="text-sm text-slate-500">Nothing reported.</p> : (
+        <ul className="divide-y divide-slate-100 text-sm">{q.data.map((r) => (
+          <li key={r.id} className="flex items-start gap-3 py-2">
+            <div className="flex-1"><div className="font-medium">{r.sender}: <span className="font-normal">{r.body ?? <i className="text-slate-400">removed</i>}</span></div>
+              <div className="text-xs text-slate-500">Reported by {r.reportedBy} · {fmtDateTime(r.createdAt)} · “{r.reason}”</div></div>
+            <Button size="sm" variant="danger" onClick={() => act(r.id, 'remove')}>Remove message</Button>
+            <Button size="sm" onClick={() => act(r.id, 'dismiss')}>Dismiss</Button>
+          </li>))}</ul>
+      )}
+    </Modal>
+  );
+}
+
 export function MessagesPage() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -158,12 +180,15 @@ export function MessagesPage() {
   const [adding, setAdding] = useState(false);
   useLive('message', () => qc.invalidateQueries({ queryKey: ['/chats'] }));
   useLive('chat', () => qc.invalidateQueries({ queryKey: ['/chats'] }));
+  const { can } = useAuth();
+  const [reports, setReports] = useState(() => new URLSearchParams(location.search).has('reports'));
   const list = useMemo(() => (chats.data ?? []).filter((c) => !q || (c.title ?? '').toLowerCase().includes(q.toLowerCase())), [chats.data, q]);
   return (
     <div className="-m-4 flex h-[calc(100vh-3.5rem)] lg:-m-6">
       <aside className={cx('w-full shrink-0 flex-col border-r border-slate-200 bg-white md:flex md:w-80', id ? 'hidden' : 'flex')}>
         <div className="flex items-center gap-2 border-b border-slate-200 p-3">
           <div className="relative flex-1"><Search className="absolute left-3 top-2.5 size-4 text-slate-400" /><Input className="pl-9" placeholder="Search chats" value={q} onChange={(e) => setQ(e.target.value)} /></div>
+          {can('users:edit') && <Button variant="ghost" title="Reported messages" icon={<ShieldAlert className="size-4" />} onClick={() => setReports(true)} />}
           <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setAdding(true)}>New</Button>
         </div>
         <ul className="flex-1 overflow-y-auto">
@@ -187,6 +212,7 @@ export function MessagesPage() {
         {id ? <Thread key={id} id={id} onBack={() => nav('/messages')} /> : <p className="text-sm text-slate-400">Pick a chat, or start a new one.</p>}
       </section>
       <NewChat open={adding} onClose={() => setAdding(false)} onOpen={(cid) => { qc.invalidateQueries({ queryKey: ['/chats'] }); nav(`/messages/${cid}`); }} />
+      <Reports open={reports} onClose={() => setReports(false)} />
     </div>
   );
 }

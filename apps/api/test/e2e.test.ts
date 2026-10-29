@@ -2043,3 +2043,30 @@ test('merge keeping this order\'s value: old orders\' POs / challans move here, 
   assert.notEqual(dc2.status, 'PENDING_APPROVAL');
   assert.equal((await call('sales', 'POST', `/orders/${t.id}/absorb`, { sourceIds: [s1.id] })).status, 400, 'already merged');
 });
+
+test('chat safety: report a message (HR removes it), block a person (no DMs either way, their group messages hidden)', async () => {
+  const me = await ok('tech', 'GET', '/auth/me'); const techId = me.id ?? me.user?.id;
+  const sm = await ok('svc', 'GET', '/auth/me'); const svcId = sm.id ?? sm.user?.id;
+  const c = await ok('svc', 'POST', '/chats/direct', { userId: techId });
+  const m = await ok('svc', 'POST', `/chats/${c.id}/messages`, { body: 'rude words here' });
+  assert.equal((await call('svc', 'POST', `/chats/${c.id}/messages/${m.id}/report`, { reason: 'x mine' })).status, 400, 'not own message');
+  await ok('tech', 'POST', `/chats/${c.id}/messages/${m.id}/report`, { reason: 'Abusive language' });
+  assert.equal((await call('tech', 'GET', '/message-reports')).status, 403);
+  const reps = await ok('admin', 'GET', '/message-reports');
+  const rep = reps.find((x: any) => x.messageId === m.id);
+  assert.equal(rep.reason, 'Abusive language'); assert.equal(rep.body, 'rude words here');
+  await ok('admin', 'POST', `/message-reports/${rep.id}/remove`, {});
+  assert.equal((await ok('tech', 'GET', `/chats/${c.id}/messages`)).find((x: any) => x.id === m.id).body, null, 'removed for everyone');
+
+  const g = await ok('svc', 'POST', '/chats/group', { title: 'Site crew', memberIds: [techId] });
+  await ok('tech', 'POST', '/team/blocks', { userId: svcId });
+  assert.equal((await call('svc', 'POST', `/chats/${c.id}/messages`, { body: 'hello?' })).status, 403, 'blocked person cannot DM');
+  assert.equal((await call('svc', 'POST', '/chats/group', { title: 'Another', memberIds: [techId] })).status, 403, 'cannot pull the blocker into new groups');
+  assert.equal((await call('tech', 'POST', `/chats/${c.id}/messages`, { body: 'hi' })).status, 403, 'blocker must unblock first');
+  assert.ok(!(await ok('svc', 'GET', '/team/people')).some((p: any) => p.id === techId), 'not offered as a contact');
+  await ok('svc', 'POST', `/chats/${g.id}/messages`, { body: 'group note' });
+  assert.ok(!(await ok('tech', 'GET', `/chats/${g.id}/messages`)).some((x: any) => x.body === 'group note'), 'hidden for the blocker');
+  assert.equal((await ok('tech', 'GET', `/chats/${c.id}`)).iBlocked, true);
+  await ok('tech', 'DELETE', `/team/blocks/${svcId}`);
+  await ok('svc', 'POST', `/chats/${c.id}/messages`, { body: 'back again' });
+});

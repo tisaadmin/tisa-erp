@@ -9,7 +9,7 @@ import { appRouteFor } from '../../src/lib/manage';
 import { pickReceipt } from '../../src/lib/geo';
 
 type Msg = { id: string; userId: string; user: string; body: string | null; mine: boolean; createdAt: string; deletedAt: string | null; file: { id: string; fileName: string; mimeType: string } | null };
-type Info = { id: string; kind: string; title: string; link: string | null; members: { userId: string; name: string }[]; muted: boolean };
+type Info = { id: string; kind: string; title: string; link: string | null; members: { userId: string; name: string }[]; muted: boolean; otherUserId: string | null; iBlocked: boolean; blockedMe: boolean };
 
 /** One chat: messages (refreshing every few seconds), send text or a photo. */
 export default function Thread() {
@@ -42,16 +42,44 @@ export default function Thread() {
     { text: 'Cancel', style: 'cancel' },
   ]);
   const to = appRouteFor(info?.link);
+  const loadInfo = () => api<Info>(`/chats/${id}`).then(setInfo).catch(() => {});
+  const report = (m: Msg) => {
+    const go = (reason: string) => api(`/chats/${id}/messages/${m.id}/report`, { body: { reason } }).then(() => Alert.alert('Reported', 'HR / admin will review this message.')).catch((e) => Alert.alert('', e.message));
+    Alert.alert('Report this message?', 'It goes to HR / admin, who can remove it.', [
+      { text: 'Abusive or harassing', onPress: () => go('Abusive or harassing') },
+      { text: 'Inappropriate content', onPress: () => go('Inappropriate content') },
+      { text: 'Spam', onPress: () => go('Spam') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+  const longPress = (m: Msg) => {
+    if (m.deletedAt) return;
+    if (m.mine) return Alert.alert('Delete message?', 'It is removed for everyone.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => api(`/chats/${id}/messages/${m.id}`, { method: 'DELETE' }).then(load).catch((e) => Alert.alert('', e.message)) }]);
+    report(m);
+  };
+  const menu = () => {
+    if (!info) return;
+    const opts: { text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }[] = [];
+    if (to) opts.push({ text: 'Open the record', onPress: () => router.push(to as never) });
+    opts.push({ text: info.muted ? 'Unmute' : 'Mute', onPress: () => api(`/chats/${id}/mute`, { body: { muted: !info.muted } }).then(loadInfo) });
+    if (info.kind === 'DIRECT' && info.otherUserId) {
+      opts.push(info.iBlocked
+        ? { text: `Unblock ${info.title}`, onPress: () => api(`/team/blocks/${info.otherUserId}`, { method: 'DELETE' }).then(loadInfo) }
+        : { text: `Block ${info.title}`, style: 'destructive', onPress: () => Alert.alert(`Block ${info.title}?`, "You won't get their messages and they can't message you. You can unblock any time.", [{ text: 'Cancel', style: 'cancel' }, { text: 'Block', style: 'destructive', onPress: () => api('/team/blocks', { body: { userId: info.otherUserId } }).then(loadInfo).catch((e) => Alert.alert('', e.message)) }]) });
+    }
+    opts.push({ text: 'Cancel', style: 'cancel' });
+    Alert.alert(info.title, undefined, opts);
+  };
   return (
     <SafeAreaView edges={['bottom']} style={{ flex: 1, backgroundColor: C.bg }}>
-      <Stack.Screen options={{ title: info?.title ?? 'Chat', headerRight: to ? () => <Pressable onPress={() => router.push(to as never)} hitSlop={10}><Ionicons name="open-outline" size={20} color="#fff" /></Pressable> : undefined }} />
+      <Stack.Screen options={{ title: info?.title ?? 'Chat', headerRight: () => <Pressable onPress={menu} hitSlop={10}><Ionicons name="ellipsis-vertical" size={20} color="#fff" /></Pressable> }} />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={90}>
         {!msgs ? <ActivityIndicator style={{ marginTop: 40 }} /> : (
           <FlatList ref={listRef} data={msgs} keyExtractor={(m) => m.id} contentContainerStyle={{ padding: 12, gap: 6 }}
             onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
             renderItem={({ item: m }) => (
               <View style={{ alignItems: m.mine ? 'flex-end' : 'flex-start' }}>
-                <Pressable onLongPress={() => m.mine && !m.deletedAt && Alert.alert('Delete message?', 'It is removed for everyone.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => api(`/chats/${id}/messages/${m.id}`, { method: 'DELETE' }).then(load).catch((e) => Alert.alert('', e.message)) }])}
+                <Pressable onLongPress={() => longPress(m)}
                   style={{ maxWidth: '80%', backgroundColor: m.mine ? C.brand : '#fff', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 8, borderWidth: m.mine ? 0 : 1, borderColor: C.border }}>
                   {!m.mine && info?.kind !== 'DIRECT' && <Text style={{ fontSize: 11, fontWeight: '700', color: C.brand, marginBottom: 2 }}>{m.user}</Text>}
                   {m.deletedAt ? <Text style={{ fontStyle: 'italic', color: m.mine ? '#cbd5e1' : C.muted }}>message deleted</Text> : <>
@@ -64,6 +92,11 @@ export default function Thread() {
               </View>
             )} />
         )}
+        {info?.iBlocked || info?.blockedMe ? (
+          <Pressable onPress={info.iBlocked ? menu : undefined} style={{ padding: 16, backgroundColor: '#f8fafc', borderTopWidth: 1, borderTopColor: C.border }}>
+            <Text style={[s.muted, { textAlign: 'center' }]}>{info.iBlocked ? `You blocked ${info.title}. Tap to unblock.` : `${info.title} is not accepting messages from you.`}</Text>
+          </Pressable>
+        ) : (
         <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8, padding: 10, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: C.border }}>
           <Pressable onPress={photo} hitSlop={8} style={{ padding: 8 }}><Ionicons name="camera" size={24} color={C.brand} /></Pressable>
           <TextInput value={text} onChangeText={setText} placeholder="Message" multiline placeholderTextColor="#94a3b8" style={[s.input, { flex: 1, maxHeight: 120 }]} />
@@ -71,6 +104,7 @@ export default function Thread() {
             {busy ? <ActivityIndicator color="#fff" /> : <Ionicons name="send" size={20} color="#fff" />}
           </Pressable>
         </View>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

@@ -1338,6 +1338,27 @@ export const payrollLinesRel = relations(payrollLines, ({ one }) => ({
   user: one(users, { fields: [payrollLines.userId], references: [users.id] }),
 }));
 
+/** A person someone does not want messages from (their DMs are refused, their group messages hidden for the blocker). */
+export const userBlocks = pgTable('user_blocks', {
+  id: id(),
+  blockerId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
+  blockedId: text().notNull().references(() => users.id, { onDelete: 'cascade' }),
+  createdAt: createdAt(),
+}, (t) => [uniqueIndex().on(t.blockerId, t.blockedId)]);
+
+/** A chat message reported as inappropriate — reviewed by HR / admin, who can remove it. */
+export const messageReports = pgTable('message_reports', {
+  id: id(),
+  messageId: text().notNull().references(() => messages.id, { onDelete: 'cascade' }),
+  conversationId: text().notNull(),
+  reportedById: text().notNull().references(() => users.id),
+  reason: text().notNull(),
+  status: text().notNull().default('OPEN'), // OPEN, REMOVED, DISMISSED
+  resolvedById: text(),
+  resolvedAt: ts(),
+  createdAt: createdAt(),
+}, (t) => [index().on(t.status)]);
+
 export const tasksRel = relations(tasks, ({ one, many }) => ({
   createdBy: one(users, { fields: [tasks.createdById], references: [users.id] }),
   assignees: many(taskAssignees),
