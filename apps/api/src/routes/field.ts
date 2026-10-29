@@ -59,13 +59,14 @@ async function storeGeoPhoto(req: Request, file: Express.Multer.File, geo: z.inf
 }
 
 // ═══════════════════════ Attendance ═══════════════════════
+// Everyone marks their own attendance (check-in / out / today) whatever their role; seeing others' needs attendance:view(_all).
 
-r.get('/attendance/today', requirePerm('attendance:view'), async (req, res) => {
+r.get('/attendance/today', async (req, res) => {
   const row = await db.query.attendance.findFirst({ where: and(eq(attendance.userId, req.user.id), eq(attendance.date, istDate())), with: { site: { columns: { id: true, name: true } } } });
   res.json(row ?? null);
 });
 
-r.post('/attendance/check-in', requirePerm('attendance:mark'), upload.single('photo'), async (req, res) => {
+r.post('/attendance/check-in', upload.single('photo'), async (req, res) => {
   const geo = geoSchema.parse(req.body);
   const { siteId, remarks } = z.object({ siteId: opt, remarks: opt }).parse(req.body);
   const today = istDate();
@@ -89,7 +90,7 @@ r.post('/attendance/check-in', requirePerm('attendance:mark'), upload.single('ph
   res.status(201).json({ ...row, site: loc?.site ? { id: loc.site.id, name: loc.site.name } : null });
 });
 
-r.post('/attendance/check-out', requirePerm('attendance:mark'), upload.single('photo'), async (req, res) => {
+r.post('/attendance/check-out', upload.single('photo'), async (req, res) => {
   const geo = geoSchema.parse(req.body);
   const row = await db.query.attendance.findFirst({ where: and(eq(attendance.userId, req.user.id), eq(attendance.date, istDate())) });
   if (!row?.checkInAt) throw badRequest('You have not checked in today');

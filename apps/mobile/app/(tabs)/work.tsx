@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { Pressable, Text, View } from 'react-native';
 import { Badge, C, Card, Row, Screen, s, useFetch } from '../../src/components/ui';
 import { MyTasksCard } from '../../src/components/MyTasks';
+import { AttendanceCard } from '../../src/components/AttendanceCard';
 import { useAuth } from '../../src/lib/auth';
 import { fmtDate, fmtTime, inr, todayIso } from '../../src/lib/format';
 import { approvesSomething, type Inbox } from '../../src/lib/manage';
@@ -63,6 +64,7 @@ export default function Work() {
         </Pressable>
       )}
 
+      <AttendanceCard compact />
       <MyTasksCard />
 
       {sales && <>

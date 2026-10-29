@@ -55,7 +55,7 @@ export function AttendancePage() {
   return (
     <div className="space-y-4">
       <PageHeader title="Attendance & Leave" />
-      {can('attendance:mark') && <MyDay />}
+      <MyDay />
       <Tabs value={tab} onChange={setTab} tabs={[{ value: 'today', label: 'Today' }, { value: 'log', label: 'Log' }, { value: 'muster', label: 'Monthly muster' }, { value: 'leaves', label: 'Leaves' }]} />
       {(tab === 'today' || tab === 'log') && (
         <Card pad={false}>
