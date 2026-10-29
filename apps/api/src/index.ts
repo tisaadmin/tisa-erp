@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { env } from './config';
-import { pool } from './db';
+import { dbHost, pool } from './db';
 import { errorHandler, HttpError } from './lib/http';
 import { initRealtime } from './lib/realtime';
 import { authenticate } from './middleware/auth';
@@ -41,9 +41,22 @@ export function createApp() {
   app.use(express.json({ limit: '5mb' }));
   if (env.NODE_ENV !== 'test') app.use(morgan(env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-  app.get('/api/health', async (_req, res) => {
+  // how long the server itself spent on each request (browser dev tools / diagnostics read it)
+  app.use((_req, res, next) => {
+    const start = process.hrtime.bigint();
+    const writeHead = res.writeHead;
+    res.writeHead = function (this: typeof res, ...args: Parameters<typeof res.writeHead>) {
+      if (!res.headersSent) res.setHeader('Server-Timing', `app;dur=${(Number(process.hrtime.bigint() - start) / 1e6).toFixed(1)}`);
+      return writeHead.apply(this, args);
+    } as typeof res.writeHead;
+    next();
+  });
+  app.get('/api/health', async (req, res) => {
+    const t0 = Date.now();
     await pool.query('select 1');
-    res.json({ ok: true, time: new Date().toISOString() });
+    const db = [Date.now() - t0];
+    if (req.query.deep) for (let i = 0; i < 4; i++) { const t = Date.now(); await pool.query('select 1'); db.push(Date.now() - t); }
+    res.json({ ok: true, time: new Date().toISOString(), ...(req.query.deep ? { dbMs: db, region: process.env.RAILWAY_REPLICA_REGION ?? process.env.RAILWAY_REGION ?? null, dbHostKind: /railway\.internal$/.test(dbHost) ? 'railway-private' : /rlwy\.net$/.test(dbHost) ? 'railway-public-proxy' : /supabase/.test(dbHost) ? 'supabase' : 'other' } : {}) });
   });
   app.use('/api/auth', authRoutes);
 

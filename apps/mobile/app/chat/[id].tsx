@@ -32,8 +32,10 @@ export default function Thread() {
     try {
       let attachmentId: string | null = null;
       if (photo) { const fd = new FormData(); fd.append('entityType', 'MESSAGE'); fd.append('entityId', id); fd.append('files', filePart(photo, 'photo.jpg')); attachmentId = (await api<{ id: string }[]>('/attachments', { form: fd }))[0].id; }
-      await api(`/chats/${id}/messages`, { body: { body: text.trim() || null, attachmentId } });
-      setText(''); await load();
+      const body = text.trim() || null;
+      setText('');
+      const m = await api<Msg>(`/chats/${id}/messages`, { body: { body, attachmentId } });
+      setMsgs((x) => (x && !x.some((y) => y.id === m.id) ? [...x, { ...m, mine: true }] : x));
     } catch (e) { Alert.alert('Not sent', (e as Error).message); } finally { setBusy(false); }
   };
   const photo = () => Alert.alert('Send a photo', undefined, [
@@ -44,7 +46,7 @@ export default function Thread() {
   const to = appRouteFor(info?.link);
   const loadInfo = () => api<Info>(`/chats/${id}`).then(setInfo).catch(() => {});
   const report = (m: Msg) => {
-    const go = (reason: string) => api(`/chats/${id}/messages/${m.id}/report`, { body: { reason } }).then(() => Alert.alert('Reported', 'HR / admin will review this message.')).catch((e) => Alert.alert('', e.message));
+    const go = (reason: string) => { Alert.alert('Reported', 'HR / admin will review this message.'); api(`/chats/${id}/messages/${m.id}/report`, { body: { reason } }).catch((e) => Alert.alert('Could not report', e.message)); };
     Alert.alert('Report this message?', 'It goes to HR / admin, who can remove it.', [
       { text: 'Abusive or harassing', onPress: () => go('Abusive or harassing') },
       { text: 'Inappropriate content', onPress: () => go('Inappropriate content') },
@@ -61,11 +63,11 @@ export default function Thread() {
     if (!info) return;
     const opts: { text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }[] = [];
     if (to) opts.push({ text: 'Open the record', onPress: () => router.push(to as never) });
-    opts.push({ text: info.muted ? 'Unmute' : 'Mute', onPress: () => api(`/chats/${id}/mute`, { body: { muted: !info.muted } }).then(loadInfo) });
+    opts.push({ text: info.muted ? 'Unmute' : 'Mute', onPress: () => { setInfo({ ...info, muted: !info.muted }); api(`/chats/${id}/mute`, { body: { muted: !info.muted } }).catch(loadInfo); } });
     if (info.kind === 'DIRECT' && info.otherUserId) {
       opts.push(info.iBlocked
-        ? { text: `Unblock ${info.title}`, onPress: () => api(`/team/blocks/${info.otherUserId}`, { method: 'DELETE' }).then(loadInfo) }
-        : { text: `Block ${info.title}`, style: 'destructive', onPress: () => Alert.alert(`Block ${info.title}?`, "You won't get their messages and they can't message you. You can unblock any time.", [{ text: 'Cancel', style: 'cancel' }, { text: 'Block', style: 'destructive', onPress: () => api('/team/blocks', { body: { userId: info.otherUserId } }).then(loadInfo).catch((e) => Alert.alert('', e.message)) }]) });
+        ? { text: `Unblock ${info.title}`, onPress: () => { setInfo({ ...info, iBlocked: false }); api(`/team/blocks/${info.otherUserId}`, { method: 'DELETE' }).catch((e) => { Alert.alert('', e.message); loadInfo(); }); } }
+        : { text: `Block ${info.title}`, style: 'destructive', onPress: () => Alert.alert(`Block ${info.title}?`, "You won't get their messages and they can't message you. You can unblock any time.", [{ text: 'Cancel', style: 'cancel' }, { text: 'Block', style: 'destructive', onPress: () => { setInfo({ ...info, iBlocked: true }); api('/team/blocks', { body: { userId: info.otherUserId } }).catch((e) => { Alert.alert('', e.message); loadInfo(); }); } }]) });
     }
     opts.push({ text: 'Cancel', style: 'cancel' });
     Alert.alert(info.title, undefined, opts);

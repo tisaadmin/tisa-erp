@@ -37,6 +37,7 @@ export function parseDbUrl(raw: string) {
 }
 
 const conn = parseDbUrl(env.DATABASE_URL);
+export const dbHost = conn.host;
 console.log(`[db] connecting to ${conn.host}:${conn.port}/${conn.database} as ${conn.user}${ssl ? ' (TLS)' : ''}`);
 
 export const pool = new Pool({
