@@ -11,7 +11,7 @@ import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { notifyPermission, notifyUsers } from '../lib/notify';
 import { badRequest, forbidden, notFound, pageParams } from '../lib/http';
-import { r3 } from '../lib/gst';
+import { calcTotals, r3 } from '../lib/gst';
 import { nextNumber } from '../lib/numbering';
 import { pdfToBuffer } from '../lib/pdf';
 import { can, requirePerm, type AuthUser } from '../middleware/auth';
@@ -228,22 +228,73 @@ r.post('/quotations/:id/status', requirePerm('quotations:edit'), async (req, res
   res.json(row);
 });
 
+/** A copy of the quotation as the next revision (R1, R2 …) in DRAFT; the original is marked REVISED. */
+async function reviseQuote(tx: Tx, id: string, userId: string) {
+  const q = await tx.query.quotations.findFirst({ where: eq(quotations.id, id), with: { items: true } });
+  if (!q) throw notFound('Quotation');
+  if (q.status === 'CONVERTED') throw badRequest('Already converted to an order');
+  if (q.status === 'REVISED') throw badRequest('This quotation has already been revised — open the latest revision');
+  const base = q.number.replace(/-R\d+$/, '');
+  const { id: _id, createdAt: _c, updatedAt: _u, items: its, ...rest } = q;
+  const [nq] = await tx.insert(quotations).values({
+    ...rest, number: `${base}-R${q.revision + 1}`, revision: q.revision + 1, parentId: q.id, status: 'DRAFT', date: new Date(), createdById: userId, approvedById: null,
+  }).returning();
+  await tx.insert(quotationItems).values(its.map(({ id: _i, quotationId: _q, ...l }) => ({ ...l, quotationId: nq.id })));
+  await tx.update(quotations).set({ status: 'REVISED' }).where(eq(quotations.id, q.id));
+  return nq;
+}
+
 r.post('/quotations/:id/revise', requirePerm('quotations:create'), async (req, res) => {
-  const row = await db.transaction(async (tx) => {
-    const q = await tx.query.quotations.findFirst({ where: eq(quotations.id, req.params.id), with: { items: true } });
-    if (!q) throw notFound('Quotation');
-    if (q.status === 'CONVERTED') throw badRequest('Already converted to an order');
-    const base = q.number.replace(/-R\d+$/, '');
-    const { id: _id, createdAt: _c, updatedAt: _u, items: its, ...rest } = q;
-    const [nq] = await tx.insert(quotations).values({
-      ...rest, number: `${base}-R${q.revision + 1}`, revision: q.revision + 1, parentId: q.id, status: 'DRAFT', date: new Date(), createdById: req.user.id, approvedById: null,
-    }).returning();
-    await tx.insert(quotationItems).values(its.map(({ id: _i, quotationId: _q, ...l }) => ({ ...l, quotationId: nq.id })));
-    await tx.update(quotations).set({ status: 'REVISED' }).where(eq(quotations.id, q.id));
-    return nq;
-  });
+  const row = await db.transaction((tx) => reviseQuote(tx, req.params.id, req.user.id));
   audit(req, 'revise', 'quotation', row.id, { from: req.params.id });
   res.status(201).json(row);
+});
+
+/** Rounds a rate up/down to the nearest step (0 = to the paisa). */
+const roundTo = (n: number, step: number) => (step > 0 ? Math.round(n / step) * step : Math.round(n * 100) / 100);
+
+/**
+ * Raise or lower every quoted rate by a percentage (the selling price — purchase rates are untouched).
+ * Draft / pending / approved quotations change in place (an approved one goes back to draft for re-approval);
+ * a quotation already sent to the client gets a new revision with the new prices, so the sent copy stays as it was.
+ * preview: true returns the before/after figures without saving.
+ */
+r.post('/quotations/:id/adjust-prices', requirePerm('quotations:edit'), async (req, res) => {
+  const d = z.object({ percent: z.coerce.number().min(-90).max(500).refine((v) => v !== 0, 'Enter a percentage other than 0'), round: z.coerce.number().min(0).max(1000).default(1), preview: z.boolean().optional() }).parse(req.body);
+  const q0 = await db.query.quotations.findFirst({ where: eq(quotations.id, req.params.id), with: { items: { orderBy: [quotationItems.sortOrder] } } });
+  if (!q0) throw notFound('Quotation');
+  if (['CONVERTED', 'REVISED'].includes(q0.status)) throw badRequest(`A ${q0.status.toLowerCase()} quotation cannot be changed`);
+  const company = await getCompany();
+  const interState = q0.placeOfSupply !== company.stateCode;
+  const priced = (its: typeof q0.items) => {
+    const lines = its.map((l) => ({ ...l, rate: Number(l.rate) > 0 ? roundTo(Number(l.rate) * (1 + d.percent / 100), d.round) : Number(l.rate) }));
+    const { lines: calcs, totals } = calcTotals(lines.map((l) => ({ qty: Number(l.qty), rate: l.rate, discountPct: Number(l.discountPct) || 0, gstRate: Number(l.gstRate) })), interState);
+    return { lines: lines.map((l, i) => ({ ...l, taxable: calcs[i].taxable, taxAmount: calcs[i].taxAmount, amount: calcs[i].amount })), totals };
+  };
+  const willRevise = !['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(q0.status);
+  const showCost = can(req.user, 'quotations:costing') || can(req.user, 'quotations:approve');
+  const cfg = await costingConfig();
+  const svc = await serviceItemIds(db, q0.items);
+  const after = priced(q0.items);
+  const gp = (taxable: number, its: typeof q0.items) => (showCost ? costingSummary({ taxable, costing: q0.costing }, its, cfg.minGpPct, svc) : null);
+  const summary = {
+    willRevise, nextStatus: willRevise ? 'DRAFT' : q0.status === 'APPROVED' ? 'DRAFT' : q0.status,
+    before: { taxable: Number(q0.taxable), total: Number(q0.total), gpPct: gp(Number(q0.taxable), q0.items)?.gpPct ?? null },
+    after: { taxable: after.totals.taxable, total: after.totals.total, gpPct: gp(after.totals.taxable, after.lines as never)?.gpPct ?? null, belowTarget: gp(after.totals.taxable, after.lines as never)?.belowTarget ?? null },
+    minGpPct: showCost ? cfg.minGpPct : null,
+    lines: after.lines.map((l, i) => ({ description: l.description, qty: Number(l.qty), unit: l.unit, from: Number(q0.items[i].rate), to: l.rate })),
+  };
+  if (d.preview) return res.json(summary);
+  const row = await db.transaction(async (tx) => {
+    const target = willRevise ? await reviseQuote(tx, q0.id, req.user.id) : q0;
+    const its = await tx.query.quotationItems.findMany({ where: eq(quotationItems.quotationId, target.id), orderBy: [quotationItems.sortOrder] });
+    const p = priced(its);
+    for (const l of p.lines) await tx.update(quotationItems).set({ rate: l.rate, taxable: l.taxable, taxAmount: l.taxAmount, amount: l.amount }).where(eq(quotationItems.id, l.id));
+    const [nq] = await tx.update(quotations).set({ ...p.totals, status: target.status === 'APPROVED' ? 'DRAFT' : target.status }).where(eq(quotations.id, target.id)).returning();
+    return nq;
+  });
+  audit(req, 'adjust_prices', 'quotation', row.id, { percent: d.percent, round: d.round, from: q0.id, before: summary.before, after: summary.after });
+  res.json({ ...summary, id: row.id, number: row.number, status: row.status });
 });
 
 /** Accepted quotation → order form. */

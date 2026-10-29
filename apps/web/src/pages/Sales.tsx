@@ -121,7 +121,7 @@ export function QuotationEditor() {
         </div>
         <div className="mt-2 text-xs text-slate-500">Tax: <b>{inter ? 'IGST (inter-state)' : 'CGST + SGST (intra-state)'}</b>{d.stateCode && ` · place of supply ${d.stateCode}`}</div>
       </Card>
-      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD((x) => ({ ...x, lines }))} interState={inter} costing={canCost} /></Card>
+      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD((x) => ({ ...x, lines }))} interState={inter} costing={canCost} priceTools /></Card>
       {canCost && <QuoteCostingEditor lines={d.lines} value={d.costing ?? emptyCosting()} onChange={(costing) => setD((x) => ({ ...x, costing }))} />}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title={<label className="flex items-center gap-2"><input type="checkbox" checked={d.useTerms} onChange={(e) => setD({ ...d, useTerms: e.target.checked })} /> Milestone payment schedule</label>}>
@@ -161,6 +161,7 @@ export function QuotationDetail() {
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/quotations/${q.id}/pdf`)}>PDF</Button>
           {editable && can('quotations:edit') && <Link to={`/quotations/${q.id}/edit`}><Button>Edit</Button></Link>}
+          {!['CONVERTED', 'REVISED'].includes(q.status) && can('quotations:edit') && <AdjustPricesButton q={q} />}
           {!['CONVERTED', 'REVISED'].includes(q.status) && can('quotations:create') && <Button loading={revise.isPending} onClick={() => revise.mutate(undefined)}>Create revision</Button>}
           {(QUOTE_NEXT[q.status] ?? []).filter((a) => !a.perm || can(a.perm)).map((a) => <Button key={a.to} variant={a.variant ?? 'secondary'} loading={status.isPending} onClick={() => status.mutate(a.to)}>{a.label}</Button>)}
           {['ACCEPTED', 'SENT', 'APPROVED'].includes(q.status) && can('orders:create') && <Button variant="primary" onClick={() => setConv({ clientPoNo: '', clientPoDate: '', paymentTerms: q.paymentTerms ?? [{ stage: 'ADVANCE', percent: 100 }] })}>Convert to order</Button>}
@@ -188,6 +189,66 @@ export function QuotationDetail() {
       </Modal>
       <RecordTeam entityType="QUOTATION" entityId={q.id} label={`Quotation ${q.number}${q.client ? ` — ${q.client.name}` : ''}`} />
     </div>
+  );
+}
+
+type AdjustSummary = {
+  willRevise: boolean; nextStatus: string; minGpPct: number | null;
+  before: { taxable: number; total: number; gpPct: number | null }; after: { taxable: number; total: number; gpPct: number | null; belowTarget: boolean | null };
+  lines: { description: string; qty: number; unit: string; from: number; to: number }[];
+  id?: string; number?: string;
+};
+/** Raise / lower the whole quotation's selling prices by a % (purchase rates untouched). A quotation already sent gets a new revision. */
+function AdjustPricesButton({ q }: { q: any }) {
+  const nav = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [pct, setPct] = useState('');
+  const [round, setRound] = useState(1);
+  const [pv, setPv] = useState<AdjustSummary | null>(null);
+  const body = (preview: boolean) => ({ percent: Number(pct), round, preview });
+  const preview = useAction(() => api<AdjustSummary>(`/quotations/${q.id}/adjust-prices`, { body: body(true) }), { invalidate: [['__none__']], onSuccess: setPv });
+  const apply = useAction(() => api<AdjustSummary>(`/quotations/${q.id}/adjust-prices`, { body: body(false) }), {
+    success: 'Prices updated', invalidate: [['/quotations']],
+    onSuccess: (r) => { setOpen(false); setPv(null); setPct(''); if (r.id && r.id !== q.id) nav(`/quotations/${r.id}`); },
+  });
+  const valid = !!Number(pct) && Number(pct) > -90;
+  useEffect(() => { setPv(null); if (open && valid) { const t = setTimeout(() => preview.mutate(undefined), 350); return () => clearTimeout(t); } }, [pct, round, open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sent = !['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(q.status);
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>Adjust prices %</Button>
+      <Modal open={open} onClose={() => setOpen(false)} title={`Adjust the prices of ${q.number}`} wide
+        footer={<><Button onClick={() => setOpen(false)}>Cancel</Button>
+          <Button variant="primary" disabled={!valid || !pv} loading={apply.isPending} onClick={() => apply.mutate(undefined)}>{sent ? 'Create revision with new prices' : 'Apply'}</Button></>}>
+        <div className="space-y-3 text-sm">
+          <p className="text-slate-600">Raises or lowers every quoted (selling) rate by the same percentage. Purchase rates are not changed.
+            {sent ? <> This quotation has gone to the client, so a <b>new revision</b> ({q.number.replace(/-R\d+$/, '')}-R{q.revision + 1}) is made with the new prices; the sent copy stays as it was.</>
+              : q.status === 'APPROVED' ? <> It is approved — after the change it goes back to <b>draft</b> and needs approval again if the margin is below target.</>
+              : q.status === 'PENDING_APPROVAL' ? <> It stays with Management for approval, with the new prices.</> : null}</p>
+          <div className="flex flex-wrap items-center gap-2">
+            {[-10, -5, -2, 2, 5, 10].map((p) => <button type="button" key={p} className={cx('rounded-full border px-2.5 py-0.5 text-xs font-medium', Number(pct) === p ? 'border-brand-400 bg-brand-50 text-brand-800' : 'border-slate-300 text-slate-700 hover:bg-slate-50')} onClick={() => setPct(String(p))}>{p > 0 ? `+${p}` : p}%</button>)}
+            <Input type="number" step="any" className="w-24 text-right" value={pct} placeholder="±%" onChange={(e) => setPct(e.target.value)} /> <span>%</span>
+            <label className="ml-auto flex items-center gap-1 text-xs text-slate-600">Round rates to
+              <select className="input w-24" value={round} onChange={(e) => setRound(Number(e.target.value))}><option value={0}>₹0.01</option><option value={1}>₹1</option><option value={10}>₹10</option><option value={100}>₹100</option></select>
+            </label>
+          </div>
+          {preview.isPending && <Spinner />}
+          {pv && valid && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
+                <div className="rounded bg-slate-50 px-3 py-2"><div className="text-xs text-slate-500">Taxable value</div><div className="font-semibold">{inr(pv.before.taxable)} → {inr(pv.after.taxable)}</div></div>
+                <div className="rounded bg-slate-50 px-3 py-2"><div className="text-xs text-slate-500">Total with GST</div><div className="font-semibold">{inr(pv.before.total)} → {inr(pv.after.total)}</div></div>
+                {pv.after.gpPct != null && <div className={cx('rounded px-3 py-2', pv.after.belowTarget ? 'bg-amber-50' : 'bg-emerald-50')}><div className="text-xs text-slate-500">Gross profit</div><div className="font-semibold">{pv.before.gpPct}% → {pv.after.gpPct}%</div>{pv.after.belowTarget && <div className="text-xs text-amber-800">below the {pv.minGpPct}% target — needs Management approval</div>}</div>}
+              </div>
+              <div className="max-h-64 overflow-y-auto rounded border border-slate-200">
+                <table className="tbl text-xs"><thead><tr><th>Item</th><th className="text-right">Qty</th><th className="text-right">Rate now</th><th className="text-right">New rate</th></tr></thead>
+                  <tbody>{pv.lines.map((l, i) => <tr key={i}><td>{l.description}</td><td className="num">{qty(l.qty)} {l.unit}</td><td className="num">{inr(l.from)}</td><td className="num font-medium">{inr(l.to)}</td></tr>)}</tbody></table>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+    </>
   );
 }
 

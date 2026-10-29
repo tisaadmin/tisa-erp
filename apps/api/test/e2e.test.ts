@@ -2111,3 +2111,30 @@ test('delete a user: their records move to the archive user (archive@tisa.in), s
   assert.ok(arch && !arch.active, 'archive user exists and cannot sign in');
   assert.equal((await call('admin', 'DELETE', `/users/${arch.id}`)).status, 400, 'archive cannot be deleted');
 });
+
+test('quotation prices: raise / lower all selling rates by %, in place or as a new revision once sent', async () => {
+  const q = await ok('sales', 'POST', '/quotations', {
+    clientId: ctx.client.id, siteId: ctx.site.id, subject: 'Price adjust',
+    lines: [{ itemId: ctx.cam.id, qty: 10, rate: 1000, costRate: 750 }, { itemId: ctx.nvr.id, qty: 1, rate: 7200, costRate: 5000 }],
+  });
+  assert.equal(q.taxable, 17200);
+  const pv = await ok('sales', 'POST', `/quotations/${q.id}/adjust-prices`, { percent: 5, round: 1, preview: true });
+  assert.equal(pv.after.taxable, 10 * 1050 + 7560); assert.equal(pv.willRevise, false);
+  assert.ok(pv.after.gpPct > pv.before.gpPct);
+  assert.equal((await ok('sales', 'GET', `/quotations/${q.id}`)).taxable, 17200, 'preview saves nothing');
+  const a = await ok('sales', 'POST', `/quotations/${q.id}/adjust-prices`, { percent: -10, round: 10 });
+  assert.equal(a.id, q.id);
+  const after = await ok('sales', 'GET', `/quotations/${q.id}`);
+  assert.deepEqual(after.items.map((i: any) => i.rate), [900, 6480]);
+  assert.equal(after.items[0].costRate, 750, 'purchase rates untouched');
+  assert.equal(after.taxable, 9000 + 6480);
+  // once sent: a revision is made with the new prices and the sent copy stays as it was
+  await ok('director', 'POST', `/quotations/${q.id}/status`, { status: 'APPROVED' });
+  await ok('sales', 'POST', `/quotations/${q.id}/status`, { status: 'SENT' });
+  const r = await ok('sales', 'POST', `/quotations/${q.id}/adjust-prices`, { percent: 2, round: 1 });
+  assert.notEqual(r.id, q.id); assert.match(r.number, /-R1$/); assert.equal(r.status, 'DRAFT');
+  assert.equal((await ok('sales', 'GET', `/quotations/${q.id}`)).status, 'REVISED');
+  assert.deepEqual((await ok('sales', 'GET', `/quotations/${r.id}`)).items.map((i: any) => i.rate), [918, 6610]);
+  assert.equal((await call('sales', 'POST', `/quotations/${q.id}/adjust-prices`, { percent: 2 })).status, 400, 'revised one is closed');
+  assert.equal((await call('tech', 'POST', `/quotations/${r.id}/adjust-prices`, { percent: 2 })).status, 403);
+});

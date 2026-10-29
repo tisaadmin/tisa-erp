@@ -1,5 +1,5 @@
 import { Plus, Trash2 } from 'lucide-react';
-import { Fragment, useMemo, useRef } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useGet, useItems } from '../lib/hooks';
 import { inr, STAGE_LABEL, STAGES } from '../lib/format';
 import { ItemSuggest, type SuggestItem } from './ItemSuggest';
@@ -17,6 +17,16 @@ export type Term = { stage: string; percent: number };
 export const emptyLine = (): Line => ({ itemId: null, description: '', hsnSac: '', unit: 'Nos', qty: 1, rate: 0, discountPct: 0, gstRate: 18 });
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+/** rounds a rate to the nearest step (0 = to the paisa) */
+export const roundRate = (n: number, step: number) => (step > 0 ? Math.round(n / step) * step : r2(n));
+/** sales rate that gives `marginPct` margin on the (discounted) selling price over `cost` */
+export const rateForMargin = (cost: number, marginPct: number, discountPct = 0, step = 1) =>
+  roundRate(cost / (1 - marginPct / 100) / (1 - (discountPct || 0) / 100), step);
+/** margin % on the selling price (after the line discount); null when it can't be worked out */
+export const marginOf = (l: Pick<Line, 'costRate' | 'rate' | 'discountPct'>) => {
+  const net = l.rate * (1 - (l.discountPct || 0) / 100);
+  return l.costRate == null || !(net > 0) ? null : r2((1 - l.costRate / net) * 100);
+};
 /** Mirrors the server's GST maths so the user sees exact totals while typing. */
 export function totalsOf(lines: Line[], interState: boolean) {
   let taxable = 0, tax = 0, gross = 0, cgst = 0, sgst = 0;
@@ -30,12 +40,13 @@ export function totalsOf(lines: Line[], interState: boolean) {
   return { gross: r2(gross), discount: r2(gross - taxable), taxable: r2(taxable), cgst: r2(cgst), sgst: r2(sgst), igst: interState ? r2(tax) : 0, roundOff: r2(total - raw), total };
 }
 
-export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds, limits, costing, ownDescription }: {
+export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds, limits, costing, ownDescription, priceTools }: {
   lines: Line[]; onChange: (l: Line[]) => void; interState: boolean; priceField?: 'salePrice' | 'purchasePrice';
   /** when set, only these inventory items may be picked (e.g. a PO against an order) */ onlyItemIds?: string[];
   /** per item: quantity on the order and how much is still left to order */ limits?: Record<string, { qty: number; ordered: number; remaining: number }>;
   /** quotation: show our purchase rate + vendor per line (internal costing) */ costing?: boolean;
   /** sales invoice: an own-description box per line, printed instead of the item when chosen */ ownDescription?: boolean;
+  /** quotation: price the lines from their purchase rate by a margin, or raise / lower all rates by a % */ priceTools?: boolean;
 }) {
   // Sales may not have the Vendors module — this list is for picking who quoted a purchase rate
   const vendors = useGet<{ id: string; name: string; city: string | null }[]>(costing ? '/quotations-costing/vendors' : null);
@@ -57,6 +68,7 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
   const t = totalsOf(lines, interState);
   return (
     <div>
+      {priceTools && <PriceTools lines={lines} onChange={onChange} costing={!!costing} />}
       <div className="overflow-x-auto rounded-md border border-slate-200">
         <table className="tbl min-w-[1050px]">
           <thead>
@@ -111,7 +123,7 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
                         <span className="ml-2 font-semibold">Vendor</span>
                         <div className="w-64"><Combo options={vendorOpts} value={l.costVendorId ?? null} text={l.costVendorId ? null : l.costVendor} placeholder="Vendor quoting this rate…" allowCustom onChange={(v, o) => set(i, { costVendorId: v && v !== CUSTOM ? v : null, costVendor: o?.label ?? null })} /></div>
                         {l.costRate != null && l.qty > 0 && <span className="ml-2">Cost {inr(l.costRate * l.qty)}</span>}
-                        {l.costRate != null && l.rate > 0 && <span className={cx('ml-2 font-medium', l.costRate > l.rate * (1 - (l.discountPct || 0) / 100) ? 'text-red-600' : 'text-emerald-700')}>margin {Math.round((1 - l.costRate / (l.rate * (1 - (l.discountPct || 0) / 100))) * 100)}%</span>}
+                        {l.costRate != null && l.costRate > 0 && <MarginInput line={l} onRate={(rate) => set(i, { rate })} />}
                       </div>
                     </td>
                   </tr>
@@ -126,6 +138,81 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
         <Button type="button" size="sm" icon={<Plus className="size-4" />} onClick={() => onChange([...lines, emptyLine()])}>Add line</Button>
         <Totals t={t} />
       </div>
+    </div>
+  );
+}
+
+/** Margin on the selling price for one line: shows the current margin, typing a new one re-prices the line. */
+function MarginInput({ line, onRate }: { line: Line; onRate: (rate: number) => void }) {
+  const m = marginOf(line);
+  const [text, setText] = useState(m == null ? '' : String(m));
+  const [focus, setFocus] = useState(false);
+  useEffect(() => { if (!focus) setText(m == null ? '' : String(m)); }, [m, focus]);
+  const apply = () => {
+    const v = Number(text);
+    if (text !== '' && Number.isFinite(v) && v < 100 && v !== m) onRate(rateForMargin(line.costRate!, v, line.discountPct, 1));
+  };
+  return (
+    <span className="ml-2 flex items-center gap-1">
+      <span className="font-semibold">Margin</span>
+      <input type="number" step="any" max={99} className={cx('input w-20 text-right', m != null && m < 0 ? 'border-red-400 text-red-700' : 'text-emerald-800')} value={text} placeholder="%"
+        title="Margin on the selling price — type a % to set the sales rate from the purchase rate"
+        onFocus={() => setFocus(true)} onChange={(e) => setText(e.target.value)} onBlur={() => { setFocus(false); apply(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); apply(); (e.target as HTMLInputElement).blur(); } }} />
+      <span>%</span>
+    </span>
+  );
+}
+
+/**
+ * Quotation pricing helpers: sales rate = purchase rate ÷ (1 − margin) on every line with a purchase rate
+ * (margin on the selling price, e.g. 25% → cost 75 sells at 100), and a ± % change to all sales rates.
+ */
+function PriceTools({ lines, onChange, costing }: { lines: Line[]; onChange: (l: Line[]) => void; costing: boolean }) {
+  const [margin, setMargin] = useState('25');
+  const [pct, setPct] = useState('');
+  const [step, setStep] = useState(1);
+  const withCost = lines.filter((l) => l.costRate != null && l.costRate > 0);
+  const noCost = lines.filter((l) => l.description && !(l.costRate != null && l.costRate > 0) && l.qty > 0);
+  const applyMargin = (m: number) => {
+    if (!(m < 100)) return;
+    onChange(lines.map((l) => (l.costRate != null && l.costRate > 0 ? { ...l, rate: rateForMargin(l.costRate, m, l.discountPct, step) } : l)));
+  };
+  const applyPct = () => {
+    const p = Number(pct);
+    if (!p || p <= -100) return;
+    onChange(lines.map((l) => (l.rate > 0 ? { ...l, rate: roundRate(l.rate * (1 + p / 100), step) } : l)));
+    setPct('');
+  };
+  const cost = r2(withCost.reduce((s, l) => s + (l.costRate ?? 0) * l.qty, 0));
+  const sales = r2(withCost.reduce((s, l) => s + l.qty * l.rate * (1 - (l.discountPct || 0) / 100), 0));
+  const chip = 'rounded-full border px-2.5 py-0.5 text-xs font-medium';
+  return (
+    <div className="mb-3 space-y-2 rounded-md border border-sky-200 bg-sky-50/60 p-3 text-sm">
+      {costing && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-semibold text-sky-900">Sales rate from purchase rate</span>
+          <span className="text-xs text-slate-500">margin on the selling price:</span>
+          {[20, 25, 30].map((m) => <button type="button" key={m} className={cx(chip, 'border-sky-300 bg-white text-sky-800 hover:bg-sky-100')} disabled={!withCost.length} onClick={() => { setMargin(String(m)); applyMargin(m); }}>{m}%</button>)}
+          <input type="number" step="any" max={99} className="input w-20 text-right" value={margin} onChange={(e) => setMargin(e.target.value)} aria-label="Margin %" />
+          <span className="text-xs">%</span>
+          <Button type="button" size="sm" disabled={!withCost.length || !(Number(margin) < 100)} onClick={() => applyMargin(Number(margin))}>Apply to {withCost.length} line{withCost.length === 1 ? '' : 's'}</Button>
+          {withCost.length > 0 && <span className="ml-auto text-xs text-slate-600">Material: cost {inr(cost)} · sales {inr(sales)} · margin <b className={sales > 0 && cost > sales ? 'text-red-600' : 'text-emerald-700'}>{sales > 0 ? `${r2((1 - cost / sales) * 100)}%` : '—'}</b> ({inr(r2(sales - cost))})</span>}
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold text-sky-900">Change all sales rates by</span>
+        {[-5, 5, 10].map((p) => <button type="button" key={p} className={cx(chip, 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100')} onClick={() => setPct(String(p))}>{p > 0 ? `+${p}` : p}%</button>)}
+        <input type="number" step="any" className="input w-20 text-right" value={pct} placeholder="±%" onChange={(e) => setPct(e.target.value)} aria-label="Change %" />
+        <span className="text-xs">%</span>
+        <Button type="button" size="sm" disabled={!Number(pct) || Number(pct) <= -100} onClick={applyPct}>Apply</Button>
+        <label className="ml-auto flex items-center gap-1 text-xs text-slate-600">Round rates to
+          <select className="input w-24" value={step} onChange={(e) => setStep(Number(e.target.value))}>
+            <option value={0}>₹0.01</option><option value={1}>₹1</option><option value={10}>₹10</option><option value={100}>₹100</option>
+          </select>
+        </label>
+      </div>
+      {costing && noCost.length > 0 && <div className="text-xs text-amber-800">{noCost.length} line{noCost.length === 1 ? ' has' : 's have'} no purchase rate — the margin is not applied to {noCost.length === 1 ? 'it' : 'them'}; enter the purchase rate or price {noCost.length === 1 ? 'it' : 'them'} by hand.</div>}
     </div>
   );
 }
