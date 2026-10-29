@@ -1,5 +1,6 @@
 import { RecordTeam } from '../components/RecordTeam';
-import { Calendar, FileDown, MapPin, Phone, Plus, UserPlus } from 'lucide-react';
+import { Calendar, FileDown, MapPin, Phone, Plus, Trash2, UserPlus } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
@@ -425,7 +426,14 @@ export function UsersPage() {
   const deptOpts = (depts.data ?? []).filter((d) => d.active).map((d) => ({ value: d.id, label: d.name, sub: d.head ? `Head: ${d.head.name}` : undefined }));
   const policy = useGet<{ domains: string[] }>('/settings/login');
   const domains = policy.data?.domains ?? ['tisa.in'];
-  const roleOpts = (roles.data ?? []).map((r) => ({ value: r.id, label: r.name }));
+  const roleOpts = (roles.data ?? []).filter((r) => r.name !== 'Archive').map((r) => ({ value: r.id, label: r.name }));
+  const qc = useQueryClient();
+  const delUser = (row: Record<string, any>, close: () => void) => {
+    if (row.email === 'archive@tisa.in') return;
+    const typed = prompt(`Delete ${row.name} permanently?\n\nTheir login is removed. Everything they created, approved or were assigned (tickets, documents, tasks, chat messages, attendance, leave …) moves to the "Archive (former staff)" user.\n\nTo just stop them signing in, untick "Active" instead.\n\nType DELETE to confirm:`);
+    if (typed?.trim().toUpperCase() !== 'DELETE') return;
+    api(`/users/${row.id}`, { method: 'DELETE' }).then(() => { toast.success(`${row.name} deleted — records moved to the archive user`); close(); qc.invalidateQueries(); }).catch((e) => toast.error(e.message));
+  };
   const userOpts = (users.data ?? []).map((u) => ({ value: u.id, label: u.name }));
   const fields: FieldDef[] = [
     { name: 'name', label: 'Full name', required: true }, { name: 'email', label: 'Email (login)', type: 'email', required: true, hint: superAdmin ? `Official @${domains.join(' / @')} address — or any other email (allowed because you are Super Admin)` : `Must be an official @${domains.join(' / @')} address` }, { name: 'phone', label: 'Mobile' },
@@ -439,6 +447,7 @@ export function UsersPage() {
     <>
     <LoginPolicyCard domains={domains} editable={superAdmin && can('settings:edit')} onSaved={() => policy.refetch()} />
     <MasterPage<any> title="Users" singular="User" path="/users" perm="users" fields={fields} defaults={{ active: true, isFieldStaff: false }}
+      editorExtra={superAdmin ? (row, close) => row.email !== 'archive@tisa.in' && <Button variant="danger" icon={<Trash2 className="size-4" />} onClick={() => delUser(row, close)}>Delete user</Button> : undefined}
       filters={(q, set) => <Select className="w-44" value={q.status ?? ''} onChange={(e) => set('status', e.target.value)} placeholder="Active users" options={[{ value: 'inactive', label: 'Switched-off users' }, { value: 'all', label: 'All users' }]} />}
       cols={[
         { key: 'name', label: 'Name', render: (r) => <>{r.name}<div className="text-xs text-slate-400">{r.employeeCode} · {r.designation}</div></> },

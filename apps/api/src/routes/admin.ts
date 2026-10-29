@@ -16,6 +16,7 @@ import { FIELD_ENTITIES, REGISTRY, resolvedFields, saveFieldConfig, type FieldEn
 import { WORKFLOW_RULES, workflowRules, type WorkflowRule } from '../services/workflow';
 import { isOfficialEmail, isSuperAdminPerms, loginDomains } from '../lib/loginPolicy';
 import { costingConfig } from '../services/quoteCosting';
+import { ARCHIVE_EMAIL, deleteUser } from '../services/userDelete';
 const r = Router();
 const publicUser = { passwordHash: false, pushToken: false } as const;
 
@@ -126,6 +127,20 @@ r.patch('/users/:id', requirePerm('users:edit'), async (req, res) => {
   invalidateUserCache(row.id);
   audit(req, 'update', 'user', row.id, { ...data, passwordReset: !!password });
   res.json(row);
+});
+
+/** Delete a user (Super Admin): their records move to the archive user (archive@tisa.in). */
+r.delete('/users/:id', requirePerm('users:edit'), async (req, res) => {
+  if (!isSuperAdminPerms(req.user.permissions)) throw badRequest('Only the Super Admin can delete users');
+  if (req.params.id === req.user.id) throw badRequest('You cannot delete your own account');
+  const cur = await db.query.users.findFirst({ where: eq(users.id, req.params.id), with: { role: { columns: { permissions: true } } } });
+  if (!cur) throw notFound('User');
+  if (cur.email === ARCHIVE_EMAIL) throw badRequest('The archive user cannot be deleted');
+  if (isSuperAdminPerms(cur.role.permissions) && cur.active && (await activeSuperAdmins()).filter((x) => x !== cur.id).length === 0) throw badRequest('This is the only active Super Admin');
+  const out = await deleteUser(cur.id);
+  invalidateUserCache(cur.id);
+  audit(req, 'delete', 'user', cur.id, { name: cur.name, email: cur.email, moved: out.moved });
+  res.json(out);
 });
 
 // ── Login policy (official email domains) ──

@@ -4,6 +4,7 @@
  *   npm run db:seed            → base data only
  *   npm run db:seed -- --demo  → base + demo data
  */
+import { ensureArchiveUser } from '../services/userDelete';
 import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
 import { db, pool } from './index';
@@ -107,6 +108,9 @@ async function main() {
     await db.insert(users).values({ name: 'Administrator', email: adminEmail, externalEmail: true, mustChangePassword: process.env.NODE_ENV === 'production', passwordHash: await bcrypt.hash(adminPass, 10), roleId: roleIds.get('Super Admin')!, employeeCode: 'TT000' });
     console.log(`✓ admin user ${adminEmail} created (password from SEED_ADMIN_PASSWORD — change it after first login)`);
   }
+
+  // holder of deleted users' records (cannot sign in)
+  await ensureArchiveUser(db as never);
 
   if (!demo) return;
   // demo staff use @tisatech.in — allow that domain on local / test databases only

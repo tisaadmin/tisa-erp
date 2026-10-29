@@ -108,21 +108,22 @@ export function useEditor<T extends Record<string, any>>(path: string, fields: F
   return { editing, open: (row?: Record<string, any>) => setEditing(row ? { ...row } : { ...defaults }), close: () => setEditing(null), save };
 }
 
-export function EditorModal({ title, fields, ed }: { title: string; fields: FieldDef[]; ed: ReturnType<typeof useEditor> }) {
+export function EditorModal({ title, fields, ed, extra }: { title: string; fields: FieldDef[]; ed: ReturnType<typeof useEditor>; extra?: (row: Record<string, any>, close: () => void) => ReactNode }) {
   if (!ed.editing) return null;
   return (
     <Modal open onClose={ed.close} title={`${ed.editing.id ? 'Edit' : 'New'} ${title}`} wide
-      footer={<><Button onClick={ed.close}>Cancel</Button><Button variant="primary" loading={ed.save.isPending} onClick={() => ed.save.mutate(ed.editing!)}>Save</Button></>}>
+      footer={<>{ed.editing.id && extra && <span className="mr-auto">{extra(ed.editing, ed.close)}</span>}<Button onClick={ed.close}>Cancel</Button><Button variant="primary" loading={ed.save.isPending} onClick={() => ed.save.mutate(ed.editing!)}>Save</Button></>}>
       <FormFields fields={ed.editing.id ? fields.filter((f) => !f.createOnly) : fields} value={ed.editing} onChange={(v) => ed.open(v)} />
     </Modal>
   );
 }
 
 /** Generic list + create/edit page for master data. */
-export function MasterPage<T extends { id: string }>({ title, singular, path, perm, cols, fields: rawFields, defaults: rawDefaults, filters, to, extraActions, subtitle, entity }: {
+export function MasterPage<T extends { id: string }>({ title, singular, path, perm, cols, fields: rawFields, defaults: rawDefaults, filters, to, extraActions, subtitle, entity, editorExtra }: {
   title: string; singular: string; path: string; perm: string; cols: Col<T>[]; fields: FieldDef[]; defaults?: Record<string, any>;
   filters?: (q: Record<string, any>, set: (k: string, v: any) => void) => ReactNode; to?: (r: T) => string; extraActions?: ReactNode | ((q: Record<string, any>) => ReactNode); subtitle?: ReactNode;
   /** Forms & Fields configuration key, e.g. "clients" */ entity?: string;
+  /** extra buttons on the left of the edit window's footer (e.g. Delete) */ editorExtra?: (row: Record<string, any>, close: () => void) => ReactNode;
 }) {
   const { fields, defaults } = useConfiguredFields(entity, rawFields, rawDefaults);
   const { can } = useAuth();
@@ -146,7 +147,7 @@ export function MasterPage<T extends { id: string }>({ title, singular, path, pe
         <Table rows={list.data?.data} cols={allCols} exportAs={hasOwnExport ? undefined : { name: title.toLowerCase().replace(/[^a-z0-9]+/g, '-'), path, query: q }} to={to} onRow={to ? undefined : (r) => can(`${perm}:edit`) && ed.open(r as any)} />
         {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
       </Card>
-      <EditorModal title={singular} fields={fields} ed={ed} />
+      <EditorModal title={singular} fields={fields} ed={ed} extra={editorExtra} />
     </div>
   );
 }

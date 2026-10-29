@@ -2084,3 +2084,30 @@ test('Super Admin can set a password that is kept (no change asked at first sign
   tokens.review = l2.data.accessToken;
   assert.equal((await call('review', 'GET', '/tickets')).status, 403, 'a plain reset is temporary again');
 });
+
+test('delete a user: their records move to the archive user (archive@tisa.in), sessions / chats removed; only Super Admin', async () => {
+  const roles = await ok('admin', 'GET', '/roles');
+  const tech = roles.find((r: any) => r.name === 'Field Technician');
+  const u = await ok('admin', 'POST', '/users', { name: 'Leaving Tech', email: 'leaving.tech@tisa.in', roleId: tech.id, password: 'Leave@2026', passwordFinal: true, isFieldStaff: true });
+  const l = await call('', 'POST', '/auth/login', { email: 'leaving.tech@tisa.in', password: 'Leave@2026' });
+  tokens.leaving = l.data.accessToken;
+  const fd = new FormData(); fd.append('latitude', '19.19725'); fd.append('longitude', '72.95665');
+  await ok('leaving', 'POST', '/attendance/check-in', undefined, fd);
+  const task = await ok('director', 'POST', '/tasks', { title: 'Hand over tools', assigneeIds: [u.id] });
+  const chat = await ok('leaving', 'POST', '/chats/direct', { userId: (await ok('director', 'GET', '/auth/me')).id ?? (await ok('director', 'GET', '/auth/me')).user.id });
+  await ok('leaving', 'POST', `/chats/${chat.id}/messages`, { body: 'bye all' });
+
+  assert.equal((await call('hr', 'DELETE', `/users/${u.id}`)).status, 400, 'Super Admin only');
+  const out = await ok('admin', 'DELETE', `/users/${u.id}`);
+  assert.equal(out.archive.email, 'archive@tisa.in');
+  assert.ok(out.moved['attendance.user_id'] >= 1 && out.moved['task_assignees.user_id'] >= 1 && out.moved['messages.user_id'] >= 1);
+  assert.equal((await call('leaving', 'GET', '/auth/me')).status, 401, 'signed out');
+  const t = await ok('director', 'GET', `/tasks/${task.id}`);
+  assert.ok(t.assignees.some((a: any) => a.user.name === 'Archive (former staff)'), 'task now shows the archive user');
+  const msgs = await ok('director', 'GET', `/chats/${chat.id}/messages`);
+  assert.equal(msgs.find((m: any) => m.body === 'bye all').user, 'Archive (former staff)');
+  const all = await ok('admin', 'GET', '/users?status=all&pageSize=500');
+  const arch = all.data.find((x: any) => x.email === 'archive@tisa.in');
+  assert.ok(arch && !arch.active, 'archive user exists and cannot sign in');
+  assert.equal((await call('admin', 'DELETE', `/users/${arch.id}`)).status, 400, 'archive cannot be deleted');
+});
