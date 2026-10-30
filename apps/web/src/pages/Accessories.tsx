@@ -146,7 +146,8 @@ export function AccessorySheetDetail() {
         actions={<>
           {editable && <Button icon={<RefreshCw className="size-4" />} loading={recalc.isPending} onClick={() => { if (!dirty || confirm('Recalculate from the templates? Unsaved changes to template lines will be replaced; lines you added are kept.')) recalc.mutate(undefined); }}>Recalculate</Button>}
           {editable && <Button disabled={!dirty} loading={save.isPending} onClick={() => save.mutate(undefined)}>Save</Button>}
-          {editable && <Button variant="primary" disabled={!lines.length && !notes.trim()} loading={submit.isPending} onClick={() => submit.mutate(undefined)}>{lines.length ? 'Submit for approval' : 'Submit: no accessories needed'}</Button>}
+          {editable && !lines.length && !notes.trim() && <span className="self-center text-xs text-amber-700">Write why none are needed in Notes (below) to submit</span>}
+          {editable && <Button variant="primary" disabled={!lines.length && !notes.trim()} title={!lines.length && !notes.trim() ? 'Write the reason no accessories are needed in Notes first' : undefined} loading={submit.isPending} onClick={() => submit.mutate(undefined)}>{lines.length ? 'Submit for approval' : 'Submit: no accessories needed'}</Button>}
           {s.status === 'SUBMITTED' && s.canApprove && <>
             <Button icon={<XCircle className="size-4" />} onClick={() => setDecide('REJECT')}>Send back</Button>
             <Button variant="primary" icon={<CheckCircle2 className="size-4" />} onClick={() => setDecide('APPROVE')}>Approve</Button>
