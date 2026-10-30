@@ -60,6 +60,8 @@ export const companySettings = pgTable('company_settings', {
   stateName: text().notNull(),
   stateCode: text().notNull(), // GST state code, e.g. "27"
   address: text(),
+  /** registered office, printed on documents beside the working office address */
+  registeredAddress: text(),
   city: text(),
   pincode: text(),
   phone: text(),

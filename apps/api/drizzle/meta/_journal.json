@@ -183,6 +183,13 @@
       "when": 1793250483507,
       "tag": "0025_chat_block_report",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1793339742136,
+      "tag": "0026_company_registered_address",
+      "breakpoints": true
     }
   ]
 }

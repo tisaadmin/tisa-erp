@@ -23,6 +23,7 @@ COPY --from=api /app/apps/api/package.json ./
 COPY --from=api /app/apps/api/node_modules ./node_modules
 COPY --from=api /app/apps/api/dist ./dist
 COPY --from=api /app/apps/api/drizzle ./drizzle
+COPY --from=api /app/apps/api/assets ./assets
 COPY --from=web /app/apps/web/dist /app/apps/web/dist
 COPY apps/api/start.sh ./start.sh
 RUN mkdir -p uploads && chmod +x start.sh

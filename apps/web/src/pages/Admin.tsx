@@ -66,7 +66,8 @@ export function RolesPage() {
 const companyFields: FieldDef[] = [
   { name: 'name', label: 'Display name', required: true }, { name: 'legalName', label: 'Legal name (on documents)' }, { name: 'gstin', label: 'GSTIN' },
   { name: 'pan', label: 'PAN' }, { name: 'stateCode', label: 'State (GST)', type: 'combo', options: stateOpts, required: true }, { name: 'city', label: 'City' },
-  { name: 'address', label: 'Address', type: 'textarea', span: 2 }, { name: 'pincode', label: 'Pincode' },
+  { name: 'address', label: 'Office address (street — city and pincode separately)', type: 'textarea', span: 2 }, { name: 'pincode', label: 'Pincode' },
+  { name: 'registeredAddress', label: 'Registered address (printed on documents)', type: 'textarea', span: 3 },
   { name: 'phone', label: 'Phone' }, { name: 'email', label: 'Email' }, { name: 'website', label: 'Website' },
   { name: 'officeEmail', label: 'Office email (gets service reports)' }, { name: 'workdayStart', label: 'Workday starts (HH:MM)', hint: 'Check-ins >15 min later are marked late' },
   { name: 'bankName', label: 'Bank' }, { name: 'bankAccount', label: 'Account no.' }, { name: 'bankIfsc', label: 'IFSC' }, { name: 'bankBranch', label: 'Branch' },

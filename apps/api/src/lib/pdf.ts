@@ -1,11 +1,12 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import PDFDocument from 'pdfkit';
 import { amountInWords, inr, INDIAN_STATES } from './gst';
 import { fmtDate, fmtDateTime } from './dates';
 import { absPath } from './files';
 
 type Company = {
-  name: string; legalName?: string | null; gstin?: string | null; pan?: string | null; address?: string | null; city?: string | null;
+  name: string; legalName?: string | null; gstin?: string | null; pan?: string | null; address?: string | null; registeredAddress?: string | null; city?: string | null;
   pincode?: string | null; stateName: string; stateCode: string; phone?: string | null; email?: string | null; website?: string | null;
   bankName?: string | null; bankAccount?: string | null; bankIfsc?: string | null; bankBranch?: string | null;
 };
@@ -36,16 +37,35 @@ const GREY = '#555555';
 const LINE = '#cccccc';
 const ACCENT = '#0f3d5e';
 
+/** company logo (apps/api/assets/logo.png), read once */
+let logoBuf: Buffer | null | undefined;
+function logo() {
+  if (logoBuf === undefined) {
+    try { logoBuf = fs.readFileSync(path.resolve(__dirname, '../../assets/logo.png')); } catch { logoBuf = null; }
+  }
+  return logoBuf;
+}
+
+/** Letterhead on every document: logo, company name, registered + office address, contacts, GSTIN, and the document title. */
 function header(doc: PDFKit.PDFDocument, c: Company, title: string) {
-  doc.fillColor(ACCENT).font('Helvetica-Bold').fontSize(16).text(c.legalName || c.name, 40, 40);
-  doc.fillColor(GREY).font('Helvetica').fontSize(8.5);
-  const addr = [c.address, [c.city, c.pincode].filter(Boolean).join(' - '), `${c.stateName} (State code ${c.stateCode})`].filter(Boolean).join(', ');
-  doc.text(addr, 40, doc.y + 2, { width: 340 });
-  doc.text([c.phone && `Ph: ${c.phone}`, c.email, c.website].filter(Boolean).join('  |  '), { width: 340 });
-  if (c.gstin) doc.font('Helvetica-Bold').fillColor('#000').text(`GSTIN: ${c.gstin}${c.pan ? `   PAN: ${c.pan}` : ''}`);
+  const img = logo();
+  const textX = img ? 128 : 40, textW = 380 - textX;
+  if (img) doc.image(img, 40, 40, { fit: [78, 34], valign: 'center' });
+  doc.fillColor(ACCENT).font('Helvetica-Bold').fontSize(14).text(c.legalName || c.name, textX, 40, { width: textW });
+  doc.fontSize(7.8).fillColor(GREY);
+  const office = [c.address, [c.city, c.pincode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+  const line = (label: string, value: string) => {
+    doc.font('Helvetica-Bold').fillColor('#333').text(`${label}: `, textX, doc.y + 1, { width: textW, continued: true }).font('Helvetica').fillColor(GREY).text(value);
+  };
+  if (c.registeredAddress) line('Registered Address', c.registeredAddress);
+  if (office) line(c.registeredAddress ? 'Office Address' : 'Address', office);
+  const contact = [c.phone && `Ph: ${c.phone}`, c.email, c.website].filter(Boolean).join('  |  ');
+  if (contact) doc.font('Helvetica').fillColor(GREY).text(contact, textX, doc.y + 1, { width: textW });
+  doc.font('Helvetica-Bold').fillColor('#000').text([c.gstin && `GSTIN: ${c.gstin}`, c.pan && `PAN: ${c.pan}`, `State: ${c.stateName} (${c.stateCode})`].filter(Boolean).join('   '), textX, doc.y + 1, { width: textW });
+  const bottom = Math.max(doc.y + 6, img ? 80 : 0, 104);
   doc.font('Helvetica-Bold').fontSize(14).fillColor(ACCENT).text(title, 380, 42, { width: 175, align: 'right' });
-  doc.moveTo(40, 112).lineTo(555, 112).strokeColor(ACCENT).lineWidth(1.2).stroke();
-  doc.y = 120;
+  doc.moveTo(40, bottom).lineTo(555, bottom).strokeColor(ACCENT).lineWidth(1.2).stroke();
+  doc.y = bottom + 8;
 }
 
 function ensureSpace(doc: PDFKit.PDFDocument, needed: number) {

@@ -296,7 +296,7 @@ r.get('/settings', async (_req, res) => {
 const settingsSchema = z.object({
   name: z.string().min(2), legalName: z.string().nullish(),
   gstin: z.string().regex(GSTIN_REGEX, 'Invalid GSTIN').nullish().or(z.literal('')),
-  pan: z.string().nullish(), stateCode: z.string().length(2), address: z.string().nullish(), city: z.string().nullish(),
+  pan: z.string().nullish(), stateCode: z.string().length(2), address: z.string().nullish(), registeredAddress: z.string().nullish(), city: z.string().nullish(),
   pincode: z.string().nullish(), phone: z.string().nullish(), email: z.string().nullish(), website: z.string().nullish(),
   bankName: z.string().nullish(), bankAccount: z.string().nullish(), bankIfsc: z.string().nullish(), bankBranch: z.string().nullish(),
   invoiceTerms: z.string().nullish(), quoteTerms: z.string().nullish(), poTerms: z.string().nullish(), officeEmail: z.string().nullish(),
