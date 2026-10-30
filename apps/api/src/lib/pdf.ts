@@ -54,13 +54,15 @@ function header(doc: PDFKit.PDFDocument, c: Company, title: string) {
   doc.fillColor(ACCENT).font('Helvetica-Bold').fontSize(14).text(c.legalName || c.name, textX, 40, { width: textW });
   doc.fontSize(7.8).fillColor(GREY);
   const office = [c.address, [c.city, c.pincode].filter(Boolean).join(' ')].filter(Boolean).join(', ');
-  const line = (label: string, value: string) => {
-    doc.font('Helvetica-Bold').fillColor('#333').text(`${label}: `, textX, doc.y + 1, { width: textW, continued: true }).font('Helvetica').fillColor(GREY).text(value);
+  const line = (label: string, value: string, size: number) => {
+    doc.fontSize(size).font('Helvetica-Bold').fillColor('#333').text(`${label}: `, textX, doc.y + 1, { width: textW, continued: true }).font('Helvetica').fillColor(GREY).text(value);
   };
-  if (c.registeredAddress) line('Registered Address', c.registeredAddress);
-  if (office) line(c.registeredAddress ? 'Office Address' : 'Address', office);
+  // office (where we work) first and larger; registered office below it, smaller
+  if (office) line(c.registeredAddress ? 'Office Address' : 'Address', office, 8.8);
   const contact = [c.phone && `Ph: ${c.phone}`, c.email, c.website].filter(Boolean).join('  |  ');
-  if (contact) doc.font('Helvetica').fillColor(GREY).text(contact, textX, doc.y + 1, { width: textW });
+  if (contact) doc.fontSize(8.3).font('Helvetica').fillColor(GREY).text(contact, textX, doc.y + 1, { width: textW });
+  if (c.registeredAddress) line('Registered Address', c.registeredAddress, 7);
+  doc.fontSize(7.8);
   doc.font('Helvetica-Bold').fillColor('#000').text([c.gstin && `GSTIN: ${c.gstin}`, c.pan && `PAN: ${c.pan}`, `State: ${c.stateName} (${c.stateCode})`].filter(Boolean).join('   '), textX, doc.y + 1, { width: textW });
   const bottom = Math.max(doc.y + 6, img ? 80 : 0, 104);
   doc.font('Helvetica-Bold').fontSize(14).fillColor(ACCENT).text(title, 380, 42, { width: 175, align: 'right' });
