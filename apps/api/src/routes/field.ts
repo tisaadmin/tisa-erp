@@ -1,6 +1,6 @@
 import { Router, type Request } from 'express';
 import fs from 'node:fs';
-import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, or, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, ne, or, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
 import { approverFor, manages, teamIds } from '../lib/team';
@@ -180,12 +180,18 @@ r.get('/leaves', requirePerm('leaves:view'), async (req, res) => {
     where = can(req.user, 'leaves:approve') ? eq(leaveRequests.status, 'PENDING')
       : team.length ? and(eq(leaveRequests.status, 'PENDING'), inArray(leaveRequests.userId, team)) : eq(leaveRequests.id, '__none__');
   }
+  if (scope === 'rejected') {
+    // rejected requests that Management / the manager may reopen and approve after all
+    const team = await teamIds(req.user.id);
+    where = can(req.user, 'leaves:approve') ? eq(leaveRequests.status, 'REJECTED')
+      : team.length ? and(eq(leaveRequests.status, 'REJECTED'), inArray(leaveRequests.userId, team)) : eq(leaveRequests.id, '__none__');
+  }
   if (scope === 'all') {
     if (!can(req.user, 'leaves:balances')) throw forbidden();
     where = undefined;
   }
-  const rows = await db.query.leaveRequests.findMany({ where, orderBy: [desc(leaveRequests.createdAt)], with: { user: { columns: { id: true, name: true } } }, limit: scope === 'all' ? 300 : undefined });
-  if (scope !== 'approvals') return res.json(rows);
+  const rows = await db.query.leaveRequests.findMany({ where, orderBy: [desc(leaveRequests.createdAt)], with: { user: { columns: { id: true, name: true } } }, limit: scope === 'all' ? 300 : scope === 'rejected' ? 50 : undefined });
+  if (scope !== 'approvals' && scope !== 'rejected') return res.json(rows);
   // approvers see what each person has left
   const bal = await leaveBalances(db, [...new Set(rows.map((x) => x.userId))]);
   res.json(rows.map((x) => ({ ...x, balance: x.type === 'UNPAID' ? null : bal.get(x.userId)?.[x.type as 'CASUAL'] ?? 0 })));
@@ -254,14 +260,36 @@ async function lockedMonths(months: string[]) {
   return rows.map((x) => x.month);
 }
 
+/** A rejected request taken up again: back to pending (reopen), or approved straight away. Another leave on the same dates blocks it. */
+async function assertNoOverlap(lr: { id: string; userId: string; fromDate: string; toDate: string }) {
+  const overlap = await db.query.leaveRequests.findFirst({ where: and(eq(leaveRequests.userId, lr.userId), inArray(leaveRequests.status, ['PENDING', 'APPROVED']), lte(leaveRequests.fromDate, lr.toDate), gte(leaveRequests.toDate, lr.fromDate), ne(leaveRequests.id, lr.id)) });
+  if (overlap) throw badRequest(`Already has leave from ${overlap.fromDate} to ${overlap.toDate} (${overlap.status.toLowerCase()}) — cancel that first`);
+}
+
+r.post('/leaves/:id/reopen', async (req, res) => {
+  const lr = await db.query.leaveRequests.findFirst({ where: eq(leaveRequests.id, req.params.id) });
+  if (!lr) throw notFound('Leave request');
+  if (lr.status !== 'REJECTED') throw badRequest(`Only a rejected request can be reopened — this one is ${lr.status.toLowerCase()}`);
+  if (lr.userId === req.user.id) throw forbidden('You cannot reopen your own leave');
+  if (!(can(req.user, 'leaves:approve') || (await manages(req.user.id, lr.userId)))) throw forbidden();
+  await assertNoOverlap(lr);
+  await db.update(leaveRequests).set({ status: 'PENDING', approverId: null }).where(eq(leaveRequests.id, lr.id));
+  await notifyUsers([lr.userId], { title: 'Leave request reopened', body: `${lr.fromDate} → ${lr.toDate} is being reconsidered`, type: 'LEAVE', link: '/attendance?tab=leaves' });
+  audit(req, 'reopen', 'leave', lr.id, {});
+  res.json({ ok: true, status: 'PENDING' });
+});
+
 r.post('/leaves/:id/:decision', async (req, res) => {
   const decision = req.params.decision;
   if (!['approve', 'reject'].includes(decision)) throw notFound('Action');
   const lr = await db.query.leaveRequests.findFirst({ where: eq(leaveRequests.id, req.params.id), with: { user: true } });
   if (!lr) throw notFound('Leave request');
-  if (lr.status !== 'PENDING') throw badRequest('Already decided');
+  // a rejected request may still be approved later (Management / the manager changed their mind)
+  const reconsider = lr.status === 'REJECTED' && decision === 'approve';
+  if (lr.status !== 'PENDING' && !reconsider) throw badRequest('Already decided');
   if (lr.userId === req.user.id) throw forbidden('You cannot approve your own leave');
   if (!(can(req.user, 'leaves:approve') || (await manages(req.user.id, lr.userId)))) throw forbidden();
+  if (reconsider) await assertNoOverlap(lr);
   const status = decision === 'approve' ? 'APPROVED' : 'REJECTED';
   if (status === 'APPROVED') {
     const locked = await lockedMonths([lr.fromDate.slice(0, 7), lr.toDate.slice(0, 7)]);

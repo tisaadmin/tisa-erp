@@ -123,6 +123,7 @@ function Leaves() {
   const { can } = useAuth();
   const mine = useGet<any[]>('/leaves', { scope: 'mine' });
   const approvals = useGet<any[]>('/leaves', { scope: 'approvals' });
+  const rejected = useGet<any[]>(can('leaves:approve') || can('leaves:balances') ? '/leaves' : null, { scope: 'rejected' });
   const myBal = useGet<{ balances: Record<string, number> }>('/leave-balances/me');
   const [apply, setApply] = useState<any>(null);
   const hr = can('leaves:balances');
@@ -132,6 +133,7 @@ function Leaves() {
   });
   const decide = useAction(({ id, d }: { id: string; d: string }) => api(`/leaves/${id}/${d}`, { body: {} }), { invalidate: inv, onSuccess: (r: any) => toast.success(r.unpaidDays ? `Approved — ${r.unpaidDays} day(s) without pay` : 'Done') });
   const cancel = useAction((id: string) => api(`/leaves/${id}/cancel`, { body: {} }), { success: 'Leave cancelled', invalidate: inv });
+  const reopen = useAction((id: string) => api(`/leaves/${id}/reopen`, { body: {} }), { success: 'Reopened — back in “Awaiting my approval”', invalidate: inv });
   const b = myBal.data?.balances;
   return (
     <div className="space-y-4">
@@ -156,6 +158,15 @@ function Leaves() {
             { key: 'act', label: '', render: (l: any) => <div className="flex gap-1"><Button size="sm" variant="success" onClick={() => decide.mutate({ id: l.id, d: 'approve' })}>Approve</Button><Button size="sm" onClick={() => decide.mutate({ id: l.id, d: 'reject' })}>Reject</Button></div> }]} />
         </Card>
       </div>
+      {(rejected.data?.length ?? 0) > 0 && (
+        <Card title={<span>Rejected leave <span className="ml-2 text-xs font-normal text-slate-400">reopen to decide again, or approve straight away</span></span>} pad={false}>
+          <Table rows={rejected.data} cols={[
+            { key: 'user', label: 'Employee', render: (l: any) => l.user.name },
+            { key: 'dates', label: 'Leave', render: (l: any) => <>{leaveName(l.type)}{l.halfDay ? ' (half day)' : ''} · {fmtDate(l.fromDate)}{l.toDate !== l.fromDate && ` → ${fmtDate(l.toDate)}`}<div className="text-xs text-slate-400">{leaveDays(l)}{l.reason ? ` · ${l.reason}` : ''}</div></> },
+            { key: 'bal', label: 'Balance', render: (l: any) => l.balance == null ? '—' : <span className={cx(l.days != null && l.balance < l.days && 'font-semibold text-red-600')}>{l.balance}</span> },
+            { key: 'act', label: '', render: (l: any) => <div className="flex gap-1"><Button size="sm" variant="success" loading={decide.isPending} onClick={() => confirm(`Approve ${l.user.name}'s leave (${fmtDate(l.fromDate)}${l.toDate !== l.fromDate ? ` → ${fmtDate(l.toDate)}` : ''}) that was rejected earlier?`) && decide.mutate({ id: l.id, d: 'approve' })}>Approve</Button><Button size="sm" loading={reopen.isPending} onClick={() => reopen.mutate(l.id)}>Reopen</Button></div> }]} />
+        </Card>
+      )}
       {hr && <LeaveAdmin onEnter={() => setApply({ fromDate: today(), toDate: today(), type: 'CASUAL', reason: '', halfDay: false, userId: '' })} onCancel={(id) => confirm('Cancel this approved leave? Paid days go back to the balance.') && cancel.mutate(id)} />}
       <Modal open={!!apply} onClose={() => setApply(null)} title={apply?.userId !== undefined ? 'Enter leave for someone' : 'Apply for leave'} footer={<><Button onClick={() => setApply(null)}>Cancel</Button><Button variant="primary" disabled={apply?.userId === ''} loading={doApply.isPending} onClick={() => doApply.mutate(undefined)}>{apply?.userId !== undefined ? 'Save (approved)' : 'Submit'}</Button></>}>
         {apply && <div className="grid gap-3 sm:grid-cols-2">

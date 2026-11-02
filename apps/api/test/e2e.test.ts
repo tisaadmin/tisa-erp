@@ -2138,3 +2138,23 @@ test('quotation prices: raise / lower all selling rates by %, in place or as a n
   assert.equal((await call('sales', 'POST', `/quotations/${q.id}/adjust-prices`, { percent: 2 })).status, 400, 'revised one is closed');
   assert.equal((await call('tech', 'POST', `/quotations/${r.id}/adjust-prices`, { percent: 2 })).status, 403);
 });
+
+test('rejected leave can be reopened or approved later by Management', async () => {
+  const lr = await ok('tech', 'POST', '/leaves', { fromDate: '2027-03-10', toDate: '2027-03-10', type: 'UNPAID', reason: 'Reconsider me' });
+  await ok('director', 'POST', `/leaves/${lr.id}/reject`, {});
+  const rej = await ok('director', 'GET', '/leaves?scope=rejected');
+  assert.ok(rej.some((x: any) => x.id === lr.id));
+  assert.equal((await call('tech', 'POST', `/leaves/${lr.id}/reopen`, {})).status, 403, 'not your own');
+  await ok('director', 'POST', `/leaves/${lr.id}/reopen`, {});
+  assert.ok((await ok('director', 'GET', '/leaves?scope=approvals')).some((x: any) => x.id === lr.id), 'back in approvals');
+  await ok('director', 'POST', `/leaves/${lr.id}/reject`, {});
+  // approved straight from rejected
+  const a = await ok('director', 'POST', `/leaves/${lr.id}/approve`, {});
+  assert.equal(a.status, 'APPROVED');
+  assert.equal((await call('director', 'POST', `/leaves/${lr.id}/reject`, {})).status, 400, 'an approved one cannot be rejected again');
+  // a rejected request that now clashes with another leave cannot come back
+  const b = await ok('tech', 'POST', '/leaves', { fromDate: '2027-03-12', toDate: '2027-03-12', type: 'UNPAID' });
+  await ok('director', 'POST', `/leaves/${b.id}/reject`, {});
+  await ok('tech', 'POST', '/leaves', { fromDate: '2027-03-12', toDate: '2027-03-12', type: 'UNPAID', reason: 'again' });
+  assert.equal((await call('director', 'POST', `/leaves/${b.id}/reopen`, {})).status, 400);
+});
