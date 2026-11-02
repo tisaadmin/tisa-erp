@@ -123,7 +123,10 @@ function Leaves() {
   const { can } = useAuth();
   const mine = useGet<any[]>('/leaves', { scope: 'mine' });
   const approvals = useGet<any[]>('/leaves', { scope: 'approvals' });
-  const rejected = useGet<any[]>(can('leaves:approve') || can('leaves:balances') ? '/leaves' : null, { scope: 'rejected' });
+  const { user } = useAuth();
+  // only Management (and the Super Admin) may take up a rejected leave again
+  const management = user?.roleName === 'Management' || !!user?.permissions.includes('*');
+  const rejected = useGet<any[]>(management ? '/leaves' : null, { scope: 'rejected' });
   const myBal = useGet<{ balances: Record<string, number> }>('/leave-balances/me');
   const [apply, setApply] = useState<any>(null);
   const hr = can('leaves:balances');

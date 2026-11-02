@@ -1,3 +1,4 @@
+import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { Router, type Request } from 'express';
 import fs from 'node:fs';
 import { and, asc, desc, eq, gte, ilike, inArray, isNotNull, isNull, lte, ne, or, type SQL } from 'drizzle-orm';
@@ -181,10 +182,8 @@ r.get('/leaves', requirePerm('leaves:view'), async (req, res) => {
       : team.length ? and(eq(leaveRequests.status, 'PENDING'), inArray(leaveRequests.userId, team)) : eq(leaveRequests.id, '__none__');
   }
   if (scope === 'rejected') {
-    // rejected requests that Management / the manager may reopen and approve after all
-    const team = await teamIds(req.user.id);
-    where = can(req.user, 'leaves:approve') ? eq(leaveRequests.status, 'REJECTED')
-      : team.length ? and(eq(leaveRequests.status, 'REJECTED'), inArray(leaveRequests.userId, team)) : eq(leaveRequests.id, '__none__');
+    // rejected requests that only Management may reopen or approve after all
+    where = isManagement(req.user) ? eq(leaveRequests.status, 'REJECTED') : eq(leaveRequests.id, '__none__');
   }
   if (scope === 'all') {
     if (!can(req.user, 'leaves:balances')) throw forbidden();
@@ -260,6 +259,9 @@ async function lockedMonths(months: string[]) {
   return rows.map((x) => x.month);
 }
 
+/** Only the Management role (directors) — and the Super Admin — may take up a rejected leave again; not reporting managers, HR or other approvers. */
+const isManagement = (u: { roleName: string; permissions: string[] }) => u.roleName === 'Management' || isSuperAdminPerms(u.permissions);
+
 /** A rejected request taken up again: back to pending (reopen), or approved straight away. Another leave on the same dates blocks it. */
 async function assertNoOverlap(lr: { id: string; userId: string; fromDate: string; toDate: string }) {
   const overlap = await db.query.leaveRequests.findFirst({ where: and(eq(leaveRequests.userId, lr.userId), inArray(leaveRequests.status, ['PENDING', 'APPROVED']), lte(leaveRequests.fromDate, lr.toDate), gte(leaveRequests.toDate, lr.fromDate), ne(leaveRequests.id, lr.id)) });
@@ -271,7 +273,7 @@ r.post('/leaves/:id/reopen', async (req, res) => {
   if (!lr) throw notFound('Leave request');
   if (lr.status !== 'REJECTED') throw badRequest(`Only a rejected request can be reopened — this one is ${lr.status.toLowerCase()}`);
   if (lr.userId === req.user.id) throw forbidden('You cannot reopen your own leave');
-  if (!(can(req.user, 'leaves:approve') || (await manages(req.user.id, lr.userId)))) throw forbidden();
+  if (!isManagement(req.user)) throw forbidden('Only Management can reopen a rejected leave');
   await assertNoOverlap(lr);
   await db.update(leaveRequests).set({ status: 'PENDING', approverId: null }).where(eq(leaveRequests.id, lr.id));
   await notifyUsers([lr.userId], { title: 'Leave request reopened', body: `${lr.fromDate} → ${lr.toDate} is being reconsidered`, type: 'LEAVE', link: '/attendance?tab=leaves' });
@@ -289,6 +291,7 @@ r.post('/leaves/:id/:decision', async (req, res) => {
   if (lr.status !== 'PENDING' && !reconsider) throw badRequest('Already decided');
   if (lr.userId === req.user.id) throw forbidden('You cannot approve your own leave');
   if (!(can(req.user, 'leaves:approve') || (await manages(req.user.id, lr.userId)))) throw forbidden();
+  if (reconsider && !isManagement(req.user)) throw forbidden('Only Management can approve a rejected leave');
   if (reconsider) await assertNoOverlap(lr);
   const status = decision === 'approve' ? 'APPROVED' : 'REJECTED';
   if (status === 'APPROVED') {

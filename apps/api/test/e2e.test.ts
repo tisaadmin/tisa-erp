@@ -2142,6 +2142,12 @@ test('quotation prices: raise / lower all selling rates by %, in place or as a n
 test('rejected leave can be reopened or approved later by Management', async () => {
   const lr = await ok('tech', 'POST', '/leaves', { fromDate: '2027-03-10', toDate: '2027-03-10', type: 'UNPAID', reason: 'Reconsider me' });
   await ok('director', 'POST', `/leaves/${lr.id}/reject`, {});
+  // strictly Management: not the reporting manager / Service Manager, nor HR
+  for (const who of ['svc', 'hr']) {
+    assert.equal((await call(who, 'POST', `/leaves/${lr.id}/reopen`, {})).status, 403, `${who} cannot reopen`);
+    assert.equal((await call(who, 'POST', `/leaves/${lr.id}/approve`, {})).status, 403, `${who} cannot approve a rejected leave`);
+    assert.equal((await ok(who, 'GET', '/leaves?scope=rejected')).length, 0);
+  }
   const rej = await ok('director', 'GET', '/leaves?scope=rejected');
   assert.ok(rej.some((x: any) => x.id === lr.id));
   assert.equal((await call('tech', 'POST', `/leaves/${lr.id}/reopen`, {})).status, 403, 'not your own');
