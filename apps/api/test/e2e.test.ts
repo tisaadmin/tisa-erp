@@ -2164,3 +2164,16 @@ test('rejected leave can be reopened or approved later by Management', async () 
   await ok('tech', 'POST', '/leaves', { fromDate: '2027-03-12', toDate: '2027-03-12', type: 'UNPAID', reason: 'again' });
   assert.equal((await call('director', 'POST', `/leaves/${b.id}/reopen`, {})).status, 400);
 });
+
+test('quotation sent back with remarks: remarks are required, kept in the history and sent to the sender', async () => {
+  const q = await ok('sales', 'POST', '/quotations', { clientId: ctx.client.id, siteId: ctx.site.id, subject: 'Remarks', lines: [{ itemId: ctx.cam.id, qty: 2, rate: 1000, costRate: 900 }] });
+  await ok('sales', 'POST', `/quotations/${q.id}/status`, { status: 'PENDING_APPROVAL' });
+  assert.equal((await call('director', 'POST', `/quotations/${q.id}/status`, { status: 'DRAFT' })).status, 400, 'remarks needed');
+  await ok('director', 'POST', `/quotations/${q.id}/status`, { status: 'DRAFT', comment: 'Margin too low — make it 25%' });
+  const full = await ok('sales', 'GET', `/quotations/${q.id}`);
+  assert.equal(full.status, 'DRAFT');
+  assert.equal(full.history[0].sentBack, true); assert.equal(full.history[0].comment, 'Margin too low — make it 25%');
+  const notes = await ok('sales', 'GET', '/notifications');
+  const list = Array.isArray(notes) ? notes : notes.data;
+  assert.ok(list.some((n: any) => /sent back/.test(n.title) && /Margin too low/.test(n.body ?? '')), 'sender notified with the remarks');
+});

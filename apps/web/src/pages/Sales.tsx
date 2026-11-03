@@ -9,7 +9,7 @@ import { RequisitionBanner, useRequisition } from '../components/FromRequisition
 import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Select, Spinner, Status, Table, Textarea, cx } from '../components/ui';
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { fmtDate, inr, label, qty, STAGE_LABEL, toInputDate } from '../lib/format';
+import { fmtDate, fmtDateTime, inr, label, qty, STAGE_LABEL, toInputDate } from '../lib/format';
 import { useAction, useClients, useGet, useSites, useItems, type Page, useListQuery } from '../lib/hooks';
 import { OrderAccessoriesCard } from './Accessories';
 import { OrderInstallationCard } from '../components/Installation';
@@ -151,6 +151,8 @@ export function QuotationDetail() {
   const { data: q } = useGet<any>(`/quotations/${id}`);
   const [conv, setConv] = useState<{ clientPoNo: string; clientPoDate: string; paymentTerms: Term[]; isProject?: boolean } | null>(null);
   const status = useAction((s: string) => api(`/quotations/${id}/status`, { body: { status: s } }), { success: 'Updated', invalidate: [['/quotations']] });
+  const [sendBack, setSendBack] = useState<string | null>(null);
+  const doSendBack = useAction(() => api(`/quotations/${id}/status`, { body: { status: 'DRAFT', comment: sendBack } }), { success: 'Sent back with your remarks', invalidate: [['/quotations']], onSuccess: () => setSendBack(null) });
   const revise = useAction(() => api(`/quotations/${id}/revise`, { body: {} }), { success: 'Revision created', invalidate: [['/quotations']], onSuccess: (r: any) => nav(`/quotations/${r.id}/edit`) });
   const convert = useAction(() => api(`/quotations/${id}/convert`, { body: { ...conv, clientPoDate: conv?.clientPoDate || null } }), { success: 'Order created', invalidate: [['/quotations'], ['/orders']], onSuccess: (o: any) => nav(`/orders/${o.id}`) });
   if (!q) return <Spinner />;
@@ -163,12 +165,23 @@ export function QuotationDetail() {
           {editable && can('quotations:edit') && <Link to={`/quotations/${q.id}/edit`}><Button>Edit</Button></Link>}
           {!['CONVERTED', 'REVISED'].includes(q.status) && can('quotations:edit') && <AdjustPricesButton q={q} />}
           {!['CONVERTED', 'REVISED'].includes(q.status) && can('quotations:create') && <Button loading={revise.isPending} onClick={() => revise.mutate(undefined)}>Create revision</Button>}
-          {(QUOTE_NEXT[q.status] ?? []).filter((a) => !a.perm || can(a.perm)).map((a) => <Button key={a.to} variant={a.variant ?? 'secondary'} loading={status.isPending} onClick={() => status.mutate(a.to)}>{a.label}</Button>)}
+          {(QUOTE_NEXT[q.status] ?? []).filter((a) => !a.perm || can(a.perm)).map((a) => <Button key={a.to} variant={a.variant ?? 'secondary'} loading={status.isPending}
+            onClick={() => (q.status === 'PENDING_APPROVAL' && a.to === 'DRAFT' ? setSendBack('') : status.mutate(a.to))}>{a.label}</Button>)}
           {['ACCEPTED', 'SENT', 'APPROVED'].includes(q.status) && can('orders:create') && <Button variant="primary" onClick={() => setConv({ clientPoNo: '', clientPoDate: '', paymentTerms: q.paymentTerms ?? [{ stage: 'ADVANCE', percent: 100 }] })}>Convert to order</Button>}
         </>} />
       <Card>
         <KV cols={4} items={[['Client', q.client ? <Link className="text-brand-700" to={`/clients/${q.client.id}`}>{q.client.name}</Link> : null], ['Lead', q.lead?.companyName], ['Site', q.site?.name], ['Date', fmtDate(q.date)], ['Valid until', fmtDate(q.validUntil)], ['Place of supply', q.placeOfSupply], ['Revision', q.revision ? `R${q.revision}` : 'Original']]} />
       </Card>
+      {(() => {
+        // the latest send-back, shown to the sender until the quotation moves on
+        const last = (q.history ?? []).find((h: any) => h.sentBack || h.label === 'Submitted for approval' || h.label === 'Approved');
+        return q.status === 'DRAFT' && last?.sentBack ? (
+          <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+            <div className="font-semibold">Sent back by {last.by ?? 'Management'} · {fmtDateTime(last.at)}{last.quote ? ` (on ${last.quote})` : ''}</div>
+            {last.comment ? <div className="mt-1 whitespace-pre-wrap">“{last.comment}”</div> : <div className="mt-1 text-red-700">No remarks were given.</div>}
+            <div className="mt-1 text-xs text-red-700">Make the changes with <b>Edit</b>, then <b>Submit for approval</b> again.</div>
+          </div>) : null;
+      })()}
       {q.status === 'DRAFT' && q.costingSummary && (q.costingSummary.belowTarget
         ? <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">Gross profit {q.costingSummary.gpPct}% is below the {q.costingSummary.minGpPct}% target — Management has to approve this quotation before it goes to the client. Use <b>Submit for approval</b>.</div>
         : <div className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-900">Gross profit {q.costingSummary.gpPct}% meets the {q.costingSummary.minGpPct}% target — no approval needed; send it to the client.</div>)}
@@ -186,6 +199,19 @@ export function QuotationDetail() {
           </div>
           <div><div className="label">Payment schedule (drives running bills)</div><PaymentTermsEditor terms={conv.paymentTerms} onChange={(paymentTerms) => setConv({ ...conv, paymentTerms })} /></div>
         </div>}
+      </Modal>
+      {(q.history?.length ?? 0) > 0 && (
+        <Card title="Approval history">
+          <ul className="space-y-2 text-sm">{q.history.map((h: any, i: number) => (
+            <li key={i}><span className={cx('font-medium', h.sentBack && 'text-red-700')}>{h.label}</span>{h.by && ` · ${h.by}`} <span className="text-xs text-slate-400">{fmtDateTime(h.at)}{h.quote ? ` · ${h.quote}` : ''}</span>
+              {h.comment && <div className="whitespace-pre-wrap text-slate-600">“{h.comment}”</div>}</li>
+          ))}</ul>
+        </Card>
+      )}
+      <Modal open={sendBack !== null} onClose={() => setSendBack(null)} title={`Send ${q.number} back`}
+        footer={<><Button onClick={() => setSendBack(null)}>Cancel</Button><Button variant="danger" disabled={!sendBack?.trim()} loading={doSendBack.isPending} onClick={() => doSendBack.mutate(undefined)}>Send back</Button></>}>
+        <Field label="Remarks for the sender (required)"><Textarea rows={4} autoFocus value={sendBack ?? ''} onChange={(e) => setSendBack(e.target.value)} placeholder="e.g. Margin on the cameras is too low — revise to 25%, and add installation charges" /></Field>
+        <p className="mt-2 text-xs text-slate-500">They are notified with these remarks and see them at the top of the quotation.</p>
       </Modal>
       <RecordTeam entityType="QUOTATION" entityId={q.id} label={`Quotation ${q.number}${q.client ? ` — ${q.client.name}` : ''}`} />
     </div>

@@ -65,7 +65,7 @@ r.get('/approvals/inbox', async (req, res) => {
         sub: [q.subject, q.site?.name].filter(Boolean).join(' · '), note: `Gross profit ${sum.gpPct}% (target ${sum.minGpPct}%) · cost ${rs(sum.totalCost)}`,
         lines: q.items.slice(0, 8).map((l) => `${l.description} — ${fmtQty(l.qty)} ${l.unit} × ${rs(l.rate)}${l.costRate != null ? ` (cost ${rs(l.costRate)})` : ''}`), link: `/quotations/${q.id}`,
         approve: { label: 'Approve', path: `/quotations/${q.id}/status`, body: { status: 'APPROVED' } },
-        reject: { label: 'Send back', path: `/quotations/${q.id}/status`, body: { status: 'DRAFT' }, field: 'comment', required: false },
+        reject: { label: 'Send back', path: `/quotations/${q.id}/status`, body: { status: 'DRAFT' }, field: 'comment', required: true },
       });
     }
   })());

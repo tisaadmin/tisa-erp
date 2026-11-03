@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { db, type Tx } from '../db';
 import {
-  clients, departments, deliveryChallanItems, items, requisitions, vendors, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
+  auditLogs, users, clients, departments, deliveryChallanItems, items, requisitions, vendors, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
 } from '../db/schema';
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
@@ -114,11 +114,34 @@ r.get('/quotations/:id', requirePerm('quotations:view'), async (req, res) => {
   if (!can(req.user, 'quotations:costing') && !can(req.user, 'quotations:approve')) {
     // costs and margins are for Sales / management only
     const { costing: _c, ...rest } = q;
-    return res.json({ ...rest, items: q.items.map(({ costRate: _r, costVendorId: _v, costVendor: _n, ...i }) => i) });
+    return res.json({ ...rest, history: await quoteHistory(q), items: q.items.map(({ costRate: _r, costVendorId: _v, costVendor: _n, ...i }) => i) });
   }
   const cfg = await costingConfig();
-  res.json({ ...q, costingSummary: costingSummary(q, q.items, cfg.minGpPct, await serviceItemIds(db, q.items)) });
+  res.json({ ...q, history: await quoteHistory(q), costingSummary: costingSummary(q, q.items, cfg.minGpPct, await serviceItemIds(db, q.items)) });
 });
+
+const QUOTE_ACTION: Record<string, string> = { PENDING_APPROVAL: 'Submitted for approval', APPROVED: 'Approved', DRAFT: 'Sent back', SENT: 'Marked sent to client', ACCEPTED: 'Client accepted', REJECTED: 'Client rejected' };
+/** Who did what on this quotation and its earlier revisions — approvals, send-backs with the approver's remarks, price changes. */
+async function quoteHistory(q: { id: string; parentId: string | null; number: string }) {
+  const chain: { id: string; number: string }[] = [{ id: q.id, number: q.number }];
+  let parent = q.parentId;
+  while (parent && chain.length < 20) {
+    const p = await db.query.quotations.findFirst({ where: eq(quotations.id, parent), columns: { id: true, number: true, parentId: true } });
+    if (!p) break;
+    chain.push({ id: p.id, number: p.number }); parent = p.parentId;
+  }
+  const numberOf = new Map(chain.map((c) => [c.id, c.number]));
+  const logs = await db.select({ entityId: auditLogs.entityId, action: auditLogs.action, userId: auditLogs.userId, data: auditLogs.data, at: auditLogs.createdAt }).from(auditLogs)
+    .where(and(eq(auditLogs.entity, 'quotation'), inArray(auditLogs.entityId, chain.map((c) => c.id)), inArray(auditLogs.action, ['status', 'adjust_prices', 'revise', 'create']))).orderBy(desc(auditLogs.createdAt)).limit(100);
+  const ids = [...new Set(logs.map((l) => l.userId).filter((x): x is string => !!x))];
+  const names = new Map((ids.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, ids)) : []).map((u) => [u.id, u.name]));
+  return logs.map((l) => {
+    const d = (l.data ?? {}) as { from?: string; to?: string; comment?: string | null; percent?: number };
+    const label = l.action === 'status' ? (d.to === 'DRAFT' && d.from !== 'PENDING_APPROVAL' ? 'Reopened' : QUOTE_ACTION[d.to ?? ''] ?? d.to ?? 'Status changed')
+      : l.action === 'adjust_prices' ? `Prices changed by ${d.percent != null && d.percent > 0 ? '+' : ''}${d.percent}%` : l.action === 'revise' ? 'Revision created' : 'Created';
+    return { at: l.at, label, by: l.userId ? names.get(l.userId) ?? null : null, comment: d.comment ?? null, sentBack: l.action === 'status' && d.to === 'DRAFT' && d.from === 'PENDING_APPROVAL', quote: l.entityId !== q.id ? numberOf.get(l.entityId ?? '') ?? null : null };
+  });
+}
 
 /** Rate card for costing a quotation (manpower day rates, transport presets, service %, GP target). */
 r.get('/quotations-costing/config', requirePerm('quotations:view'), async (_req, res) => { res.json(await costingConfig()); });
@@ -204,10 +227,12 @@ const QUOTE_FLOW: Record<string, string[]> = {
 };
 
 r.post('/quotations/:id/status', requirePerm('quotations:edit'), async (req, res) => {
-  const { status } = z.object({ status: z.string() }).parse(req.body);
+  const { status, comment: c0 } = z.object({ status: z.string(), comment: z.string().trim().max(2000).nullish() }).parse(req.body);
+  const comment = c0 || null;
   const q = await db.query.quotations.findFirst({ where: eq(quotations.id, req.params.id) });
   if (!q) throw notFound('Quotation');
   if (!QUOTE_FLOW[q.status]?.includes(status)) throw badRequest(`Cannot move quotation from ${q.status} to ${status}`);
+  if (status === 'DRAFT' && q.status === 'PENDING_APPROVAL' && !comment) throw badRequest('Write your remarks for the sender — what should be changed');
   if (status === 'APPROVED' && !req.user.permissions.some((p) => p === '*' || p === 'quotations:approve' || p === 'quotations:*')) {
     throw badRequest('Only users with quotation approval rights can approve');
   }
@@ -217,13 +242,13 @@ r.post('/quotations/:id/status', requirePerm('quotations:edit'), async (req, res
     .where(eq(quotations.id, q.id)).returning();
   const cfg = await costingConfig();
   const summary = costingSummary(q, items0, cfg.minGpPct, await serviceItemIds(db, items0));
-  audit(req, 'status', 'quotation', q.id, { from: q.status, to: status, costing: ['PENDING_APPROVAL', 'APPROVED'].includes(status) ? summary : undefined });
+  audit(req, 'status', 'quotation', q.id, { from: q.status, to: status, comment, costing: ['PENDING_APPROVAL', 'APPROVED'].includes(status) ? summary : undefined });
   if (status === 'PENDING_APPROVAL') {
     // the costing summary goes to management with the approval request
     await notifyPermission('quotations:approve', { title: `Quotation ${q.number} for approval${summary.belowTarget ? ' ⚠ low margin' : ''}`, body: summaryText(summary), type: 'APPROVAL', link: `/quotations/${q.id}`, entityType: 'QUOTATION', entityId: q.id }, req.user.id);
   }
   if (status === 'APPROVED' || (status === 'DRAFT' && q.status === 'PENDING_APPROVAL')) {
-    await notifyUsers([q.createdById], { title: `Quotation ${q.number} ${status === 'APPROVED' ? 'approved' : 'sent back'}`, body: status === 'APPROVED' ? 'You can send it to the client' : 'Check the costing / prices and resubmit', type: 'APPROVAL', link: `/quotations/${q.id}`, entityType: 'QUOTATION', entityId: q.id }, req.user.id);
+    await notifyUsers([q.createdById], { title: `Quotation ${q.number} ${status === 'APPROVED' ? 'approved' : 'sent back'} by ${req.user.name}`, body: comment ? `“${comment}”` : status === 'APPROVED' ? 'You can send it to the client' : 'Check the costing / prices and resubmit', type: 'APPROVAL', link: `/quotations/${q.id}`, entityType: 'QUOTATION', entityId: q.id }, req.user.id);
   }
   res.json(row);
 });
