@@ -20,7 +20,10 @@ export async function getFix(): Promise<Fix> {
   let pos = await Location.getLastKnownPositionAsync({ maxAge: 60_000, requiredAccuracy: 100 }).catch(() => null);
   // balanced (Wi-Fi / mobile network + GPS) answers in about a second and is accurate to tens of metres — enough for the site geofence
   if (!pos) pos = (await withTimeout(Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }), 5000)) ?? null;
-  if (!pos) pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+  // some phones (Samsung with Google Location Accuracy off, battery saver) never answer — don't wait forever
+  if (!pos) pos = (await withTimeout(Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low }), 12000).catch(() => undefined)) ?? null;
+  if (!pos) pos = await Location.getLastKnownPositionAsync().catch(() => null);
+  if (!pos) throw new Error('Could not get your location. Step outside or near a window and try again. On Samsung: Settings → Location → Location services → turn on Google Location Accuracy, and allow Tisa ERP "Precise" location.');
   let address: string | undefined;
   try {
     const res = await withTimeout(Location.reverseGeocodeAsync({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }), 1500);
@@ -30,14 +33,28 @@ export async function getFix(): Promise<Fix> {
   return { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: pos.coords.accuracy ?? null, address, capturedAt: new Date().toISOString() };
 }
 
+const shrink = async (uri: string) => (await ImageManipulator.manipulateAsync(uri, [{ resize: { width: 800 } }], { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG })).uri;
+
 /** Opens the camera (never the gallery, so photos are taken live at site) and compresses the result. */
 export async function takePhoto(opts: { front?: boolean } = {}): Promise<string | null> {
   const perm = await ImagePicker.requestCameraPermissionsAsync();
   if (!perm.granted) throw new Error('Camera permission is required.');
   const r = await ImagePicker.launchCameraAsync({ quality: 0.5, cameraType: opts.front ? ImagePicker.CameraType.front : ImagePicker.CameraType.back, exif: false });
   if (r.canceled || !r.assets?.[0]) return null;
-  const small = await ImageManipulator.manipulateAsync(r.assets[0].uri, [{ resize: { width: 800 } }], { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG });
-  return small.uri;
+  return shrink(r.assets[0].uri);
+}
+
+/**
+ * Android may close the app while the camera is open (Samsung and low-memory phones do this) — the app restarts
+ * and the photo would be lost. This picks up a photo taken that way, if there is one.
+ */
+export async function recoverPhoto(): Promise<string | null> {
+  try {
+    const r = await ImagePicker.getPendingResultAsync();
+    const one = Array.isArray(r) ? r[0] : r;
+    if (!one || !('assets' in one) || one.canceled || !one.assets?.[0]) return null;
+    return await shrink(one.assets[0].uri);
+  } catch { return null; }
 }
 
 /** Receipt: camera or gallery. */

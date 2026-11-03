@@ -3,7 +3,11 @@ import { Text } from 'react-native';
 import { Badge, Btn, C, Card, s, useFetch, useRun } from './ui';
 import { api, filePart } from '../lib/api';
 import { fmtTime } from '../lib/format';
-import { getFix, takePhoto, warmLocation } from '../lib/geo';
+import * as SecureStore from 'expo-secure-store';
+import { getFix, recoverPhoto, takePhoto, warmLocation } from '../lib/geo';
+
+/** set while the check-in camera is open, so a check-in survives Android closing the app behind the camera */
+const PENDING = 'tisa.pendingCheckIn';
 
 type Att = { checkInAt?: string; checkOutAt?: string; status: string; onSite: boolean; site?: { name: string } | null; distanceFromSite?: number; workMinutes?: number } | null;
 
@@ -14,30 +18,53 @@ export function AttendanceCard({ compact }: { compact?: boolean }) {
   const [step, setStep] = useState<string | null>(null);
   const pending = !att.data?.checkInAt || !att.data?.checkOutAt;
   useEffect(() => { if (att.data !== undefined && pending) warmLocation(); }, [att.data === undefined, pending]); // eslint-disable-line react-hooks/exhaustive-deps
+  const send = async (kind: 'check-in' | 'check-out', photo: string | null, fixP: ReturnType<typeof getFix>) => {
+    const fd = new FormData();
+    if (photo) fd.append('photo', filePart(photo, 'selfie.jpg'));
+    setStep('Getting your location…');
+    const fix = await fixP;
+    setStep(kind === 'check-in' ? 'Checking you in…' : 'Checking you out…');
+    fd.append('latitude', String(fix.latitude)); fd.append('longitude', String(fix.longitude));
+    if (fix.accuracy) fd.append('accuracy', String(fix.accuracy));
+    if (fix.address) fd.append('address', fix.address);
+    fd.append('capturedAt', fix.capturedAt);
+    const row = await api(`/attendance/${kind}`, { form: fd });
+    att.setData((cur) => ({ ...(cur ?? {}), ...(row as object) }) as Att);
+    att.reload();
+  };
   const mark = (kind: 'check-in' | 'check-out') => run(async () => {
     try {
       // the GPS fix runs while the selfie is being taken
       setStep('Getting your location…');
       const fixP = getFix();
       fixP.catch(() => {});
-      const fd = new FormData();
       // selfie at check-in only; check-out records the location alone
+      let photo: string | null = null;
       if (kind === 'check-in') {
-        const photo = await takePhoto({ front: true });
+        setStep('Opening the camera…');
+        await SecureStore.setItemAsync(PENDING, String(Date.now())).catch(() => {});
+        photo = await takePhoto({ front: true });
+        await SecureStore.deleteItemAsync(PENDING).catch(() => {});
         if (!photo) return;
-        fd.append('photo', filePart(photo, 'selfie.jpg'));
       }
-      const fix = await fixP;
-      setStep(kind === 'check-in' ? 'Checking you in…' : 'Checking you out…');
-    fd.append('latitude', String(fix.latitude)); fd.append('longitude', String(fix.longitude));
-    if (fix.accuracy) fd.append('accuracy', String(fix.accuracy));
-    if (fix.address) fd.append('address', fix.address);
-    fd.append('capturedAt', fix.capturedAt);
-      const row = await api(`/attendance/${kind}`, { form: fd });
-      att.setData((cur) => ({ ...(cur ?? {}), ...(row as object) }) as Att);
-      att.reload();
+      await send(kind, photo, fixP);
     } finally { setStep(null); }
   });
+  // the app was closed behind the camera: finish the check-in with the selfie that was taken
+  useEffect(() => {
+    if (att.data === undefined || att.data?.checkInAt) return;
+    (async () => {
+      const at = Number(await SecureStore.getItemAsync(PENDING).catch(() => null));
+      if (!at) return;
+      await SecureStore.deleteItemAsync(PENDING).catch(() => {});
+      if (Date.now() - at > 15 * 60_000) return;
+      const photo = await recoverPhoto();
+      if (!photo) return;
+      run(async () => {
+        try { const fixP = getFix(); fixP.catch(() => {}); await send('check-in', photo, fixP); } finally { setStep(null); }
+      }, 'Checked in');
+    })();
+  }, [att.data === undefined]); // eslint-disable-line react-hooks/exhaustive-deps
   const a = att.data;
   return (
     <Card title="Attendance" right={a?.status ? <Badge text={a.status} /> : undefined}>
