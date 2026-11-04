@@ -64,7 +64,8 @@ export function AttendancePage() {
             { key: 'user', label: 'Employee', render: (r: any) => <>{r.user.name}<div className="text-xs text-slate-400">{r.user.employeeCode}</div></> },
             ...(tab === 'log' ? [{ key: 'date', label: 'Date', render: (r: any) => fmtDate(r.date) }] : []),
             { key: 'in', label: 'In', render: (r: any) => r.checkInAt ? <>{fmtTime(r.checkInAt)} {r.checkInPhoto && <a href={pathUrl(r.checkInPhoto)} target="_blank" rel="noreferrer" className="text-xs text-brand-700">photo</a>}</> : '—' },
-            { key: 'out', label: 'Out', render: (r: any) => fmtTime(r.checkOutAt) },
+            { key: 'out', label: 'Out', render: (r: any) => r.checkOutAt ? <>{fmtTime(r.checkOutAt)} {r.checkOutPhoto && <a href={pathUrl(r.checkOutPhoto)} target="_blank" rel="noreferrer" className="text-xs text-brand-700">photo</a>}
+              {r.checkOutLat && <a className="ml-1 text-xs text-brand-700" target="_blank" rel="noreferrer" href={`https://maps.google.com/?q=${r.checkOutLat},${r.checkOutLng}`} title="Where they checked out"><MapPin className="inline size-3" />map</a>}</> : '—' },
             { key: 'hours', label: 'Hours', render: (r: any) => (r.workMinutes ? `${Math.floor(r.workMinutes / 60)}h ${r.workMinutes % 60}m` : '—') },
             { key: 'where', label: 'Location', render: (r: any) => r.checkInLat ? <a className="text-brand-700 hover:underline" target="_blank" rel="noreferrer" href={`https://maps.google.com/?q=${r.checkInLat},${r.checkInLng}`}><MapPin className="inline size-3" /> {r.site?.name ?? 'Map'}</a> : '—' },
             { key: 'onSite', label: 'Geofence', render: (r: any) => r.site ? (r.onSite ? <Badge t="green">On site</Badge> : <Badge t="amber">{Math.round(r.distanceFromSite ?? 0)} m away</Badge>) : '' },
