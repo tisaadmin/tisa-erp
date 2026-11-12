@@ -10,7 +10,9 @@ import { Btn, C, Input, s } from './ui';
 export function ApprovalCard({ item, onDone, compact, noLink }: { item: InboxItem; onDone: () => void; compact?: boolean; noLink?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [asking, setAsking] = useState(false);
+  // which reasoned action is open: reject, or send back
+  const [asking, setAsking] = useState<false | 'reject' | 'sendBack'>(false);
+  const ask = asking ? (asking === 'sendBack' && item.sendBack ? item.sendBack : item.reject) : item.reject;
   const [reason, setReason] = useState('');
   const [open, setOpen] = useState(!compact);
   const go = async (path: string, body: Record<string, unknown>) => {
@@ -33,18 +35,19 @@ export function ApprovalCard({ item, onDone, compact, noLink }: { item: InboxIte
       {!!err && <Text style={{ color: C.red, fontSize: 13 }}>{err}</Text>}
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
         <Btn style={{ flex: 1 }} variant="success" icon="checkmark" title={item.approve.label} busy={busy} onPress={() => go(item.approve.path, item.approve.body)} />
-        <Btn style={{ flex: 1 }} variant="secondary" icon="arrow-undo" title={item.reject.label} busy={busy} onPress={() => setAsking(true)} />
+        {item.sendBack && <Btn style={{ flex: 1 }} variant="secondary" icon="arrow-undo" title={item.sendBack.label} busy={busy} onPress={() => setAsking('sendBack')} />}
+        <Btn style={{ flex: 1 }} variant="secondary" icon={item.sendBack ? 'close' : 'arrow-undo'} title={item.reject.label} busy={busy} onPress={() => setAsking('reject')} />
       </View>
-      <Modal visible={asking} transparent animationType="fade" onRequestClose={() => setAsking(false)}>
+      <Modal visible={!!asking} transparent animationType="fade" onRequestClose={() => setAsking(false)}>
         <View style={{ flex: 1, backgroundColor: 'rgba(15,23,42,0.45)', justifyContent: 'center', padding: 20 }}>
           <View style={[s.card, { gap: 10 }]}>
-            <Text style={s.cardTitle}>{item.reject.label}: {item.number ?? item.title}</Text>
-            <Input autoFocus multiline placeholder={item.reject.required ? 'Reason (required)' : 'Reason (optional)'} value={reason} onChangeText={setReason} />
+            <Text style={s.cardTitle}>{ask.label}: {item.number ?? item.title}</Text>
+            <Input autoFocus multiline placeholder={asking === 'sendBack' ? 'What should be changed (required)' : ask.required ? 'Reason (required)' : 'Reason (optional)'} value={reason} onChangeText={setReason} />
             {!!err && <Text style={{ color: C.red, fontSize: 13 }}>{err}</Text>}
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <Btn style={{ flex: 1 }} variant="secondary" title="Back" onPress={() => { setAsking(false); setErr(null); }} />
-              <Btn style={{ flex: 1 }} variant="danger" title={item.reject.label} busy={busy} disabled={item.reject.required && reason.trim().length < 3}
-                onPress={() => go(item.reject.path, { ...item.reject.body, ...(reason.trim() ? { [item.reject.field]: reason.trim() } : {}) })} />
+              <Btn style={{ flex: 1 }} variant={asking === 'sendBack' ? 'primary' : 'danger'} title={ask.label} busy={busy} disabled={ask.required && reason.trim().length < 3}
+                onPress={() => go(ask.path, { ...ask.body, ...(reason.trim() ? { [ask.field]: reason.trim() } : {}) })} />
             </View>
           </View>
         </View>

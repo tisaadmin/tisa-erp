@@ -252,7 +252,7 @@ export function RequisitionsPage() {
   const [sp, setSp] = useSearchParams();
   const sites = useSites();
   const items = useItems();
-  const [q, setQ] = useListQuery({ page: 1, pageSize: 50, status: 'PENDING,APPROVED,IN_PROGRESS' });
+  const [q, setQ] = useListQuery({ page: 1, pageSize: 50, status: 'PENDING,RETURNED,APPROVED,IN_PROGRESS' });
   const list = useGet<Page<any>>('/requisitions', q, { refetchInterval: 60_000 });
   const [form, setForm] = useState<any>(null);
   const projects = useGet<{ id: string; number: string; site: { name: string } | null; client: { name: string } }[]>(form ? '/projects' : null, { all: can('orders:view') ? 1 : undefined });
@@ -266,7 +266,7 @@ export function RequisitionsPage() {
         actions={can('requisitions:create') && <Button variant="primary" icon={<Plus className="size-4" />} onClick={() => setForm({ type: 'MATERIAL', priority: 'MEDIUM', description: '', items: [{ itemId: null, description: '', qty: 1, unit: 'Nos' }] })}>New requisition</Button>} />
       <Card pad={false}>
         <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
-          <Select className="w-56" value={q.status} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} options={[{ value: 'PENDING,APPROVED,IN_PROGRESS', label: 'Open' }, ...['PENDING', 'APPROVED', 'IN_PROGRESS', 'FULFILLED', 'REJECTED'].map((s) => ({ value: s, label: label(s) }))]} placeholder="All" />
+          <Select className="w-56" value={q.status} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} options={[{ value: 'PENDING,RETURNED,APPROVED,IN_PROGRESS', label: 'Open' }, ...['PENDING', 'RETURNED', 'APPROVED', 'IN_PROGRESS', 'FULFILLED', 'REJECTED'].map((s) => ({ value: s, label: s === 'RETURNED' ? 'Sent back' : label(s) }))]} placeholder="All" />
           <Select className="w-44" value={q.type ?? ''} onChange={(e) => setQ({ ...q, type: e.target.value, page: 1 })} options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} placeholder="All types" />
           <label className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={q.unassigned === '1'} onChange={(e) => setQ({ ...q, unassigned: e.target.checked ? '1' : '', page: 1 })} /> Site not assigned</label>
           <DateFilter value={{ from: q.from, to: q.to, dateMode: q.dateMode }} onChange={(v) => setQ({ ...q, from: v.from ?? '', to: v.to ?? '', dateMode: v.dateMode ?? '', page: 1 })} />
@@ -321,14 +321,20 @@ export function RequisitionsPage() {
 
 export function RequisitionDetail() {
   const { id } = useParams();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
+  const [edit, setEdit] = useState<any>(null);
+  const resubmit = useAction(() => api(`/requisitions/${id}`, { method: 'PUT', body: {
+    type: edit.type, priority: edit.priority, description: edit.description, siteId: edit.orderId ? null : edit.siteId, clientId: edit.clientId, orderId: edit.orderId, ticketId: edit.ticketId,
+    items: edit.type === 'MATERIAL' ? edit.items.filter((i: any) => i.description && Number(i.qty) > 0).map((i: any) => ({ itemId: i.itemId, description: i.description, qty: Number(i.qty), unit: i.unit, excessAction: i.excessAction })) : [],
+  } }), { success: 'Resubmitted — the approver has been notified', invalidate: [['/requisitions']], onSuccess: () => setEdit(null) });
   const { data: r } = useGet<any>(`/requisitions/${id}`);
   const [note, setNote] = useState('');
   const [assign, setAssign] = useState<{ clientId: string | null; siteId: string | null } | null>(null);
   const act = useAction((a: string) => api(`/requisitions/${id}/${a}`, { body: { note } }), { success: 'Updated — requester notified', invalidate: [['/requisitions']], onSuccess: () => setNote('') });
   const doAssign = useAction(() => api(`/requisitions/${id}/assign`, { method: 'PATCH', body: assign }), { success: 'Client / site assigned', invalidate: [['/requisitions']], onSuccess: () => setAssign(null) });
   if (!r) return <Spinner />;
-  const actions: [string, string, any][] = r.status === 'PENDING' ? [['approve', 'Approve', 'success'], ['reject', 'Reject', 'danger']] : r.status === 'APPROVED' ? [['start', 'Mark in progress', 'secondary'], ['fulfil', 'Mark fulfilled', 'success'], ['reject', 'Reject', 'danger']] : r.status === 'IN_PROGRESS' ? [['fulfil', 'Mark fulfilled', 'success']] : [];
+  const mine = r.raisedById === user?.id;
+  const actions: [string, string, any][] = r.status === 'PENDING' ? [['approve', 'Approve', 'success'], ['send-back', 'Send back', 'secondary'], ['reject', 'Reject', 'danger']] : r.status === 'APPROVED' ? [['start', 'Mark in progress', 'secondary'], ['fulfil', 'Mark fulfilled', 'success'], ['reject', 'Reject', 'danger']] : r.status === 'IN_PROGRESS' ? [['fulfil', 'Mark fulfilled', 'success']] : [];
   const usable = ['APPROVED', 'IN_PROGRESS', 'FULFILLED'].includes(r.status);
   const q = `?requisitionId=${r.id}`;
   const convert: [string, string, string][] = [
@@ -342,8 +348,42 @@ export function RequisitionDetail() {
       <PageHeader log={<RecordLog entity="requisitions" id={r.id} createdById={r.raisedById} createdAt={r.createdAt} />} back="/requisitions" title={<>{r.number} <Status s={r.status} /></>} subtitle={`${label(r.type)} · ${r.client?.name ?? 'client not assigned'}${r.site ? ` · ${r.site.name}` : ''}`}
         actions={r.canAct && actions.length > 0 && <>
           <Input className="w-56" placeholder="Note to requester" value={note} onChange={(e) => setNote(e.target.value)} />
-          {actions.map(([a, l, v]) => <Button key={a} variant={v} loading={act.isPending} onClick={() => act.mutate(a)}>{l}</Button>)}
+          {actions.map(([a, l, v]) => <Button key={a} variant={v} loading={act.isPending} title={a === 'send-back' && !note.trim() ? 'Write what should be changed in the note first' : undefined}
+            onClick={() => (a === 'send-back' && !note.trim() ? toast.error('Write what should be changed in “Note to requester”, then Send back') : act.mutate(a))}>{l}</Button>)}
         </>} />
+      {r.status === 'RETURNED' && (
+        <div className="flex flex-wrap items-start gap-3 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900">
+          <div className="flex-1">
+            <div className="font-semibold">Sent back{r.actionBy?.name ? ` by ${r.actionBy.name}` : ''}{r.actionAt ? ` · ${fmtDateTime(r.actionAt)}` : ''}</div>
+            {r.actionNote && <div className="mt-1 whitespace-pre-wrap">“{r.actionNote}”</div>}
+            {!mine && <div className="mt-1 text-xs text-red-700">Waiting for {r.raisedBy?.name ?? 'the requester'} to make the changes and resubmit.</div>}
+          </div>
+          {mine && <Button variant="primary" onClick={() => setEdit({ ...r, items: r.items.map((i: any) => ({ itemId: i.itemId, description: i.description, qty: i.qty, unit: i.unit, excessAction: i.excessAction })) })}>Make changes & resubmit</Button>}
+        </div>
+      )}
+      <Modal open={!!edit} onClose={() => setEdit(null)} title={`Change ${r.number} and resubmit`} wide
+        footer={<><Button onClick={() => setEdit(null)}>Cancel</Button><Button variant="primary" loading={resubmit.isPending} disabled={!edit?.description?.trim()} onClick={() => resubmit.mutate(undefined)}>Resubmit</Button></>}>
+        {edit && <div className="space-y-3">
+          {r.actionNote && <div className="rounded bg-red-50 px-3 py-2 text-sm text-red-900">Asked for: “{r.actionNote}”</div>}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Priority"><Select value={edit.priority} onChange={(e) => setEdit({ ...edit, priority: e.target.value })} options={['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']} /></Field>
+            <Field label="Type"><Select value={edit.type} onChange={(e) => setEdit({ ...edit, type: e.target.value })} options={['MATERIAL', 'PENDING_WORK', 'REPAIR'].map((x) => ({ value: x, label: label(x) }))} /></Field>
+          </div>
+          <Field label="What is needed / pending?"><Textarea rows={3} value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} /></Field>
+          {edit.type === 'MATERIAL' && <div>
+            <div className="label">Materials</div>
+            <div className="space-y-2">{edit.items.map((i: any, k: number) => (
+              <div key={k} className="flex items-center gap-2">
+                <Input className="flex-1" value={i.description} placeholder="Description" onChange={(e) => setEdit({ ...edit, items: edit.items.map((x: any, j: number) => (j === k ? { ...x, description: e.target.value } : x)) })} />
+                <Input className="w-24 text-right" type="number" min={0} step="any" value={i.qty} onChange={(e) => setEdit({ ...edit, items: edit.items.map((x: any, j: number) => (j === k ? { ...x, qty: e.target.value } : x)) })} />
+                <Input className="w-20" value={i.unit} onChange={(e) => setEdit({ ...edit, items: edit.items.map((x: any, j: number) => (j === k ? { ...x, unit: e.target.value } : x)) })} />
+                <button type="button" className="text-slate-400 hover:text-red-600" onClick={() => setEdit({ ...edit, items: edit.items.filter((_: any, j: number) => j !== k) })} aria-label="Remove">✕</button>
+              </div>
+            ))}</div>
+            <Button size="sm" variant="ghost" className="mt-2" onClick={() => setEdit({ ...edit, items: [...edit.items, { itemId: null, description: '', qty: 1, unit: 'Nos', excessAction: null }] })}>+ Add line</Button>
+          </div>}
+        </div>}
+      </Modal>
       {(!r.client || !r.site) && r.status !== 'REJECTED' && (
         <div className="flex flex-wrap items-center gap-3 rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-800">
           {r.client ? 'No site on this requisition yet.' : 'This requisition has no client or site yet.'} Assign it so it can be quoted, ordered, delivered or billed.

@@ -2225,3 +2225,22 @@ test('change log: who created / last changed a record', async () => {
   const old = await ok('director', 'GET', `/activity/orders/00000000-0000-4000-8000-000000000000?createdById=${(await ok('sales', 'GET', '/auth/me')).id ?? (await ok('sales', 'GET', '/auth/me')).user.id}`);
   assert.equal(old.created.by, await me('sales')); assert.equal(old.events.length, 0);
 });
+
+test('requisition sent back with remarks: requester changes it and resubmits (same number)', async () => {
+  const rq = await ok('tech', 'POST', '/requisitions', { type: 'MATERIAL', priority: 'MEDIUM', siteId: ctx.site.id, description: 'Cameras for lobby', items: [{ itemId: ctx.cam.id, description: '2MP IP Dome', qty: 10 }] });
+  assert.equal((await call('svc', 'POST', `/requisitions/${rq.id}/send-back`, {})).status, 400, 'remarks needed');
+  await ok('svc', 'POST', `/requisitions/${rq.id}/send-back`, { note: '10 is too many — the lobby needs 4' });
+  const back = await ok('tech', 'GET', `/requisitions/${rq.id}`);
+  assert.equal(back.status, 'RETURNED'); assert.match(back.actionNote, /needs 4/);
+  assert.ok(back.history.some((h: any) => h.label === 'Sent back'));
+  assert.equal((await call('svc', 'PUT', `/requisitions/${rq.id}`, { type: 'MATERIAL', siteId: ctx.site.id, description: 'x y z', items: [{ description: 'a', qty: 1 }] })).status, 403, 'only the requester');
+  await ok('tech', 'PUT', `/requisitions/${rq.id}`, { type: 'MATERIAL', priority: 'MEDIUM', siteId: ctx.site.id, description: 'Cameras for lobby (4)', items: [{ itemId: ctx.cam.id, description: '2MP IP Dome', qty: 4 }] });
+  const again = await ok('svc', 'GET', `/requisitions/${rq.id}`);
+  assert.equal(again.status, 'PENDING'); assert.equal(again.number, rq.number); assert.equal(again.items.length, 1); assert.equal(again.items[0].qty, 4);
+  assert.equal((await call('tech', 'PUT', `/requisitions/${rq.id}`, { type: 'MATERIAL', siteId: ctx.site.id, description: 'again', items: [{ description: 'a', qty: 1 }] })).status, 400, 'only while sent back');
+  // the approver's inbox offers send back too
+  const inbox = await ok('svc', 'GET', '/approvals/inbox');
+  const it = inbox.items.find((x: any) => x.id === rq.id);
+  assert.ok(it?.sendBack && it.sendBack.required);
+  await ok('svc', 'POST', `/requisitions/${rq.id}/approve`, {});
+});

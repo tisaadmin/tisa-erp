@@ -466,7 +466,7 @@ r.get('/requisitions/:id', requirePerm('requisitions:view'), async (req, res) =>
     .where(and(eq(auditLogs.entity, 'requisition'), eq(auditLogs.entityId, row.id))).orderBy(asc(auditLogs.createdAt));
   const who = [...new Set([...logs.map((l) => l.userId), row.actionById].filter((x): x is string => !!x))];
   const names = new Map((who.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, who)) : []).map((u) => [u.id, u.name]));
-  const LABEL: Record<string, string> = { create: 'Raised', approve: 'Approved', reject: 'Rejected', start: 'Work started', fulfil: 'Marked fulfilled', assign: 'Client / site assigned', excess: 'Extra quantities decided' };
+  const LABEL: Record<string, string> = { create: 'Raised', approve: 'Approved', reject: 'Rejected', 'send-back': 'Sent back', resubmit: 'Changed & resubmitted', start: 'Work started', fulfil: 'Marked fulfilled', assign: 'Client / site assigned', excess: 'Extra quantities decided' };
   const history = [
     ...(logs.some((l) => l.action === 'create') ? [] : [{ at: row.createdAt, label: 'Raised', by: row.raisedBy.name, note: null as string | null }]),
     ...logs.filter((l) => LABEL[l.action]).map((l) => ({ at: l.at, label: LABEL[l.action], by: l.userId ? names.get(l.userId) ?? null : null, note: ((l.data ?? {}) as { note?: string | null }).note ?? null })),
@@ -474,6 +474,50 @@ r.get('/requisitions/:id', requirePerm('requisitions:view'), async (req, res) =>
   ].sort((a, b) => +new Date(a.at) - +new Date(b.at));
   const canDecideExcess = !!row.orderId && row.items.some((i) => i.excessStatus === 'PENDING') && (can(req.user, 'accessories:approve') || can(req.user, 'quotations:create') || canAct);
   res.json({ ...row, photos, docs, canAct, canDecideExcess, history, actionBy: row.actionById ? { id: row.actionById, name: names.get(row.actionById) ?? null } : null });
+});
+
+/** Checks a requisition and works out its lines (for a project: covered by the order / accessories, or extra) and its client / site. */
+async function prepareRequisition(d: z.infer<typeof reqSchema>) {
+  if (d.type === 'MATERIAL' && !d.items.length) throw badRequest('Add at least one material line');
+  let lines = d.items.map((i) => ({ ...i, excessAction: null as 'QUOTE' | 'ACCESSORY' | 'ORDER_QTY' | null, coveredQty: i.qty, excessQty: 0, excessStatus: null as string | null }));
+  if (d.orderId) {
+    const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, d.orderId), columns: { id: true, number: true, status: true, siteId: true, clientId: true } });
+    if (!o) throw badRequest('Project (order) not found');
+    if (['CANCELLED', 'CLOSED'].includes(o.status)) throw badRequest(`Order ${o.number} is ${o.status.toLowerCase()}`);
+    if (d.siteId && o.siteId && d.siteId !== o.siteId) throw badRequest(`The site comes from order ${o.number}`);
+    d.siteId = o.siteId ?? d.siteId; d.clientId = o.clientId;
+    if (d.type === 'MATERIAL') lines = (await classifyProjectLines(db, o.id, d.items.map((i) => ({ ...i, excessAction: i.excessAction ?? null })))).lines;
+  }
+  const site = d.siteId ? await db.query.sites.findFirst({ where: eq(sites.id, d.siteId) }) : null;
+  if (d.siteId && !site) throw badRequest('Site not found');
+  const clientId = site?.clientId ?? d.clientId ?? null;
+  if (clientId && !site && !(await db.query.clients.findFirst({ where: eq(clients.id, clientId), columns: { id: true } }))) throw badRequest('Client not found');
+  return { lines, site, clientId };
+}
+
+/** The requester makes the changes asked for on a sent-back requisition and resubmits it — same number, back to the approvers. */
+r.put('/requisitions/:id', async (req, res) => {
+  const row = await db.query.requisitions.findFirst({ where: eq(requisitions.id, req.params.id) });
+  if (!row) throw notFound('Requisition');
+  if (row.raisedById !== req.user.id) throw forbidden('Only the person who raised it can change it');
+  if (row.status !== 'RETURNED') throw badRequest(`Only a requisition sent back to you can be changed — this one is ${row.status.toLowerCase()}`);
+  const d = reqSchema.parse(req.body);
+  const { lines, site, clientId } = await prepareRequisition(d);
+  await db.transaction(async (tx) => {
+    await tx.update(requisitions).set({ type: d.type, priority: d.priority, siteId: d.siteId ?? null, clientId, orderId: d.orderId ?? null, description: d.description, requiredBy: d.requiredBy, status: 'PENDING' }).where(eq(requisitions.id, row.id));
+    await tx.delete(requisitionItems).where(eq(requisitionItems.requisitionId, row.id));
+    if (lines.length) await tx.insert(requisitionItems).values(lines.map((i) => ({
+      itemId: i.itemId ?? null, description: i.description, qty: i.qty, unit: i.unit, requisitionId: row.id,
+      coveredQty: i.coveredQty, excessQty: i.excessQty, excessAction: i.excessAction, excessStatus: i.excessStatus,
+    })));
+    if (d.photoIds.length) await tx.update(attachments).set({ entityType: 'REQUISITION', entityId: row.id }).where(and(inArray(attachments.id, d.photoIds), eq(attachments.uploadedById, req.user.id)));
+  });
+  const reqNote = { title: `Requisition ${row.number} resubmitted — ${site?.name ?? 'site not set'}`, body: `${req.user.name} made the changes asked for: ${d.description.slice(0, 120)}`, type: 'REQUISITION' as const, link: `/requisitions/${row.id}`, entityType: 'REQUISITION', entityId: row.id };
+  // back to whoever sent it back, and the approvers
+  if (row.actionById) await notifyUsers([row.actionById], reqNote, req.user.id);
+  else await notifyPermission('requisitions:approve', reqNote, req.user.id);
+  audit(req, 'resubmit', 'requisition', row.id);
+  res.json({ ok: true, status: 'PENDING' });
 });
 
 r.post('/requisitions', requirePerm('requisitions:create'), async (req, res) => {
@@ -536,6 +580,8 @@ r.patch('/requisitions/:id/assign', async (req, res) => {
 
 const REQ_FLOW: Record<string, { from: string[]; to: string }> = {
   approve: { from: ['PENDING'], to: 'APPROVED' }, reject: { from: ['PENDING', 'APPROVED'], to: 'REJECTED' },
+  /** back to the requester to make amends and resubmit */
+  'send-back': { from: ['PENDING'], to: 'RETURNED' },
   start: { from: ['APPROVED'], to: 'IN_PROGRESS' }, fulfil: { from: ['APPROVED', 'IN_PROGRESS'], to: 'FULFILLED' },
 };
 
@@ -580,9 +626,10 @@ r.post('/requisitions/:id/:action', async (req, res) => {
   const row = await db.query.requisitions.findFirst({ where: eq(requisitions.id, req.params.id) });
   if (!row) throw notFound('Requisition');
   await mayActOnRequisition(req.user, row.raisedById);
-  if (!flow.from.includes(row.status)) throw badRequest(`Cannot ${req.params.action} a ${row.status.toLowerCase()} requisition`);
+  if (!flow.from.includes(row.status)) throw badRequest(`Cannot ${req.params.action.replace('-', ' ')} a ${row.status.toLowerCase()} requisition`);
+  if (req.params.action === 'send-back' && !note?.trim()) throw badRequest('Write what should be changed — the requester sees your remarks');
   const [u] = await db.update(requisitions).set({ status: flow.to, actionById: req.user.id, actionNote: note, actionAt: new Date() }).where(eq(requisitions.id, row.id)).returning();
-  await notifyUsers([row.raisedById], { title: `Requisition ${row.number} ${flow.to.toLowerCase().replace('_', ' ')}`, body: note ?? undefined, type: 'REQUISITION', link: `/requisitions/${row.id}`, entityType: 'REQUISITION', entityId: row.id }, req.user.id);
+  await notifyUsers([row.raisedById], { title: flow.to === 'RETURNED' ? `Requisition ${row.number} sent back by ${req.user.name} — make the changes and resubmit` : `Requisition ${row.number} ${flow.to.toLowerCase().replace('_', ' ')}`, body: note ?? undefined, type: 'REQUISITION', link: `/requisitions/${row.id}`, entityType: 'REQUISITION', entityId: row.id }, req.user.id);
   audit(req, req.params.action, 'requisition', row.id, { note });
   res.json(u);
 });

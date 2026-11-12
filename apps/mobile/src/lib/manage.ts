@@ -17,6 +17,8 @@ export type InboxItem = {
   lines: string[]; link: string;
   approve: { label: string; path: string; body: Record<string, unknown> };
   reject: { label: string; path: string; body: Record<string, unknown>; field: string; required: boolean };
+  /** back to the requester to make amends (some kinds) */
+  sendBack?: { label: string; path: string; body: Record<string, unknown>; field: string; required: boolean };
 };
 export type Inbox = { items: InboxItem[]; counts: Record<string, number>; total: number };
 

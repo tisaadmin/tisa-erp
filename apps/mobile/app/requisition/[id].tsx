@@ -1,6 +1,7 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { Image, Pressable, ScrollView, Text, View } from 'react-native';
-import { Badge, C, Card, Screen, s, useFetch } from '../../src/components/ui';
+import { Badge, Btn, C, Card, Screen, s, useFetch } from '../../src/components/ui';
+import { useAuth } from '../../src/lib/auth';
 import { fileUrl } from '../../src/lib/api';
 import { fmtDate, fmtDateTime, label } from '../../src/lib/format';
 
@@ -11,9 +12,11 @@ const STEP_LABEL: Record<string, string> = { PENDING: 'Raised', APPROVED: 'Appro
 export default function RequisitionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const q = useFetch<any>(`/requisitions/${id}`);
+  const me = useAuth().user?.id;
   const r = q.data;
   if (!r) return <Screen><Text style={s.muted}>{q.error ?? 'Loading…'}</Text></Screen>;
   const rejected = r.status === 'REJECTED';
+  const returned = r.status === 'RETURNED';
   const at = STEPS.indexOf(r.status);
   return (
     <Screen onRefresh={q.reload} refreshing={q.loading}>
@@ -21,8 +24,15 @@ export default function RequisitionScreen() {
       <Text style={s.h1}>{r.number}</Text>
       <Text style={s.muted}>Raised {fmtDateTime(r.createdAt)}{r.requiredBy ? ` · needed by ${fmtDate(r.requiredBy)}` : ''}</Text>
 
+      {returned && (
+        <Card>
+          <Text style={{ color: '#991b1b', fontWeight: '700' }}>Sent back{r.actionBy?.name ? ` by ${r.actionBy.name}` : ''}{r.actionAt ? ` · ${fmtDateTime(r.actionAt)}` : ''}</Text>
+          {!!r.actionNote && <Text style={{ color: C.text, marginTop: 4 }}>“{r.actionNote}”</Text>}
+          {r.raisedById === me && <Btn title="Make changes & resubmit" icon="create" onPress={() => router.push(`/requisition/new?edit=${r.id}` as never)} />}
+        </Card>
+      )}
       {/* progress */}
-      <Card>
+      {!returned && <Card>
         {rejected
           ? <Text style={{ color: '#b91c1c', fontWeight: '700' }}>Rejected{r.actionBy?.name ? ` by ${r.actionBy.name}` : ''}{r.actionAt ? ` · ${fmtDateTime(r.actionAt)}` : ''}</Text>
           : <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -41,7 +51,7 @@ export default function RequisitionScreen() {
             <Text style={{ color: C.text }}>{r.actionNote}</Text>
           </View>
         )}
-      </Card>
+      </Card>}
 
       <Card title="Details">
         <KV k="Client" v={r.client?.name ?? 'Not assigned yet'} />

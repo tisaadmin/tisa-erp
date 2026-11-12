@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Image, Pressable, ScrollView, Text, View } from 'react-native';
 import { Btn, C, Card, Chips, Field, Input, Picker, Screen, s, useFetch, useRun } from '../../src/components/ui';
 import { api, filePart } from '../../src/lib/api';
@@ -8,7 +8,9 @@ import { getFix, takePhoto } from '../../src/lib/geo';
 
 /** Material / pending work / repair request from site → instant notification on the office dashboard. */
 export default function NewRequisition() {
-  const p = useLocalSearchParams<{ siteId?: string; ticketId?: string; orderId?: string }>();
+  const p = useLocalSearchParams<{ siteId?: string; ticketId?: string; orderId?: string; edit?: string }>();
+  // edit = a requisition sent back to me: make the changes and resubmit (same number)
+  const editing = useFetch<any>(p.edit ? `/requisitions/${p.edit}` : null);
   const projects = useFetch<{ id: string; number: string; site: { id: string; name: string } | null; client: { name: string } }[]>('/projects');
   const sites = useFetch<{ data: any[] }>('/sites?active=true&pageSize=500');
   const items = useFetch<{ data: any[] }>('/items?active=true&pageSize=500');
@@ -20,6 +22,12 @@ export default function NewRequisition() {
   const project = (projects.data ?? []).find((x) => x.id === d.orderId);
   const siteId = project?.site?.id ?? d.siteId;
   const [photos, setPhotos] = useState<{ id: string; uri: string }[]>([]);
+  useEffect(() => {
+    const r = editing.data;
+    if (!r) return;
+    setD({ type: r.type, priority: r.priority, siteId: r.siteId ?? undefined, orderId: r.orderId ?? undefined, description: r.description });
+    if (r.items?.length) setLines(r.items.map((i: any) => ({ itemId: i.itemId ?? undefined, description: i.description, qty: String(i.qty), unit: i.unit, excessAction: i.excessAction === 'QUOTE' || i.excessAction === 'ACCESSORY' ? i.excessAction : undefined })));
+  }, [editing.data]);
   const { busy, run } = useRun();
   const addPhoto = () => run(async () => {
     if (!siteId) throw new Error('Pick the project or site first — photos are stamped against a site');
@@ -35,6 +43,13 @@ export default function NewRequisition() {
   });
   return (
     <Screen>
+      {!!editing.data && (
+        <View style={{ padding: 10, borderRadius: 8, backgroundColor: '#fef2f2', gap: 2 }}>
+          <Text style={{ fontWeight: '700', color: '#991b1b' }}>{editing.data.number} sent back{editing.data.actionBy?.name ? ` by ${editing.data.actionBy.name}` : ''}</Text>
+          {!!editing.data.actionNote && <Text style={{ color: C.text }}>“{editing.data.actionNote}”</Text>}
+          <Text style={s.muted}>Make the changes below and resubmit.</Text>
+        </View>
+      )}
       <Field label="Type"><Chips options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} value={d.type} onChange={(type) => setD({ ...d, type })} /></Field>
       <Field label="Priority"><Chips options={['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']} value={d.priority} onChange={(priority) => setD({ ...d, priority })} /></Field>
       {!!projects.data?.length && <Field label="Project (shows the order and accessories quantities)"><Picker items={projects.data} value={d.orderId} placeholder="Not for a project" onChange={(x) => setD({ ...d, orderId: x.id, siteId: undefined })} getLabel={(x) => x.site?.name ?? x.number} getSub={(x) => `${x.number} · ${x.client.name}`} /></Field>}
@@ -83,11 +98,13 @@ export default function NewRequisition() {
         {!photos.length && <Text style={s.muted}>Optional — show the fault or what's pending</Text>}
         <Btn variant="secondary" icon="camera" title="Add photo" busy={busy} onPress={addPhoto} />
       </Card>
-      <Btn title="Send to office" icon="send" busy={busy} onPress={() => run(async () => {
-        await api('/requisitions', { body: { ...d, siteId: d.orderId ? null : d.siteId ?? null, orderId: d.orderId ?? null, ticketId: p.ticketId ?? null, photoIds: photos.map((x) => x.id),
-          items: d.type === 'MATERIAL' ? lines.filter((l) => l.description && Number(l.qty) > 0).map((l) => ({ itemId: l.itemId ?? null, description: l.description, qty: Number(l.qty), unit: l.unit, excessAction: l.excessAction ?? null })) : [] } });
+      <Btn title={p.edit ? 'Resubmit' : 'Send to office'} icon="send" busy={busy} onPress={() => run(async () => {
+        const body = { ...d, siteId: d.orderId ? null : d.siteId ?? null, orderId: d.orderId ?? null, ticketId: (p.edit ? editing.data?.ticketId : p.ticketId) ?? null, photoIds: photos.map((x) => x.id),
+          items: d.type === 'MATERIAL' ? lines.filter((l) => l.description && Number(l.qty) > 0).map((l) => ({ itemId: l.itemId ?? null, description: l.description, qty: Number(l.qty), unit: l.unit, excessAction: l.excessAction ?? null })) : [] };
+        if (p.edit) await api(`/requisitions/${p.edit}`, { method: 'PUT', body });
+        else await api('/requisitions', { body });
         router.back();
-      }, 'Requisition sent — the office has been notified')} />
+      }, p.edit ? 'Resubmitted — the office has been notified' : 'Requisition sent — the office has been notified')} />
     </Screen>
   );
 }

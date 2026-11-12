@@ -138,6 +138,7 @@ r.get('/approvals/inbox', async (req, res) => {
       lines: x.items.map((l) => `${l.description} — ${fmtQty(l.qty)} ${l.unit}`), link: `/requisitions/${x.id}`,
       approve: { label: 'Approve', path: `/requisitions/${x.id}/approve`, body: {} },
       reject: { label: 'Reject', path: `/requisitions/${x.id}/reject`, body: {}, field: 'note', required: false },
+      sendBack: { label: 'Send back', path: `/requisitions/${x.id}/send-back`, body: {}, field: 'note', required: true },
     });
   })());
 
