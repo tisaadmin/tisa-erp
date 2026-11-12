@@ -1,11 +1,11 @@
 import { Router, type Request, type Response } from 'express';
 import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
-import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { db, type Tx } from '../db';
 import {
-  auditLogs, users, clients, departments, deliveryChallanItems, items, requisitions, vendors, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
+  auditLogs, users, invoices, clients, departments, deliveryChallanItems, items, requisitions, vendors, deliveryChallans, leads, quotationItems, quotations, salesOrderItems, salesOrders, sites,
 } from '../db/schema';
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
@@ -410,6 +410,11 @@ r.patch('/orders/:id', requirePerm('orders:edit'), async (req, res) => {
     status: z.enum(['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']).optional(), paymentTerms: termsSchema.optional(), siteId: opt,
     isProject: z.boolean().optional(), billingBasis: z.enum(['PROGRESS', 'CERTIFIED']).optional(),
   }).parse(req.body);
+  if (d.status === 'CANCELLED') {
+    // an order with bills sent to the client cannot be cancelled — the bills would be left on a dead order
+    const billed = await db.query.invoices.findMany({ where: and(eq(invoices.orderId, req.params.id), notInArray(invoices.status, ['DRAFT', 'CANCELLED'])), columns: { number: true } });
+    if (billed.length) throw badRequest(`${billed.map((b) => b.number).join(', ')} ${billed.length > 1 ? 'are' : 'is'} issued against this order — cancel ${billed.length > 1 ? 'those bills' : 'that bill'} first (or keep the order)`);
+  }
   if (d.isProject === false) {
     const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), columns: { projectInchargeId: true } });
     if (o?.projectInchargeId) throw badRequest('This project has a person in charge — remove the project team first');

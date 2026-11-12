@@ -9,7 +9,8 @@ import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { addDays, dayRange } from '../lib/dates';
 import { calcTotals, r2, r3 } from '../lib/gst';
-import { badRequest, HttpError, notFound, pageParams } from '../lib/http';
+import { badRequest, forbidden, HttpError, notFound, pageParams } from '../lib/http';
+import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { workflowRules } from '../services/workflow';
 import { sendMail } from '../lib/mailer';
 import { nextNumber } from '../lib/numbering';
@@ -217,6 +218,29 @@ r.post('/invoices/:id/issue', requirePerm('invoices:create'), async (req, res) =
   });
   audit(req, 'issue', 'invoice', inv.id, { number: inv.number });
   res.json(inv);
+});
+
+/**
+ * Super Admin: correct the RA number of an issued running bill (e.g. after a project was re-imported and numbering restarted).
+ * The order's RA numbering then continues after the highest RA number on it.
+ */
+r.post('/invoices/:id/ra-number', async (req, res) => {
+  if (!isSuperAdminPerms(req.user.permissions)) throw forbidden('Only the Super Admin can correct an RA number');
+  const { raBillNo } = z.object({ raBillNo: z.coerce.number().int().min(1).max(999) }).parse(req.body);
+  const inv = await db.query.invoices.findFirst({ where: eq(invoices.id, req.params.id) });
+  if (!inv) throw notFound('Invoice');
+  if (inv.type !== 'RUNNING_BILL' || !inv.orderId || !inv.raBillNo) throw badRequest('Only an issued RA bill has an RA number');
+  const issued = await db.query.invoices.findMany({ where: and(eq(invoices.orderId, inv.orderId), eq(invoices.type, 'RUNNING_BILL'), inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID', 'PAID'])), columns: { id: true, number: true, raBillNo: true } });
+  const clash = issued.find((x) => x.id !== inv.id && x.raBillNo === raBillNo);
+  if (clash) throw badRequest(`RA-${raBillNo} is already ${clash.number} on this order`);
+  await db.transaction(async (tx) => {
+    await tx.update(invoices).set({ raBillNo }).where(eq(invoices.id, inv.id));
+    const top = Math.max(raBillNo, ...issued.filter((x) => x.id !== inv.id).map((x) => x.raBillNo ?? 0));
+    // next RA = offset + issued + 1  →  offset so that the next one is top + 1
+    await tx.update(salesOrders).set({ raBillOffset: Math.max(0, top - issued.length) }).where(eq(salesOrders.id, inv.orderId!));
+  });
+  audit(req, 'ra_number', 'invoice', inv.id, { from: inv.raBillNo, to: raBillNo });
+  res.json({ ok: true, from: inv.raBillNo, raBillNo });
 });
 
 r.delete('/invoices/:id', requirePerm('invoices:edit'), async (req, res) => {

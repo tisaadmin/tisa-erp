@@ -1466,6 +1466,20 @@ test('RA bill from the client sheet: order from the BOQ, previous quantities as 
   assert.equal(ra22.taxable, 4 * 2000);
   await ok('accounts', 'POST', `/invoices/${ra22.id}/issue`, {});
   assert.equal((await ok('accounts', 'GET', `/orders/${done.orderId}`)).items[1].installedQty, 4, 'installed brought up to what was certified');
+  // one order per project: a second order for the same site from an RA sheet is refused
+  const p4 = await ok('accounts', 'POST', '/ra-imports/parse', undefined, await make([[[10, 0], [10, 0], [6, 0], [0, 10]], [[6, 0], [0, 0], [0, 0], [0, 0]]]));
+  const dup = await call('admin', 'POST', `/ra-imports/${p4.id}/commit`, { ...body(p4.doc), lines: p4.doc.lines.map((l: any) => ({ ...l, include: true, itemId: linked[l.key] ?? ctx.cam.id })), newClient: null, clientId: o.client.id, site: { mode: 'existing', siteId: o.site.id }, orderId: null });
+  assert.equal(dup.status, 400); assert.match(dup.data.error, /already holds this site's RA bills/);
+  // an order with issued bills cannot be cancelled
+  const cx = await call('admin', 'PATCH', `/orders/${done.orderId}`, { status: 'CANCELLED' });
+  assert.equal(cx.status, 400); assert.match(cx.data.error, /issued against this order/);
+  // Super Admin corrects an RA number; numbering carries on after it
+  assert.equal((await ok('accounts', 'GET', `/invoices/${ra22.id}`)).raBillNo, 21);
+  assert.equal((await call('accounts', 'POST', `/invoices/${ra22.id}/ra-number`, { raBillNo: 22 })).status, 403);
+  assert.equal((await call('admin', 'POST', `/invoices/${ra22.id}/ra-number`, { raBillNo: 20 })).status, 400, 'RA-20 is taken');
+  await ok('admin', 'POST', `/invoices/${ra22.id}/ra-number`, { raBillNo: 22 });
+  const ra23 = await ok('accounts', 'POST', '/invoices/running-bill', { orderId: done.orderId, lines: [{ orderItemId: bullet.id, stage: 'INSTALLATION', qty: 1 }] });
+  assert.equal((await ok('accounts', 'POST', `/invoices/${ra23.id}/issue`, {})).raBillNo, 23);
   // switching to ERP progress: installation follows the installed qty again
   await ok('admin', 'PATCH', `/orders/${done.orderId}`, { billingBasis: 'PROGRESS' });
   const bs3 = await ok('accounts', 'GET', `/orders/${done.orderId}/billing`);

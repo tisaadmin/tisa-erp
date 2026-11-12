@@ -7,7 +7,7 @@
  */
 import { Router } from 'express';
 import multer from 'multer';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, notInArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '../db';
 import { billingOpenings, clients, importJobs, invoices, items as itemsT, salesOrderItems, salesOrders, sites, type MilestoneStage } from '../db/schema';
@@ -200,6 +200,13 @@ r.post('/ra-imports/:id/commit', perm, async (req, res) => {
       if (['CANCELLED', 'CLOSED', 'MERGED'].includes(o.status)) throw badRequest(`${o.number} is ${o.status.toLowerCase()}`);
       orderId = o.id; orderNumber = o.number;
     } else {
+      // one order per project: a site that already has an order made from the client's RA sheets is updated, not duplicated
+      // (a second order would restart the RA numbering and show the bills of the first as unbilled)
+      const existing = siteId ? await tx.query.salesOrders.findFirst({
+        where: and(eq(salesOrders.clientId, client.id), eq(salesOrders.siteId, siteId), notInArray(salesOrders.status, ['CANCELLED', 'CLOSED', 'MERGED']), sql`${salesOrders.sourceData}->>'system' = 'RA sheet'`),
+        columns: { number: true },
+      }) : null;
+      if (existing) throw badRequest(`${existing.number} already holds this site's RA bills — choose ${existing.number} as the order to update. Its quantities are raised from the sheet where they are higher.`);
       // the most common break-up becomes the order's schedule; other lines keep their own
       const count = new Map<string, number>();
       for (const l of lines) { const k = JSON.stringify(termsOf(l)); count.set(k, (count.get(k) ?? 0) + 1); }
