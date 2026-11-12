@@ -248,6 +248,8 @@ r.post('/ra-imports/:id/commit', perm, async (req, res) => {
       p.it.qty = p.l.qty; raised++;
     }
     if (raised) await recalcOrder(tx, orderId);
+    // from now on this site is billed on the client's certified quantities, carrying on from this RA
+    await tx.update(salesOrders).set({ billingBasis: 'CERTIFIED' }).where(eq(salesOrders.id, orderId));
     for (const { l, it } of pairs) {
       if (Math.abs(it.rate - l.rate) > 0.01) throw badRequest(`${l.key}: rate ${l.rate} on the sheet but ${it.rate} on ${orderNumber}`);
       if (!it.sourceKey) await tx.update(salesOrderItems).set({ sourceKey: l.key }).where(eq(salesOrderItems.id, it.id));

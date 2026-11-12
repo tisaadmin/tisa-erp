@@ -390,6 +390,7 @@ export function OrderDetail() {
   const [proforma, setProforma] = useState(false);
   const saveProgress = useAction(() => api(`/orders/${id}/items/${progress!.id}/progress`, { method: 'PATCH', body: { installedQty: progress!.installedQty } }), { success: 'Progress updated', invalidate: [['/orders']], onSuccess: () => setProgress(null) });
   const setStatus = useAction((status: string) => api(`/orders/${id}`, { method: 'PATCH', body: { status } }), { success: 'Updated', invalidate: [['/orders']] });
+  const setBasis = useAction((billingBasis: string) => api(`/orders/${id}`, { method: 'PATCH', body: { billingBasis } }), { success: 'Billing basis changed', invalidate: [['/orders'], [`/orders/${id}`]] });
   const setProject = useAction((isProject: boolean) => api(`/orders/${id}`, { method: 'PATCH', body: { isProject } }), { success: 'Updated', invalidate: [['/orders'], [`/orders/${id}`], ['/projects']] });
   const createRa = useAction(() => api('/invoices/running-bill', { body: { orderId: id, proforma, lines: Object.entries(ra!).filter(([, v]) => v > 0).map(([k, v]) => { const [orderItemId, stage] = k.split('|'); return { orderItemId, stage, qty: v }; }) } }),
     { success: 'Draft running bill created', invalidate: [['/invoices'], ['/orders']], onSuccess: (inv: any) => nav(`/invoices/${inv.id}`) });
@@ -401,6 +402,8 @@ export function OrderDetail() {
   }, [ra, billing.data]);
   if (!o) return <Spinner />;
   const stages = o.paymentTerms as Term[];
+  /** site brought in from the client's RA bills: bill on certified quantities, carrying on from the last RA */
+  const certified = o.billingBasis === 'CERTIFIED';
   const fillStage = (stage: string) => {
     const next: Record<string, number> = { ...(ra ?? {}) };
     for (const l of billing.data?.lines ?? []) for (const s of l.stages) if (s.stage === stage) next[`${l.orderItemId}|${s.stage}`] = s.billableQty;
@@ -472,7 +475,13 @@ export function OrderDetail() {
             </tbody>
           </table>
         </div>
-        <p className="px-4 py-2 text-xs text-slate-500">Advance / testing / commissioning / handover are billable on ordered qty; delivery on qty dispatched via challans; installation on qty marked installed (click the number to update).</p>
+        <div className="flex flex-wrap items-center gap-3 px-4 py-2 text-xs text-slate-500">
+          <span className="flex-1">{certified
+            ? <>Billing basis: <b className="text-sky-800">client-certified quantities</b> — each RA bill carries on from the last RA's cumulative quantities; accounts enter the additional quantity delivered / installed (up to the ordered qty).</>
+            : <>Billing basis: <b>ERP progress</b> — advance / testing / commissioning / handover on ordered qty; delivery on qty dispatched via challans; installation on qty marked installed (click the number to update).</>}</span>
+          {can('orders:edit') && <button className="text-brand-700 hover:underline" onClick={() => confirm(certified ? 'Bill this order from ERP progress (challans / installed qty) from now on?' : 'Bill this order on client-certified quantities (accounts enter each RA\'s quantities) from now on?') && setBasis.mutate(certified ? 'PROGRESS' : 'CERTIFIED')}>
+            Switch to {certified ? 'ERP progress' : 'client-certified'}</button>}
+        </div>
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -495,9 +504,12 @@ export function OrderDetail() {
 
       <Modal open={!!ra} onClose={() => setRa(null)} title="Create running bill" wide
         footer={<><span className="mr-auto self-center text-sm">Taxable value: <b>{inr(raTaxable)}</b> + GST</span><Button onClick={() => setRa(null)}>Cancel</Button><Button variant="primary" loading={createRa.isPending} disabled={raTaxable <= 0} onClick={() => createRa.mutate(undefined)}>Create draft bill</Button></>}>
+        {certified && <div className="mb-3 rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-900">Client-certified billing: each line starts from the cumulative quantity of the last RA bill. Enter the <b>additional</b> quantity delivered / installed for this RA — the cumulative is worked out for you (up to the ordered quantity).</div>}
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <span className="text-sm text-slate-600">Bill everything eligible for:</span>
-          {stages.filter((s) => s.percent > 0).map((s) => <Button key={s.stage} size="sm" onClick={() => fillStage(s.stage)}>{STAGE_LABEL[s.stage]}</Button>)}
+          {!certified && <>
+            <span className="text-sm text-slate-600">Bill everything eligible for:</span>
+            {stages.filter((s) => s.percent > 0).map((s) => <Button key={s.stage} size="sm" onClick={() => fillStage(s.stage)}>{STAGE_LABEL[s.stage]}</Button>)}
+          </>}
           <Button size="sm" variant="ghost" onClick={() => setRa({})}>Clear</Button>
           <label className="ml-auto flex items-center gap-1.5 text-sm"><input type="checkbox" checked={proforma} onChange={(e) => setProforma(e.target.checked)} /> Proforma only</label>
         </div>
@@ -512,10 +524,17 @@ export function OrderDetail() {
                     const s = l.stages.find((x) => x.stage === st.stage);
                     const k = `${l.orderItemId}|${st.stage}`;
                     if (!s || s.percent === 0) return <td key={k} className="num text-slate-300">{s ? '0%' : 'n/a'}</td>;
+                    const now = ra?.[k] ?? 0, cum = Math.round((s.billedQty + now) * 1000) / 1000;
+                    const beyondDc = certified && st.stage === 'DELIVERY' && cum > l.deliveredQty + 1e-9;
                     return <td key={k} className="text-right">
-                      <input type="number" min={0} max={s.billableQty} step="any" disabled={s.billableQty <= 0} className="input w-20 text-right" value={ra?.[k] ?? ''} placeholder="0"
-                        onChange={(e) => setRa({ ...(ra ?? {}), [k]: Math.min(Number(e.target.value), s.billableQty) })} />
-                      <div className="text-[11px] text-slate-400">of {qty(s.billableQty)} left</div>
+                      {certified && <div className="text-[11px] text-slate-500" title="Cumulative billed up to the last RA bill">till last RA: <b>{qty(s.billedQty)}</b></div>}
+                      <input type="number" min={0} max={s.billableQty} step="any" disabled={s.billableQty <= 0} className="input w-20 text-right" value={ra?.[k] ?? ''} placeholder={certified ? '+0' : '0'}
+                        title={certified ? 'Additional quantity in this RA bill' : undefined}
+                        onChange={(e) => setRa({ ...(ra ?? {}), [k]: Math.max(0, Math.min(Number(e.target.value), s.billableQty)) })} />
+                      {certified
+                        ? <div className={cx('text-[11px]', now > 0 ? 'font-medium text-sky-800' : 'text-slate-400')}>cumulative {qty(cum)} / {qty(l.qty)}</div>
+                        : <div className="text-[11px] text-slate-400">of {qty(s.billableQty)} left</div>}
+                      {beyondDc && <div className="text-[11px] text-amber-700" title="Material sent on delivery challans in the ERP">challans: {qty(l.deliveredQty)}</div>}
                     </td>;
                   })}
                 </tr>

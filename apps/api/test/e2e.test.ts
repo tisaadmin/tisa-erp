@@ -1452,6 +1452,24 @@ test('RA bill from the client sheet: order from the BOQ, previous quantities as 
   const d2 = await ok('accounts', 'POST', `/ra-imports/${p2.id}/commit`, { ...body(p2.doc), lines: p2.doc.lines.map((l: any) => ({ ...l, include: true, itemId: linked[l.key] })), newClient: null, clientId: o.client.id, site: { mode: 'existing', siteId: o.site.id }, orderId: done.orderId, raNo: '021' });
   assert.equal(d2.orderCreated, false); assert.equal(d2.openings, 0, 'nothing new billed outside the ERP');
   assert.equal((await ok('accounts', 'GET', `/invoices/${d2.invoiceId}`)).taxable, 10 * 810);
+  // after the upload the site is billed in the ERP on certified quantities: carry on from the last RA's cumulative figures
+  const oc = await ok('accounts', 'GET', `/orders/${done.orderId}`);
+  assert.equal(oc.billingBasis, 'CERTIFIED');
+  const bullet = oc.items[1];
+  const bs2 = await ok('accounts', 'GET', `/orders/${done.orderId}/billing`);
+  const bl = bs2.lines.find((l: any) => l.orderItemId === bullet.id);
+  assert.equal(bl.stages.find((s: any) => s.stage === 'INSTALLATION').billedQty, 0);
+  assert.equal(bl.stages.find((s: any) => s.stage === 'INSTALLATION').billableQty, 6, 'no installation ticket needed — up to the ordered qty');
+  assert.equal(bl.stages.find((s: any) => s.stage === 'DELIVERY').billableQty, 0, '6 of 6 supplied till last RA');
+  assert.equal((await call('accounts', 'POST', '/invoices/running-bill', { orderId: done.orderId, lines: [{ orderItemId: bullet.id, stage: 'INSTALLATION', qty: 7 }] })).status, 400, 'not beyond the ordered qty');
+  const ra22 = await ok('accounts', 'POST', '/invoices/running-bill', { orderId: done.orderId, lines: [{ orderItemId: bullet.id, stage: 'INSTALLATION', qty: 4 }] });
+  assert.equal(ra22.taxable, 4 * 2000);
+  await ok('accounts', 'POST', `/invoices/${ra22.id}/issue`, {});
+  assert.equal((await ok('accounts', 'GET', `/orders/${done.orderId}`)).items[1].installedQty, 4, 'installed brought up to what was certified');
+  // switching to ERP progress: installation follows the installed qty again
+  await ok('admin', 'PATCH', `/orders/${done.orderId}`, { billingBasis: 'PROGRESS' });
+  const bs3 = await ok('accounts', 'GET', `/orders/${done.orderId}/billing`);
+  assert.equal(bs3.lines.find((l: any) => l.orderItemId === bullet.id).stages.find((s: any) => s.stage === 'INSTALLATION').billableQty, 0);
   // a break-up that does not add up is refused
   const p3 = await ok('accounts', 'POST', '/ra-imports/parse', undefined, await make([[[0, 0], [0, 0], [0, 0], [0, 0]], [[0, 0], [0, 0], [0, 0], [0, 0]]]));
   const bad = body(p3.doc); bad.lines[0].stages[0].percent = 60;

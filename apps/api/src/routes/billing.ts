@@ -201,6 +201,18 @@ r.post('/invoices/:id/issue', requirePerm('invoices:create'), async (req, res) =
     }
     const number = await nextNumber(tx, inv.type === 'PROFORMA' ? 'PROFORMA' : 'INVOICE', inv.date);
     const [row] = await tx.update(invoices).set({ number, status: 'ISSUED', raBillNo }).where(eq(invoices.id, inv.id)).returning();
+    if (inv.type === 'RUNNING_BILL' && inv.orderId) {
+      // client-certified site: installation billed up to now is installation done — bring the installed qty up to it
+      const o = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, inv.orderId), columns: { billingBasis: true } });
+      if (o?.billingBasis === 'CERTIFIED') {
+        const st = await orderBillingStatus(tx, inv.orderId);
+        for (const l of st.lines) {
+          const billedInst = l.stages.find((x) => x.stage === 'INSTALLATION')?.billedQty ?? 0;
+          const want = Math.min(Number(l.qty), billedInst);
+          if (want > Number(l.installedQty) + 1e-9) await tx.update(salesOrderItems).set({ installedQty: want }).where(eq(salesOrderItems.id, l.orderItemId));
+        }
+      }
+    }
     return row;
   });
   audit(req, 'issue', 'invoice', inv.id, { number: inv.number });

@@ -52,7 +52,9 @@ export type OrderLineBilling = {
  *  - DELIVERY: qty delivered through delivery challans
  *  - INSTALLATION: qty marked installed on the order line
  */
-function eligible(stage: MilestoneStage, line: { qty: number; deliveredQty: number; installedQty: number }) {
+function eligible(stage: MilestoneStage, line: { qty: number; deliveredQty: number; installedQty: number }, basis = 'PROGRESS') {
+  // client-certified billing (sites brought in from RA bills): any quantity up to the ordered qty — accounts enter what this RA certifies
+  if (basis === 'CERTIFIED') return line.qty;
   // material sent beyond the order (approved extra on a challan) is not billable beyond the ordered quantity
   if (stage === 'DELIVERY') return Math.min(line.qty, line.deliveredQty);
   if (stage === 'INSTALLATION') return Math.min(line.qty, line.installedQty);
@@ -90,7 +92,7 @@ export async function orderBillingStatus(tx: DbOrTx, orderId: string) {
       gstRate: it.gstRate, hsnSac: it.hsnSac, itemId: it.itemId, deliveredQty: it.deliveredQty, installedQty: it.installedQty,
       stages: terms.map((t) => {
         const b = billedMap.get(key(it.id, t.stage));
-        const eligibleQty = eligible(t.stage, it);
+        const eligibleQty = eligible(t.stage, it, order.billingBasis);
         const billedQty = b ? Number(b.qty) : 0;
         return {
           stage: t.stage, percent: t.percent, eligibleQty, billedQty, billableQty: t.percent > 0 ? r3(Math.max(0, eligibleQty - billedQty)) : 0, billedAmount: b ? Number(b.taxable) : 0,

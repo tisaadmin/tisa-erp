@@ -408,7 +408,7 @@ r.patch('/orders/:id', requirePerm('orders:edit'), async (req, res) => {
   const d = z.object({
     clientPoNo: opt, clientPoDate: z.coerce.date().nullish(), expectedCompletion: z.coerce.date().nullish(), notes: opt, terms: opt,
     status: z.enum(['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']).optional(), paymentTerms: termsSchema.optional(), siteId: opt,
-    isProject: z.boolean().optional(),
+    isProject: z.boolean().optional(), billingBasis: z.enum(['PROGRESS', 'CERTIFIED']).optional(),
   }).parse(req.body);
   if (d.isProject === false) {
     const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), columns: { projectInchargeId: true } });
