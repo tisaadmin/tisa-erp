@@ -1,4 +1,5 @@
 import { CheckCircle2, ListPlus, Plus, RefreshCw, ShoppingCart, Trash2, Undo2, XCircle } from 'lucide-react';
+import { RecordLog } from '../components/RecordLog';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
@@ -141,7 +142,7 @@ export function AccessorySheetDetail() {
 
   return (
     <div className="space-y-4">
-      <PageHeader back="/accessories" title={<>{s.number} <Status s={s.status} /></>}
+      <PageHeader log={<RecordLog entity="accessory-sheets" id={s.id} createdById={s.preparedById} createdAt={s.createdAt} />} back="/accessories" title={<>{s.number} <Status s={s.status} /></>}
         subtitle={<>Accessories for <Link className="text-brand-700" to={`/orders/${s.order.id}`}>{s.order.number}</Link>{s.order.sourceRef && ` (${s.order.sourceRef.replace('FFH:', 'FFH SO ')})`} · {s.order.client.name}{s.order.site && ` · ${s.order.site.name}`}</>}
         actions={<>
           {editable && <Button icon={<RefreshCw className="size-4" />} loading={recalc.isPending} onClick={() => { if (!dirty || confirm('Recalculate from the templates? Unsaved changes to template lines will be replaced; lines you added are kept.')) recalc.mutate(undefined); }}>Recalculate</Button>}

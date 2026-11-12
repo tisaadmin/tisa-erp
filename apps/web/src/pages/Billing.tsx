@@ -1,4 +1,5 @@
 import { OwnDescription } from '../components/PrintDescription';
+import { RecordLog } from '../components/RecordLog';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { FileDown, Mail, Plus, Upload } from 'lucide-react';
@@ -128,7 +129,7 @@ export function InvoiceDetail() {
   const balance = Math.round((inv.total - inv.amountPaid) * 100) / 100;
   return (
     <div className="space-y-4">
-      <PageHeader back="/invoices" title={<>{inv.number} <Status s={inv.status} /></>}
+      <PageHeader log={<RecordLog entity="invoices" id={inv.id} createdById={inv.createdById} createdAt={inv.createdAt} />} back="/invoices" title={<>{inv.number} <Status s={inv.status} /></>}
         subtitle={<>{label(inv.type)}{inv.raBillNo && ` · RA-${inv.raBillNo}`} · {inv.client.name}{inv.order && <> · <Link className="text-brand-700" to={`/orders/${inv.order.id}`}>{inv.order.number}</Link></>}</>}
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/invoices/${inv.id}/pdf`)}>PDF</Button>

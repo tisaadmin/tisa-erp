@@ -2195,3 +2195,19 @@ test('quotation sent back with remarks: remarks are required, kept in the histor
   const list = Array.isArray(notes) ? notes : notes.data;
   assert.ok(list.some((n: any) => /sent back/.test(n.title) && /Margin too low/.test(n.body ?? '')), 'sender notified with the remarks');
 });
+
+test('change log: who created / last changed a record', async () => {
+  const q = await ok('sales', 'POST', '/quotations', { clientId: ctx.client.id, siteId: ctx.site.id, subject: 'Log me', lines: [{ itemId: ctx.cam.id, qty: 1, rate: 1000, costRate: 700 }] });
+  await new Promise((r) => setTimeout(r, 150));
+  await ok('admin', 'PUT', `/quotations/${q.id}`, { clientId: ctx.client.id, siteId: ctx.site.id, subject: 'Log me 2', lines: [{ itemId: ctx.cam.id, qty: 2, rate: 1000, costRate: 700 }] });
+  await call('sales', 'POST', `/quotations/${q.id}/adjust-prices`, { percent: 5, preview: true });
+  await new Promise((r) => setTimeout(r, 150));
+  const me = async (who: string) => { const m = await ok(who, 'GET', '/auth/me'); return (m.user ?? m).name; };
+  const a = await ok('director', 'GET', `/activity/quotations/${q.id}`);
+  assert.equal(a.created.by, await me('sales'));
+  assert.equal(a.lastEdited.by, await me('admin')); assert.equal(a.lastEdited.label, 'Edited');
+  assert.equal(a.events.length, 2, 'one entry per change, previews are not changes');
+  // records made before the log: created from the record itself
+  const old = await ok('director', 'GET', `/activity/orders/00000000-0000-4000-8000-000000000000?createdById=${(await ok('sales', 'GET', '/auth/me')).id ?? (await ok('sales', 'GET', '/auth/me')).user.id}`);
+  assert.equal(old.created.by, await me('sales')); assert.equal(old.events.length, 0);
+});

@@ -1,4 +1,5 @@
 import { RecordTeam } from '../components/RecordTeam';
+import { RecordLog } from '../components/RecordLog';
 import { Clock, FileDown, MapPin, Plus, Send } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -121,7 +122,7 @@ export function TicketDetail() {
   const nextStatuses = can('tickets:assign') ? ['IN_PROGRESS', 'ON_HOLD', 'RESOLVED', 'CLOSED', 'CANCELLED'] : ['IN_PROGRESS', 'ON_HOLD', 'RESOLVED'];
   return (
     <div className="space-y-4">
-      <PageHeader back="/tickets" title={<>{t.number} <Status s={t.status} /> <Status s={t.priority} /></>} subtitle={t.title}
+      <PageHeader log={<RecordLog entity="tickets" id={t.id} createdById={t.raisedById} createdAt={t.createdAt} />} back="/tickets" title={<>{t.number} <Status s={t.status} /> <Status s={t.priority} /></>} subtitle={t.title}
         actions={<>
           {open && can('tickets:assign') && <Button onClick={() => setAssign({ assignedToId: t.assignedToId, scheduledAt: '', scheduledEnd: '' })}>{t.assignedTo ? 'Reassign' : 'Assign technician'}</Button>}
           {(open || can('tickets:assign')) && can('tickets:edit') && <Select className="w-40" value="" onChange={(e) => e.target.value && setStatusTo({ status: e.target.value, note: '' })} options={nextStatuses.filter((s) => s !== t.status)} placeholder="Change status…" />}
@@ -197,7 +198,7 @@ export function ServiceReportDetail() {
   if (!r) return <Spinner />;
   return (
     <div className="space-y-4">
-      <PageHeader back="/service-reports" title={<>{r.number} <Status s={r.workStatus} /></>} subtitle={`${r.site.client.name} · ${r.site.name}`}
+      <PageHeader log={<RecordLog entity="service-reports" id={r.id} createdById={r.technicianId} createdAt={r.createdAt} />} back="/service-reports" title={<>{r.number} <Status s={r.workStatus} /></>} subtitle={`${r.site.client.name} · ${r.site.name}`}
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/service-reports/${r.id}/pdf`)}>PDF</Button>
           <Button loading={resend.isPending} onClick={() => resend.mutate(undefined)}>Re-send email</Button>

@@ -1,4 +1,5 @@
 import { LogIn, LogOut, MapPin, Paperclip, Plus, Trash2 } from 'lucide-react';
+import { RecordLog } from '../components/RecordLog';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -338,7 +339,7 @@ export function RequisitionDetail() {
   const canConvert = convert.filter(([p]) => can(p) && (p !== 'purchase_orders:create' || !!r.orderId) && (p !== 'challans:create' || !!r.orderId || !!r.ticketId));
   return (
     <div className="space-y-4">
-      <PageHeader back="/requisitions" title={<>{r.number} <Status s={r.status} /></>} subtitle={`${label(r.type)} · ${r.client?.name ?? 'client not assigned'}${r.site ? ` · ${r.site.name}` : ''}`}
+      <PageHeader log={<RecordLog entity="requisitions" id={r.id} createdById={r.raisedById} createdAt={r.createdAt} />} back="/requisitions" title={<>{r.number} <Status s={r.status} /></>} subtitle={`${label(r.type)} · ${r.client?.name ?? 'client not assigned'}${r.site ? ` · ${r.site.name}` : ''}`}
         actions={r.canAct && actions.length > 0 && <>
           <Input className="w-56" placeholder="Note to requester" value={note} onChange={(e) => setNote(e.target.value)} />
           {actions.map(([a, l, v]) => <Button key={a} variant={v} loading={act.isPending} onClick={() => act.mutate(a)}>{l}</Button>)}
@@ -504,7 +505,7 @@ export function ExpenseDetail() {
   const financeStage = ['MANAGER_APPROVED', 'ACCOUNTS_APPROVED'].includes(c.status) && !mine && can('expenses:finance');
   return (
     <div className="space-y-4">
-      <PageHeader back="/expenses" title={<>{c.number} <Status s={c.status} /></>} subtitle={`${c.user.name} · ${c.title}`}
+      <PageHeader log={<RecordLog entity="expenses" id={c.id} createdById={c.userId} createdAt={c.createdAt} />} back="/expenses" title={<>{c.number} <Status s={c.status} /></>} subtitle={`${c.user.name} · ${c.title}`}
         actions={mine && ['DRAFT', 'SENT_BACK'].includes(c.status) && <><Link to={`/expenses/${c.id}/edit`}><Button>Edit</Button></Link><Button variant="primary" loading={submit.isPending} onClick={() => submit.mutate(undefined)}>Submit</Button></>} />
       <Card><KV cols={4} items={[['Claimed', inr(c.total)], ['Approved', c.approvedTotal != null ? inr(c.approvedTotal) : null], ['Approver', c.approver?.name], ['Period', `${fmtDate(c.periodFrom)} → ${fmtDate(c.periodTo)}`], ['Paid', fmtDateTime(c.paidAt)], ['Payment ref', c.paymentRef]]} /></Card>
       <Card title="Expenses" pad={false}>

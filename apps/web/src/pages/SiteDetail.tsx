@@ -1,4 +1,5 @@
 import { RecordTeam } from '../components/RecordTeam';
+import { RecordLog } from '../components/RecordLog';
 /**
  * Site page — the site is the master record: everything sold, bought, delivered, billed and serviced there, in one place.
  */
@@ -45,7 +46,7 @@ export function SiteDetail() {
   const invNo = (i: any) => <>{i.number}{i.raBillNo && <div className="text-xs text-slate-400">RA {String(i.raBillNo).padStart(3, '0')}</div>}</>;
   return (
     <div className="space-y-4">
-      <PageHeader back="/sites" title={<>{s.name} {!s.active && <Badge>Inactive</Badge>}</>}
+      <PageHeader log={<RecordLog entity="sites" id={s.id} createdById={null} createdAt={s.createdAt} />} back="/sites" title={<>{s.name} {!s.active && <Badge>Inactive</Badge>}</>}
         subtitle={<><Link className="text-brand-700 hover:underline" to={`/clients/${s.client.id}`}>{s.client.name}</Link> · {s.code}{s.city ? ` · ${s.city}` : ''}</>}
         actions={<>
           {can('sites:edit') && <Button onClick={() => ed.open(s)}>Edit site</Button>}
@@ -134,7 +135,7 @@ export function SiteDetail() {
         </div> : <p className="p-6 text-center text-sm text-slate-500">No geo-tagged photos</p>)}
       </Card>
       {lightbox && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6" onClick={() => setLightbox(null)}><img src={lightbox} alt="" className="max-h-full max-w-full rounded" /></div>}
-      <EditorModal ed={ed} title="site" fields={sCfg.fields} />
+      <EditorModal ed={ed} title="site" fields={sCfg.fields} logEntity="sites" />
       <RecordTeam entityType="SITE" entityId={s.id} label={`Site ${s.name}`} />
     </div>
   );

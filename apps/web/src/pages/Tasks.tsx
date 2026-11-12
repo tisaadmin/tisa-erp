@@ -1,4 +1,5 @@
 /** Tasks: give work to people (optionally about a record), track it to done. */
+import { RecordLog } from '../components/RecordLog';
 import { CheckCircle2, ListTodo, MessageSquare, Paperclip, Plus, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
@@ -125,7 +126,7 @@ export function TaskDetail() {
   const open = ['OPEN', 'IN_PROGRESS'].includes(t.status);
   return (
     <div className="space-y-4">
-      <PageHeader back="/tasks" title={<>{t.title} <Badge t={STATUS_TONE[t.status]}>{STATUS_LABEL[t.status]}</Badge></>} subtitle={`${t.number} · given by ${t.createdBy.name} on ${fmtDateTime(t.createdAt)}`}
+      <PageHeader log={<RecordLog entity="tasks" id={t.id} createdById={t.createdBy.id} createdAt={t.createdAt} />} back="/tasks" title={<>{t.title} <Badge t={STATUS_TONE[t.status]}>{STATUS_LABEL[t.status]}</Badge></>} subtitle={`${t.number} · given by ${t.createdBy.name} on ${fmtDateTime(t.createdAt)}`}
         actions={<>
           {mineToDo && t.status === 'OPEN' && <Button loading={setStatus.isPending} onClick={() => setStatus.mutate('IN_PROGRESS')}>Start</Button>}
           {(mineToDo || t.canEdit) && open && <Button variant="success" loading={setStatus.isPending} onClick={() => setStatus.mutate('DONE')}>Mark done</Button>}

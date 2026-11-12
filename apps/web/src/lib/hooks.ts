@@ -23,7 +23,8 @@ export function useAction<TVars = any, TRes = any>(fn: (v: TVars) => Promise<TRe
       if (opts.success) toast.success(opts.success);
       // invalidate everything whose path starts with one of the prefixes (default: all)
       const prefixes = opts.invalidate?.map((k) => String(k[0])) ?? null;
-      qc.invalidateQueries({ predicate: (q) => !prefixes || prefixes.some((p) => String(q.queryKey[0] ?? '').startsWith(p)) });
+      // the change log of whatever was changed refreshes too
+      qc.invalidateQueries({ predicate: (q) => !prefixes || String(q.queryKey[0] ?? '').startsWith('/activity/') || prefixes.some((p) => String(q.queryKey[0] ?? '').startsWith(p)) });
       opts.onSuccess?.(r);
     },
     onError: (e: Error) => toast.error(e.message),

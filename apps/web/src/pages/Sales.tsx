@@ -1,4 +1,5 @@
 import { RecordTeam } from '../components/RecordTeam';
+import { RecordLog } from '../components/RecordLog';
 import { FileDown, Plus, Receipt, Truck, Upload } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -159,7 +160,7 @@ export function QuotationDetail() {
   const editable = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(q.status);
   return (
     <div className="space-y-4">
-      <PageHeader back="/quotations" title={<>{q.number} <Status s={q.status} /></>} subtitle={q.subject}
+      <PageHeader log={<RecordLog entity="quotations" id={q.id} createdById={q.createdById} createdAt={q.createdAt} />} back="/quotations" title={<>{q.number} <Status s={q.status} /></>} subtitle={q.subject}
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/quotations/${q.id}/pdf`)}>PDF</Button>
           {editable && can('quotations:edit') && <Link to={`/quotations/${q.id}/edit`}><Button>Edit</Button></Link>}
@@ -411,7 +412,7 @@ export function OrderDetail() {
   };
   return (
     <div className="space-y-4">
-      <PageHeader back="/orders" title={<>{o.number} <Status s={o.status} />{o.isProject && <Badge t="violet">Project</Badge>}</>} subtitle={<>{o.client.name}{o.site && ` · ${o.site.name}`}{o.quotation && <> · from <Link className="text-brand-700" to={`/quotations/${o.quotation.id}`}>{o.quotation.number}</Link></>}</>}
+      <PageHeader log={<RecordLog entity="orders" id={o.id} createdById={o.createdById} createdAt={o.createdAt} />} back="/orders" title={<>{o.number} <Status s={o.status} />{o.isProject && <Badge t="violet">Project</Badge>}</>} subtitle={<>{o.client.name}{o.site && ` · ${o.site.name}`}{o.quotation && <> · from <Link className="text-brand-700" to={`/quotations/${o.quotation.id}`}>{o.quotation.number}</Link></>}</>}
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/orders/${o.id}/pdf`)}>Order acknowledgement</Button>
           {can('challans:create') && <Link to={`/challans/new?orderId=${o.id}`}><Button icon={<Truck className="size-4" />}>Delivery challan</Button></Link>}
@@ -789,7 +790,7 @@ export function ChallanDetail() {
   const pending = dc.status === 'PENDING_APPROVAL';
   return (
     <div className="space-y-4">
-      <PageHeader back="/challans" title={<>{dc.number} <Status s={dc.status} /></>} subtitle={`${dc.client.name}${dc.site ? ` · ${dc.site.name}` : ''}`}
+      <PageHeader log={<RecordLog entity="challans" id={dc.id} createdById={dc.createdById} createdAt={dc.createdAt} />} back="/challans" title={<>{dc.number} <Status s={dc.status} /></>} subtitle={`${dc.client.name}${dc.site ? ` · ${dc.site.name}` : ''}`}
         actions={<>
           {!['PENDING_APPROVAL', 'REJECTED'].includes(dc.status) && <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/challans/${dc.id}/pdf`)}>PDF</Button>}
           {pending && can('challans:approve') && <><Button variant="success" loading={approveDc.isPending} onClick={() => approveDc.mutate(undefined)}>Approve</Button><Button variant="danger" onClick={() => setRejectDc('')}>Reject</Button></>}

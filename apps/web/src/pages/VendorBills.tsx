@@ -1,4 +1,5 @@
 import { CheckCheck, Plus, Receipt } from 'lucide-react';
+import { RecordLog } from '../components/RecordLog';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Combo } from '../components/Combo';
@@ -215,7 +216,7 @@ export function VendorBillDetail() {
   const open = ['UNPAID', 'PARTIALLY_PAID'].includes(b.status);
   return (
     <div className="space-y-4">
-      <PageHeader back="/vendor-bills" title={<>Bill {b.billNo} <Status s={b.status} /></>} subtitle={<>{b.vendor.name} · {b.number}</>}
+      <PageHeader log={<RecordLog entity="vendor-bills" id={b.id} createdById={b.createdById} createdAt={b.createdAt} />} back="/vendor-bills" title={<>Bill {b.billNo} <Status s={b.status} /></>} subtitle={<>{b.vendor.name} · {b.number}</>}
         actions={<>
           {b.status !== 'CANCELLED' && can('vendor_bills:edit') && <Link to={`/vendor-bills/${b.id}/edit`}><Button>Edit</Button></Link>}
           {open && can('vendor_bills:pay') && <Button variant="success" icon={<Receipt className="size-4" />} onClick={() => setPay({ amount: balance, tdsAmount: 0, mode: 'NEFT', reference: '', date: today(), notes: '' })}>Record payment</Button>}

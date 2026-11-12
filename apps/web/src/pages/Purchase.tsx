@@ -1,4 +1,5 @@
 import { RecordTeam } from '../components/RecordTeam';
+import { RecordLog } from '../components/RecordLog';
 import { FileDown, PackageCheck, Plus } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -198,7 +199,7 @@ export function PoDetail() {
           <ul className="list-disc pl-5">{smallAlert.pos.map((x: any) => <li key={x.id}>{x.number} — {inr(x.total)}</li>)}</ul>
         </div>}
       </Modal>
-      <PageHeader back="/purchase-orders" title={<>{po.number} <Status s={po.status} />{po.autoApproved && <span className="ml-2 align-middle text-xs font-normal text-emerald-700">no approval needed (small PO)</span>}</>} subtitle={po.vendor.name}
+      <PageHeader log={<RecordLog entity="purchase-orders" id={po.id} createdById={po.createdById} createdAt={po.createdAt} />} back="/purchase-orders" title={<>{po.number} <Status s={po.status} />{po.autoApproved && <span className="ml-2 align-middle text-xs font-normal text-emerald-700">no approval needed (small PO)</span>}</>} subtitle={po.vendor.name}
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/purchase-orders/${po.id}/pdf`)}>PDF</Button>
           {['DRAFT', 'PENDING_APPROVAL'].includes(po.status) && can('purchase_orders:edit') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit</Button></Link>}
@@ -274,7 +275,7 @@ export function GrnDetail() {
   const billedLeft = g.status === 'POSTED';
   return (
     <div className="space-y-4">
-      <PageHeader back="/grns" title={<>{g.number} <Status s={g.status} /></>} subtitle={g.vendor.name}
+      <PageHeader log={<RecordLog entity="grns" id={g.id} createdById={g.receivedById ?? g.createdById} createdAt={g.createdAt} />} back="/grns" title={<>{g.number} <Status s={g.status} /></>} subtitle={g.vendor.name}
         actions={<>
           {g.status === 'PENDING_APPROVAL' && can('grn:approve') && <>
             <Button variant="success" loading={approve.isPending} onClick={() => approve.mutate(undefined)}>Approve</Button>

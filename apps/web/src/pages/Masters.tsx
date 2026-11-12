@@ -1,4 +1,5 @@
 import { RecordTeam } from '../components/RecordTeam';
+import { RecordLog } from '../components/RecordLog';
 import { Calendar, FileDown, MapPin, Phone, Plus, Trash2, UserPlus } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
@@ -78,7 +79,7 @@ export function ClientDetail() {
   const c = data.client;
   return (
     <div className="space-y-4">
-      <PageHeader back="/clients" title={c.name} subtitle={`${c.code} · ${label(c.type)}`}
+      <PageHeader log={<RecordLog entity="clients" id={c.id} createdById={null} createdAt={c.createdAt} />} back="/clients" title={c.name} subtitle={`${c.code} · ${label(c.type)}`}
         actions={<>
           {can('clients:edit') && <Button onClick={() => clientEd.open(c)}>Edit client</Button>}
           {can('quotations:create') && <Link to={`/quotations/new?clientId=${c.id}`}><Button variant="primary">New quotation</Button></Link>}
@@ -115,8 +116,8 @@ export function ClientDetail() {
         {tab === 'tickets' && <Table rows={data.tickets} to={(t: any) => `/tickets/${t.id}`} cols={[{ key: 'number', label: 'Ticket' }, { key: 'title', label: 'Issue' }, { key: 'site', label: 'Site', render: (t: any) => t.site?.name }, { key: 'priority', label: 'Priority', render: (t: any) => <Status s={t.priority} /> }, { key: 'status', label: 'Status', render: (t: any) => <Status s={t.status} /> }]} />}
         {tab === 'amc' && <Table rows={data.amcs} cols={[{ key: 'number', label: 'AMC' }, { key: 'site', label: 'Site', render: (a: any) => a.site?.name }, { key: 'period', label: 'Period', render: (a: any) => `${fmtDate(a.startDate)} → ${fmtDate(a.endDate)}` }, { key: 'value', label: 'Value', num: true, render: (a: any) => inr(a.value) }, { key: 'status', label: 'Status', render: (a: any) => <Status s={a.status} /> }]} />}
       </Card>
-      <EditorModal title="client" fields={cCfg.fields} ed={clientEd} />
-      <EditorModal title="site" fields={sCfg.fields} ed={siteEd} />
+      <EditorModal title="client" fields={cCfg.fields} ed={clientEd} logEntity="clients" />
+      <EditorModal title="site" fields={sCfg.fields} ed={siteEd} logEntity="sites" />
       <RecordTeam entityType="CLIENT" entityId={c.id} label={`Client ${c.name}`} />
     </div>
   );

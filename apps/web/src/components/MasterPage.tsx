@@ -1,4 +1,5 @@
 import { Pencil, Plus } from 'lucide-react';
+import { RecordLog } from './RecordLog';
 import { useMemo, useState, type ReactNode } from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -108,11 +109,13 @@ export function useEditor<T extends Record<string, any>>(path: string, fields: F
   return { editing, open: (row?: Record<string, any>) => setEditing(row ? { ...row } : { ...defaults }), close: () => setEditing(null), save };
 }
 
-export function EditorModal({ title, fields, ed, extra }: { title: string; fields: FieldDef[]; ed: ReturnType<typeof useEditor>; extra?: (row: Record<string, any>, close: () => void) => ReactNode }) {
+export function EditorModal({ title, fields, ed, extra, logEntity }: { title: string; fields: FieldDef[]; ed: ReturnType<typeof useEditor>; extra?: (row: Record<string, any>, close: () => void) => ReactNode;
+  /** API path of the record (e.g. "items") — shows who created / last changed it */ logEntity?: string }) {
   if (!ed.editing) return null;
   return (
     <Modal open onClose={ed.close} title={`${ed.editing.id ? 'Edit' : 'New'} ${title}`} wide
       footer={<>{ed.editing.id && extra && <span className="mr-auto">{extra(ed.editing, ed.close)}</span>}<Button onClick={ed.close}>Cancel</Button><Button variant="primary" loading={ed.save.isPending} onClick={() => ed.save.mutate(ed.editing!)}>Save</Button></>}>
+      {ed.editing.id && logEntity && <RecordLog entity={logEntity} id={ed.editing.id} createdById={ed.editing.createdById ?? null} createdAt={ed.editing.createdAt ?? null} className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded bg-slate-50 px-3 py-2 text-xs text-slate-500" />}
       <FormFields fields={ed.editing.id ? fields.filter((f) => !f.createOnly) : fields} value={ed.editing} onChange={(v) => ed.open(v)} />
     </Modal>
   );
@@ -147,7 +150,7 @@ export function MasterPage<T extends { id: string }>({ title, singular, path, pe
         <Table rows={list.data?.data} cols={allCols} exportAs={hasOwnExport ? undefined : { name: title.toLowerCase().replace(/[^a-z0-9]+/g, '-'), path, query: q }} to={to} onRow={to ? undefined : (r) => can(`${perm}:edit`) && ed.open(r as any)} />
         {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
       </Card>
-      <EditorModal title={singular} fields={fields} ed={ed} extra={editorExtra} />
+      <EditorModal title={singular} fields={fields} ed={ed} extra={editorExtra} logEntity={path.replace(/^\//, '').split('?')[0]} />
     </div>
   );
 }
