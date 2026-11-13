@@ -128,11 +128,13 @@ export function PoEditor() {
   const poTotal = totalsOf(d.lines, inter).total;
   const small = !!limitQ.data && limitQ.data.poNoApprovalBelow > 0 && poTotal > 0 && poTotal < limitQ.data.poNoApprovalBelow;
   if ((id && !existing.data) || rq.loading) return <Spinner />;
+  const correcting = !!id && !['DRAFT', 'PENDING_APPROVAL'].includes(existing.data.status);
   return (
     <div className="space-y-4">
       <RequisitionBanner req={rq.req} />
       <PageHeader back="/purchase-orders" title={id ? `Edit ${existing.data.number}` : 'New purchase order'}
-        actions={<><Button disabled={accBlocked || (orderRequired && !d.salesOrderId)} loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" disabled={accBlocked || (orderRequired && !d.salesOrderId)} loading={save.isPending} onClick={() => save.mutate(true)}>{small ? 'Approve & save (no approval needed)' : 'Submit for approval'}</Button></>} />
+        actions={correcting ? <Button variant="primary" loading={save.isPending} onClick={() => save.mutate(false)}>Save corrections</Button> : <><Button disabled={accBlocked || (orderRequired && !d.salesOrderId)} loading={save.isPending} onClick={() => save.mutate(false)}>Save draft</Button><Button variant="primary" disabled={accBlocked || (orderRequired && !d.salesOrderId)} loading={save.isPending} onClick={() => save.mutate(true)}>{small ? 'Approve & save (no approval needed)' : 'Submit for approval'}</Button></>} />
+      {correcting && <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">Super Admin correction of an issued PO ({existing.data.status.toLowerCase().replace('_', ' ')}). The PO keeps its number and status; what was received against each line stays. Changing the vendor moves its goods receipts too (not possible once the vendor has billed). Send the corrected PO to the vendor again.</div>}
       {small && <div className="rounded-md bg-emerald-50 px-4 py-2 text-sm text-emerald-800">Total {inr(poTotal)} is under {inr(limitQ.data!.poNoApprovalBelow)} — this PO goes to the purchase team without Management approval. (Several such POs to one vendor on the same day are flagged to Management.)</div>}
       {accBlocked && (
         <div className="rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -178,7 +180,7 @@ const PO_ACTIONS: Record<string, { a: string; label: string; perm: string; varia
 export function PoDetail() {
   const { id } = useParams();
   const nav = useNavigate();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const { data: po } = useGet<any>(`/purchase-orders/${id}`);
   const [grn, setGrn] = useState<{ vendorInvoiceNo: string; vendorInvoiceDate: string; notes: string; overQtyReason: string; lines: Record<string, { received: number; rejected: number; serialNos: string }> } | null>(null);
   const loc = useLocation();
@@ -203,6 +205,7 @@ export function PoDetail() {
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/purchase-orders/${po.id}/pdf`)}>PDF</Button>
           {['DRAFT', 'PENDING_APPROVAL'].includes(po.status) && can('purchase_orders:edit') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit</Button></Link>}
+          {!['DRAFT', 'PENDING_APPROVAL', 'CANCELLED', 'CLOSED'].includes(po.status) && !!user?.permissions.includes('*') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit (Super Admin)</Button></Link>}
           {(PO_ACTIONS[po.status] ?? []).filter((x) => can(x.perm)).map((x) => <Button key={x.a} variant={x.variant} loading={act.isPending} onClick={() => act.mutate(x.a)}>{x.label}</Button>)}
           {canReceive && <Button variant="primary" icon={<PackageCheck className="size-4" />} onClick={() => setGrn({ vendorInvoiceNo: '', vendorInvoiceDate: '', notes: '', overQtyReason: '', lines: Object.fromEntries(po.items.map((l: any) => [l.id, { received: Math.max(0, l.qty - l.receivedQty), rejected: 0, serialNos: '' }])) })}>Receive goods (GRN)</Button>}
         </>} />

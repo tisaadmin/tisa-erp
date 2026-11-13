@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { markRequisitionUsed, requisitionForDoc } from '../services/requisitions';
-import { and, asc, desc, eq, gte, ilike, inArray, lte, notInArray, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, ilike, inArray, lte, ne, notInArray, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, type Tx } from '../db';
 import { accessorySheets, goodsReceiptItems, goodsReceipts, vendorBills, items, purchaseOrderItems, purchaseOrders, requisitions, salesOrders, stockMovements, vendors } from '../db/schema';
@@ -11,6 +11,7 @@ import { badRequest, notFound, pageParams } from '../lib/http';
 import { nextNumber } from '../lib/numbering';
 import { notifyPermission, notifyUsers } from '../lib/notify';
 import { can, requirePerm } from '../middleware/auth';
+import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { getCompany } from '../services/company';
 import { costingConfig } from '../services/quoteCosting';
 import { purchaseOrderPdf } from '../services/documents';
@@ -95,7 +96,7 @@ const all = (c: (SQL | undefined)[]) => { const x = c.filter((s): s is SQL => !!
 
 const poSchema = z.object({
   vendorId: z.string(), salesOrderId: opt, deliverToSiteId: opt, date: z.coerce.date().optional(), expectedDate: z.coerce.date().nullish(),
-  terms: opt, notes: opt, requisitionId: opt, lines: z.array(lineSchema.extend({ qty: z.coerce.number().positive() })).min(1), submit: z.boolean().default(false),
+  terms: opt, notes: opt, requisitionId: opt, lines: z.array(lineSchema.extend({ qty: z.coerce.number().positive(), id: z.string().nullish() })).min(1), submit: z.boolean().default(false),
 });
 
 async function poContext(vendorId: string) {
@@ -224,7 +225,9 @@ r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, r
   const po = await db.transaction(async (tx) => {
     const ex = await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id) });
     if (!ex) throw notFound('Purchase order');
-    if (!['DRAFT', 'PENDING_APPROVAL'].includes(ex.status)) throw badRequest('Only draft / pending POs can be edited');
+    const correcting = !['DRAFT', 'PENDING_APPROVAL'].includes(ex.status);
+    if (correcting && !isSuperAdminPerms(req.user.permissions)) throw badRequest('Only draft / pending POs can be edited — ask the Super Admin to correct an issued PO');
+    if (correcting) return correctIssuedPo(tx, ex, d, interState);
     const { rows, totals } = await priceLines(tx, d.lines, interState, 'purchasePrice');
     const sub = d.submit ? await submitState(totals.total) : { status: ex.status, autoApproved: false };
     const [po] = await tx.update(purchaseOrders).set({
@@ -240,6 +243,44 @@ r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, r
   audit(req, 'update', 'purchase_order', po.id);
   res.json({ ...po, smallPoAlert: alert });
 });
+
+/**
+ * Super Admin correcting a PO that has already gone out (approved / sent / partly received): vendor, dates, terms and lines.
+ * Lines keep their identity (what was received against them stays); a line with goods received cannot be removed or cut below
+ * what was received. A different vendor moves the PO's goods receipts with it; not once the vendor has billed against it.
+ */
+async function correctIssuedPo(tx: Tx, ex: typeof purchaseOrders.$inferSelect, d: z.infer<typeof poSchema>, interState: boolean) {
+  if (['CANCELLED', 'CLOSED'].includes(ex.status)) throw badRequest(`A ${ex.status.toLowerCase()} PO cannot be changed`);
+  if (d.vendorId !== ex.vendorId) {
+    const bills = await tx.query.vendorBills.findMany({ where: and(eq(vendorBills.poId, ex.id), ne(vendorBills.status, 'CANCELLED')), columns: { billNo: true } });
+    if (bills.length) throw badRequest(`The vendor has billed against this PO (bill ${bills.map((b) => b.billNo).join(', ')}) — cancel the bill first to change the vendor`);
+    await tx.update(goodsReceipts).set({ vendorId: d.vendorId }).where(eq(goodsReceipts.poId, ex.id));
+  }
+  const cur = await tx.query.purchaseOrderItems.findMany({ where: eq(purchaseOrderItems.poId, ex.id) });
+  const keep = new Set(d.lines.map((l) => l.id).filter((x): x is string => !!x));
+  for (const c of cur.filter((c) => !keep.has(c.id))) {
+    if (Number(c.receivedQty) > 0) throw badRequest(`${c.description}: ${c.receivedQty} ${c.unit} already received — the line cannot be removed`);
+    const grn = await tx.query.goodsReceiptItems.findFirst({ where: eq(goodsReceiptItems.poItemId, c.id), columns: { id: true } });
+    if (grn) throw badRequest(`${c.description} is on a goods receipt — the line cannot be removed`);
+  }
+  const { rows, totals } = await priceLines(tx, d.lines, interState, 'purchasePrice');
+  for (const [i, l] of d.lines.entries()) {
+    const c = l.id ? cur.find((x) => x.id === l.id) : undefined;
+    if (l.id && !c) throw badRequest(`Line ${i + 1} is not on this PO`);
+    if (c && rows[i].qty < Number(c.receivedQty) - 1e-9) throw badRequest(`${c.description}: ${c.receivedQty} ${c.unit} already received — quantity cannot go below that`);
+  }
+  for (const c of cur.filter((c) => !keep.has(c.id))) await tx.delete(purchaseOrderItems).where(eq(purchaseOrderItems.id, c.id));
+  for (const [i, l] of d.lines.entries()) {
+    const { paymentTerms: _p, ...row } = rows[i];
+    if (l.id) await tx.update(purchaseOrderItems).set(row).where(eq(purchaseOrderItems.id, l.id));
+    else await tx.insert(purchaseOrderItems).values({ ...row, poId: ex.id });
+  }
+  const [po] = await tx.update(purchaseOrders).set({
+    vendorId: d.vendorId, salesOrderId: d.salesOrderId, deliverToSiteId: d.deliverToSiteId, date: d.date ?? ex.date, expectedDate: d.expectedDate,
+    terms: d.terms, notes: d.notes, isInterState: interState, ...totals,
+  }).where(eq(purchaseOrders.id, ex.id)).returning();
+  return po;
+}
 
 const PO_FLOW: Record<string, { to: string[]; perm: string }> = {
   submit: { to: ['PENDING_APPROVAL'], perm: 'purchase_orders:edit' },

@@ -211,6 +211,19 @@ test('purchase: PO approval → GRN → stock in', async () => {
   assert.equal(afterStock, before + 10);
   assert.equal((await ok('stores', 'GET', `/purchase-orders/${po.id}`)).status, 'PARTIALLY_RECEIVED');
   assert.equal((await call('stores', 'GET', `/purchase-orders/${po.id}/pdf`)).ct, 'application/pdf');
+  // Super Admin corrects the issued PO: another vendor; lines keep what was received
+  const v2 = (await ok('stores', 'GET', '/vendors')).data.find((v: any) => v.id !== vendor.id);
+  const live = await ok('stores', 'GET', `/purchase-orders/${po.id}`);
+  const fix = (lines: any[], vendorId = v2.id) => ({ vendorId, salesOrderId: ctx.order.id, lines });
+  assert.ok([400, 403].includes((await call('stores', 'PUT', `/purchase-orders/${po.id}`, fix([{ id: live.items[0].id, itemId: ctx.cam.id, qty: 10 }]))).status), 'only the Super Admin');
+  assert.equal((await call('admin', 'PUT', `/purchase-orders/${po.id}`, fix([{ id: live.items[0].id, itemId: ctx.cam.id, qty: 1 }]))).status, 400, 'not below received');
+  assert.equal((await call('admin', 'PUT', `/purchase-orders/${po.id}`, fix([{ itemId: ctx.nvr.id, qty: 1 }]))).status, 400, 'received line cannot go');
+  const fixed = await ok('admin', 'PUT', `/purchase-orders/${po.id}`, fix([{ id: live.items[0].id, itemId: ctx.cam.id, qty: 20 }, { itemId: ctx.nvr.id, qty: 1 }]));
+  assert.equal(fixed.vendorId, v2.id); assert.equal(fixed.status, 'PARTIALLY_RECEIVED');
+  const after = await ok('stores', 'GET', `/purchase-orders/${po.id}`);
+  assert.equal(after.items.length, 2); assert.equal(after.items.find((i: any) => i.id === live.items[0].id).receivedQty, live.items[0].receivedQty);
+  // back to the first vendor for the tests below
+  await ok('admin', 'PUT', `/purchase-orders/${po.id}`, fix([{ id: live.items[0].id, itemId: ctx.cam.id, qty: 20 }], vendor.id));
   ctx.po = po; ctx.vendor = vendor;
 });
 

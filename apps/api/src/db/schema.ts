@@ -62,6 +62,8 @@ export const companySettings = pgTable('company_settings', {
   address: text(),
   /** registered office, printed on documents beside the working office address */
   registeredAddress: text(),
+  /** LUT reference (ARN) for exports without payment of IGST — printed on export invoices */
+  lutArn: text(),
   city: text(),
   pincode: text(),
   phone: text(),
@@ -363,6 +365,10 @@ export const quotations = pgTable('quotations', {
   paymentTerms: jsonb().$type<PaymentTerm[]>(),
   terms: text(),
   notes: text(),
+  /** document currency (INR, or e.g. USD for an export); amounts on the document are in this currency */
+  currency: text().notNull().default('INR'),
+  /** for a foreign-currency document: INR per unit of currency, entered per document (books / reports in INR) */
+  exchangeRate: numeric({ precision: 12, scale: 4, mode: 'number' }),
   ...totals(),
   createdById: text(),
   approvedById: text(),
@@ -431,6 +437,10 @@ export const salesOrders = pgTable('sales_orders', {
   sourceRef: text(),
   /** Details carried over from the source system (FFH title, owner, statuses, values; summaryOnly = lines not imported yet) */
   sourceData: jsonb().$type<SourceData>(),
+  /** document currency (INR, or e.g. USD for an export); amounts on the document are in this currency */
+  currency: text().notNull().default('INR'),
+  /** for a foreign-currency document: INR per unit of currency, entered per document (books / reports in INR) */
+  exchangeRate: numeric({ precision: 12, scale: 4, mode: 'number' }),
   ...totals(),
   createdById: text(),
   /** project in charge (usually from the Projects department) — reports to the Projects head */
@@ -740,6 +750,10 @@ export const invoices = pgTable('invoices', {
   status: text().notNull().default('DRAFT'), // DRAFT, ISSUED, PARTIALLY_PAID, PAID, CANCELLED
   notes: text(),
   terms: text(),
+  /** document currency (INR, or e.g. USD for an export); amounts on the document are in this currency */
+  currency: text().notNull().default('INR'),
+  /** for a foreign-currency document: INR per unit of currency, entered per document (books / reports in INR) */
+  exchangeRate: numeric({ precision: 12, scale: 4, mode: 'number' }),
   ...totals(),
   amountPaid: money().notNull().default(0),
   sourceRef: text(), // imported from the old ERP
