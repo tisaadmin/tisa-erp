@@ -1,5 +1,10 @@
 export const inr = (n: number | null | undefined, decimals = 2) =>
   n == null ? '—' : `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
+const SYM: Record<string, string> = { USD: '$', EUR: '€', GBP: '£', AED: 'AED ' };
+/** an amount in the document's currency (₹ for INR) */
+export const money = (n: number | null | undefined, currency?: string | null, decimals = 2) =>
+  !currency || currency === 'INR' ? inr(n, decimals) : n == null ? '—' : `${SYM[currency] ?? `${currency} `}${Number(n).toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
+export const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'] as const;
 export const inrShort = (n: number | null | undefined) => {
   if (n == null) return '—';
   const a = Math.abs(n);

@@ -10,7 +10,7 @@ import { RequisitionBanner, useRequisition } from '../components/FromRequisition
 import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Select, Spinner, Stat, Status, Table, Tabs, Textarea } from '../components/ui';
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { fmtDate, inr, inrShort, label, toInputDate } from '../lib/format';
+import { fmtDate, inr, inrShort, label, money, toInputDate } from '../lib/format';
 import { useAction, useGet, useItems, type Page, useListQuery, useSessionState } from '../lib/hooks';
 import { DocLines, PartyPicker, useCompanyState } from './Sales';
 import { DateFilter } from '../components/DateFilter';
@@ -54,8 +54,8 @@ export function InvoicesPage() {
           { key: 'number', label: 'Number' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
           { key: 'type', label: 'Type', render: (r) => r.raBillNo ? <Badge t="blue">RA-{r.raBillNo}</Badge> : label(r.type) },
           { key: 'client', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="text-xs text-slate-400">{r.site?.name}{r.order && ` · ${r.order.number}`}</div></> },
-          { key: 'total', label: 'Total', num: true, render: (r) => inr(r.total) },
-          { key: 'balance', label: 'Balance', num: true, render: (r) => ['ISSUED', 'PARTIALLY_PAID'].includes(r.status) ? inr(r.total - r.amountPaid) : '—' },
+          { key: 'total', label: 'Total', num: true, render: (r) => money(r.total, r.currency) },
+          { key: 'balance', label: 'Balance', num: true, render: (r) => ['ISSUED', 'PARTIALLY_PAID'].includes(r.status) ? money(r.total - r.amountPaid, r.currency) : '—' },
           { key: 'due', label: 'Due', render: (r) => <span className={['ISSUED', 'PARTIALLY_PAID'].includes(r.status) && r.dueDate && new Date(r.dueDate) < new Date() ? 'font-medium text-red-600' : ''}>{fmtDate(r.dueDate)}</span> },
           { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
         ]} />
@@ -140,9 +140,10 @@ export function InvoiceDetail() {
           {inv.status === 'ISSUED' && !inv.amountPaid && can('invoices:cancel') && <Button variant="danger" onClick={() => setCancel('')}>Cancel</Button>}
         </>} />
       {inv.status === 'DRAFT' && <div className="rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-800">Draft — the GST invoice number is assigned when you issue it, so numbering stays consecutive.</div>}
+      {inv.currency !== 'INR' && <ExchangeRate inv={inv} editable={inv.status !== 'CANCELLED' && can('invoices:create')} />}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Details" className="lg:col-span-2"><KV cols={3} items={[['Date', fmtDate(inv.date)], ['Due', fmtDate(inv.dueDate)], ['Place of supply', inv.placeOfSupply], ['Tax', inv.isInterState ? 'IGST' : 'CGST + SGST'], ['Billing GSTIN', inv.billingGstin], ['Site', inv.site?.name], ['Client PO', inv.order?.clientPoNo]]} /></Card>
-        <Card title="Payment"><KV cols={2} items={[['Total', inr(inv.total)], ['Received', inr(inv.amountPaid)], ['Balance', <span className={balance > 0 ? 'text-red-600' : 'text-emerald-700'}>{inr(balance)}</span>]]} /></Card>
+        <Card title="Payment"><KV cols={2} items={[['Total', money(inv.total, inv.currency)], ['Received', money(inv.amountPaid, inv.currency)], ['Balance', <span className={balance > 0 ? 'text-red-600' : 'text-emerald-700'}>{money(balance, inv.currency)}</span>]]} /></Card>
       </div>
       <DocLines doc={inv} editLine={inv.status === 'DRAFT' && can('invoices:create') ? { desc: (l) => <DraftLineText invoiceId={inv.id} line={l} />, hsn: (l) => <DraftLineHsn invoiceId={inv.id} line={l} /> } : undefined} />
       {inv.status === 'DRAFT' && can('invoices:create') && <p className="-mt-2 text-xs text-slate-500">While the bill is a draft you can change each line's HSN and write your own description to print instead of the item.</p>}
@@ -165,6 +166,23 @@ export function InvoiceDetail() {
       <Modal open={cancel !== null} onClose={() => setCancel(null)} title="Cancel invoice" footer={<><Button onClick={() => setCancel(null)}>Back</Button><Button variant="danger" disabled={(cancel ?? '').length < 3} loading={doCancel.isPending} onClick={() => doCancel.mutate(undefined)}>Cancel invoice</Button></>}>
         <Field label="Reason"><Input value={cancel ?? ''} onChange={(e) => setCancel(e.target.value)} /></Field>
       </Modal>
+    </div>
+  );
+}
+
+/** Export bill in a foreign currency: the INR exchange rate for the books (needed before issuing). */
+function ExchangeRate({ inv, editable }: { inv: any; editable: boolean }) {
+  const [v, setV] = useState(inv.exchangeRate != null ? String(inv.exchangeRate) : '');
+  const save = useAction(() => api(`/invoices/${inv.id}/exchange-rate`, { method: 'PATCH', body: { exchangeRate: Number(v) } }), { success: 'Exchange rate saved', invalidate: [['/invoices']] });
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-md border border-sky-200 bg-sky-50 px-4 py-2 text-sm text-sky-900">
+      <span><b>Export in {inv.currency}</b> — supply under LUT without IGST (printed on the invoice).</span>
+      <span className="ml-auto flex items-center gap-2">₹ per {inv.currency}
+        <Input className="w-28 text-right" type="number" min={0} step="any" disabled={!editable} value={v} onChange={(e) => setV(e.target.value)} />
+        {editable && <Button size="sm" disabled={!(Number(v) > 0) || Number(v) === Number(inv.exchangeRate)} loading={save.isPending} onClick={() => save.mutate(undefined)}>Save</Button>}
+        {Number(inv.exchangeRate) > 0 && <span className="text-xs text-sky-700">= {inr(inv.total * Number(inv.exchangeRate))}</span>}
+      </span>
+      {inv.status === 'DRAFT' && !inv.exchangeRate && <div className="w-full text-xs text-amber-800">Enter the exchange rate before issuing.</div>}
     </div>
   );
 }

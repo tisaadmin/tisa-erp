@@ -47,12 +47,17 @@ export async function quotationPdf(id: string) {
   if (q.site) parties.push({ title: 'Site', name: q.site.name, lines: partyLines(q.site) });
   const doc = renderCommercialDoc(company, {
     title: 'QUOTATION',
-    meta: [['Quotation No', q.number], ['Date', fmtDate(q.date)], ['Valid until', fmtDate(q.validUntil)], ['Place of supply', stateLabel(q.placeOfSupply)]],
-    parties, subject: q.subject, columns: lineCols(!!q.igst), rows: toRows(q.items), totals: q,
+    meta: [['Quotation No', q.number], ['Date', fmtDate(q.date)], ['Valid until', fmtDate(q.validUntil)], ['Place of supply', placeLabel(q.placeOfSupply, q.currency)], ...curMeta(q.currency, null)],
+    parties, subject: q.subject, columns: lineCols(!!q.igst), rows: toRows(q.items), totals: q, currency: q.currency,
     paymentSchedule: q.paymentTerms ?? undefined, terms: q.terms, notes: q.notes, showBank: false,
   });
   return { doc, filename: fname(q.number) };
 }
+
+/** an export: the place of supply is outside India */
+const placeLabel = (pos: string | null | undefined, currency: string) => (currency !== 'INR' ? 'Outside India (export)' : stateLabel(pos));
+const curMeta = (currency: string, rate: number | null | undefined): [string, string | null][] =>
+  currency === 'INR' ? [] : [['Currency', currency], ...(rate ? [['Exchange rate', `1 ${currency} = Rs. ${rate}`] as [string, string]] : [])];
 
 export async function orderPdf(id: string) {
   const company = await getCompany();
@@ -60,7 +65,8 @@ export async function orderPdf(id: string) {
   if (!o) throw notFound('Order');
   const doc = renderCommercialDoc(company, {
     title: 'ORDER ACKNOWLEDGEMENT',
-    meta: [['Order No', o.number], ['Date', fmtDate(o.date)], ['Client PO', o.clientPoNo], ['PO date', fmtDate(o.clientPoDate)], ['Place of supply', stateLabel(o.placeOfSupply)], ['Target completion', fmtDate(o.expectedCompletion)]],
+    meta: [['Order No', o.number], ['Date', fmtDate(o.date)], ['Client PO', o.clientPoNo], ['PO date', fmtDate(o.clientPoDate)], ['Place of supply', placeLabel(o.placeOfSupply, o.currency)], ['Target completion', fmtDate(o.expectedCompletion)], ...curMeta(o.currency, null)],
+    currency: o.currency,
     parties: [{ title: 'Client', name: o.client.name, lines: partyLines(o.client) }, ...(o.site ? [{ title: 'Site', name: o.site.name, lines: partyLines(o.site) }] : [])],
     columns: lineCols(!!o.igst), rows: toRows(o.items), totals: o, paymentSchedule: o.paymentTerms, terms: o.terms, notes: o.notes,
   });
@@ -122,8 +128,11 @@ export async function invoicePdf(id: string) {
   }));
   const doc = renderCommercialDoc(company, {
     title,
-    meta: [['Invoice No', inv.number], ['Date', fmtDate(inv.date)], ['Due date', fmtDate(inv.dueDate)], ['Place of supply', stateLabel(inv.placeOfSupply)],
-      ['Order', inv.order?.number], ['Client PO', inv.order?.clientPoNo], ['Reverse charge', 'No']],
+    meta: [['Invoice No', inv.number], ['Date', fmtDate(inv.date)], ['Due date', fmtDate(inv.dueDate)], ['Place of supply', placeLabel(inv.placeOfSupply, inv.currency)],
+      ['Order', inv.order?.number], ['Client PO', inv.order?.clientPoNo], ['Reverse charge', 'No'], ...curMeta(inv.currency, inv.exchangeRate)],
+    currency: inv.currency,
+    // export without payment of IGST
+    footerNote: inv.currency !== 'INR' ? `SUPPLY MEANT FOR EXPORT UNDER LETTER OF UNDERTAKING (LUT) WITHOUT PAYMENT OF INTEGRATED TAX (IGST)${company.lutArn ? ` — LUT ARN ${company.lutArn}` : ''}` : undefined,
     parties: [{ title: 'Bill to', name: inv.client.name, lines: partyLines({ ...inv.client, gstin: inv.billingGstin ?? inv.client.gstin }) },
       ...(inv.site ? [{ title: 'Ship to / Site', name: inv.site.name, lines: partyLines(inv.site) }] : [])],
     columns: cols, rows, totals: inv, showBank: true, terms: inv.terms ?? company.invoiceTerms, notes: inv.notes,

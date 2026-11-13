@@ -1,14 +1,14 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useGet, useItems } from '../lib/hooks';
-import { inr, STAGE_LABEL, STAGES } from '../lib/format';
+import { inr, money, STAGE_LABEL, STAGES } from '../lib/format';
 import { ItemSuggest, type SuggestItem } from './ItemSuggest';
 import { Button, cx } from './ui';
 import { Combo, CUSTOM } from './Combo';
 import { api } from '../lib/api';
 import { OwnDescription } from './PrintDescription';
 
-export type Line = { itemId?: string | null; description: string; hsnSac?: string | null; unit: string; qty: number; rate: number; discountPct: number; gstRate: number;
+export type Line = { /** existing line (editing) */ id?: string; paymentTerms?: { stage: string; percent: number }[]; itemId?: string | null; description: string; hsnSac?: string | null; unit: string; qty: number; rate: number; discountPct: number; gstRate: number;
   /** quotation costing (internal): our purchase rate and the vendor quoting it */
   costRate?: number | null; costVendorId?: string | null; costVendor?: string | null;
   /** challan / sales invoice: own wording, printed instead of the item when chosen */
@@ -40,13 +40,15 @@ export function totalsOf(lines: Line[], interState: boolean) {
   return { gross: r2(gross), discount: r2(gross - taxable), taxable: r2(taxable), cgst: r2(cgst), sgst: r2(sgst), igst: interState ? r2(tax) : 0, roundOff: r2(total - raw), total };
 }
 
-export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds, limits, costing, ownDescription, priceTools }: {
+export function LineItemsEditor({ lines, onChange, interState, priceField = 'salePrice', onlyItemIds, limits, costing, ownDescription, priceTools, currency = 'INR', fxRate = 1 }: {
   lines: Line[]; onChange: (l: Line[]) => void; interState: boolean; priceField?: 'salePrice' | 'purchasePrice';
   /** when set, only these inventory items may be picked (e.g. a PO against an order) */ onlyItemIds?: string[];
   /** per item: quantity on the order and how much is still left to order */ limits?: Record<string, { qty: number; ordered: number; remaining: number }>;
   /** quotation: show our purchase rate + vendor per line (internal costing) */ costing?: boolean;
   /** sales invoice: an own-description box per line, printed instead of the item when chosen */ ownDescription?: boolean;
   /** quotation: price the lines from their purchase rate by a margin, or raise / lower all rates by a % */ priceTools?: boolean;
+  /** document currency — a foreign currency (export) is zero-rated */ currency?: string;
+  /** ₹ per unit of the currency — purchase rates (₹) are converted with it for margins */ fxRate?: number;
 }) {
   // Sales may not have the Vendors module — this list is for picking who quoted a purchase rate
   const vendors = useGet<{ id: string; name: string; city: string | null }[]>(costing ? '/quotations-costing/vendors' : null);
@@ -65,10 +67,12 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
   const latest = useRef(lines); latest.current = lines;
   const onChangeRef = useRef((f: (cur: Line[]) => Line[]) => onChange(f(latest.current)));
   onChangeRef.current = (f) => onChange(f(latest.current));
-  const t = totalsOf(lines, interState);
+  const fx = currency !== 'INR';
+  const t0 = totalsOf(fx ? lines.map((l) => ({ ...l, gstRate: 0 })) : lines, interState);
+  const t = fx ? { ...t0, total: Math.round((t0.taxable + t0.cgst + t0.sgst + t0.igst) * 100) / 100, roundOff: 0 } : t0;
   return (
     <div>
-      {priceTools && <PriceTools lines={lines} onChange={onChange} costing={!!costing} />}
+      {priceTools && <PriceTools lines={lines} onChange={onChange} costing={!!costing} fxRate={fxRate || 1} />}
       <div className="overflow-x-auto rounded-md border border-slate-200">
         <table className="tbl min-w-[1050px]">
           <thead>
@@ -106,11 +110,11 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
                   <td><input type="number" min={0} step="any" className="input text-right" value={l.rate} onChange={(e) => set(i, { rate: Number(e.target.value) })} /></td>
                   <td><input type="number" min={0} max={100} step="any" className="input text-right" value={l.discountPct} onChange={(e) => set(i, { discountPct: Number(e.target.value) })} /></td>
                   <td>
-                    <select className="input text-right" value={l.gstRate} onChange={(e) => set(i, { gstRate: Number(e.target.value) })}>
+                    <select className="input text-right" disabled={fx} title={fx ? 'Export under LUT — 0% GST' : undefined} value={fx ? 0 : l.gstRate} onChange={(e) => set(i, { gstRate: Number(e.target.value) })}>
                       {[0, 5, 12, 18, 28].map((g) => <option key={g} value={g}>{g}</option>)}
                     </select>
                   </td>
-                  <td className="num pt-3 font-medium">{inr(taxable)}</td>
+                  <td className="num pt-3 font-medium">{money(taxable, currency)}</td>
                   <td className="pt-2"><button type="button" className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" onClick={() => onChange(lines.filter((_, j) => j !== i))} aria-label="Remove line"><Trash2 className="size-4" /></button></td>
                 </tr>
                 {costing && (
@@ -123,7 +127,7 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
                         <span className="ml-2 font-semibold">Vendor</span>
                         <div className="w-64"><Combo options={vendorOpts} value={l.costVendorId ?? null} text={l.costVendorId ? null : l.costVendor} placeholder="Vendor quoting this rate…" allowCustom onChange={(v, o) => set(i, { costVendorId: v && v !== CUSTOM ? v : null, costVendor: o?.label ?? null })} /></div>
                         {l.costRate != null && l.qty > 0 && <span className="ml-2">Cost {inr(l.costRate * l.qty)}</span>}
-                        {l.costRate != null && l.costRate > 0 && <MarginInput line={l} onRate={(rate) => set(i, { rate })} />}
+                        {l.costRate != null && l.costRate > 0 && <MarginInput line={{ ...l, costRate: l.costRate / (fxRate || 1) }} onRate={(rate) => set(i, { rate })} />}
                       </div>
                     </td>
                   </tr>
@@ -136,7 +140,7 @@ export function LineItemsEditor({ lines, onChange, interState, priceField = 'sal
       </div>
       <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
         <Button type="button" size="sm" icon={<Plus className="size-4" />} onClick={() => onChange([...lines, emptyLine()])}>Add line</Button>
-        <Totals t={t} />
+        <Totals t={t} currency={currency} />
       </div>
     </div>
   );
@@ -168,7 +172,10 @@ function MarginInput({ line, onRate }: { line: Line; onRate: (rate: number) => v
  * Quotation pricing helpers: sales rate = purchase rate ÷ (1 − margin) on every line with a purchase rate
  * (margin on the selling price, e.g. 25% → cost 75 sells at 100), and a ± % change to all sales rates.
  */
-function PriceTools({ lines, onChange, costing }: { lines: Line[]; onChange: (l: Line[]) => void; costing: boolean }) {
+function PriceTools({ lines: raw, onChange, costing, fxRate }: { lines: Line[]; onChange: (l: Line[]) => void; costing: boolean; fxRate: number }) {
+  // purchase rates are in ₹; for a foreign-currency quote they are compared at the exchange rate
+  const lines = fxRate === 1 ? raw : raw.map((l) => ({ ...l, costRate: l.costRate != null ? l.costRate / fxRate : l.costRate }));
+  const back = (ls: Line[]) => (fxRate === 1 ? ls : ls.map((l, i) => ({ ...l, costRate: raw[i].costRate })));
   const [margin, setMargin] = useState('25');
   const [pct, setPct] = useState('');
   const [step, setStep] = useState(1);
@@ -176,12 +183,12 @@ function PriceTools({ lines, onChange, costing }: { lines: Line[]; onChange: (l:
   const noCost = lines.filter((l) => l.description && !(l.costRate != null && l.costRate > 0) && l.qty > 0);
   const applyMargin = (m: number) => {
     if (!(m < 100)) return;
-    onChange(lines.map((l) => (l.costRate != null && l.costRate > 0 ? { ...l, rate: rateForMargin(l.costRate, m, l.discountPct, step) } : l)));
+    onChange(back(lines.map((l) => (l.costRate != null && l.costRate > 0 ? { ...l, rate: rateForMargin(l.costRate, m, l.discountPct, step) } : l))));
   };
   const applyPct = () => {
     const p = Number(pct);
     if (!p || p <= -100) return;
-    onChange(lines.map((l) => (l.rate > 0 ? { ...l, rate: roundRate(l.rate * (1 + p / 100), step) } : l)));
+    onChange(back(lines.map((l) => (l.rate > 0 ? { ...l, rate: roundRate(l.rate * (1 + p / 100), step) } : l))));
     setPct('');
   };
   const cost = r2(withCost.reduce((s, l) => s + (l.costRate ?? 0) * l.qty, 0));
@@ -217,7 +224,9 @@ function PriceTools({ lines, onChange, costing }: { lines: Line[]; onChange: (l:
   );
 }
 
-export function Totals({ t }: { t: { discount?: number; taxable: number; cgst: number; sgst: number; igst: number; roundOff: number; total: number } }) {
+export function Totals({ t, currency }: { t: { discount?: number; taxable: number; cgst: number; sgst: number; igst: number; roundOff: number; total: number; currency?: string | null }; currency?: string | null }) {
+  const cur = currency ?? t.currency ?? 'INR';
+  const fmt = (n: number) => money(n, cur);
   const rows: [string, number][] = [];
   if (t.discount) rows.push(['Discount', -t.discount]);
   rows.push(['Taxable value', t.taxable]);
@@ -225,8 +234,9 @@ export function Totals({ t }: { t: { discount?: number; taxable: number; cgst: n
   if (t.roundOff) rows.push(['Round off', t.roundOff]);
   return (
     <div className="w-72 text-sm">
-      {rows.map(([k, v]) => <div key={k} className="flex justify-between py-0.5 text-slate-600"><span>{k}</span><span className="tabular-nums">{inr(v)}</span></div>)}
-      <div className="mt-1 flex justify-between border-t border-slate-200 pt-1.5 text-base font-semibold text-slate-900"><span>Total</span><span className="tabular-nums">{inr(t.total)}</span></div>
+      {rows.map(([k, v]) => <div key={k} className="flex justify-between py-0.5 text-slate-600"><span>{k}</span><span className="tabular-nums">{fmt(v)}</span></div>)}
+      <div className="mt-1 flex justify-between border-t border-slate-200 pt-1.5 text-base font-semibold text-slate-900"><span>Total{cur !== 'INR' ? ` (${cur})` : ''}</span><span className="tabular-nums">{fmt(t.total)}</span></div>
+      {cur !== 'INR' && <div className="mt-1 text-right text-xs text-slate-500">Export under LUT — no GST</div>}
     </div>
   );
 }

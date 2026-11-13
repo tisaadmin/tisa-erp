@@ -8,7 +8,7 @@ import { amcContracts, clients, invoiceItems, invoices, items, paymentReceipts, 
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { addDays, dayRange } from '../lib/dates';
-import { calcTotals, r2, r3 } from '../lib/gst';
+import { calcTotals, inCurrency, r2, r3 } from '../lib/gst';
 import { badRequest, forbidden, HttpError, notFound, pageParams } from '../lib/http';
 import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { workflowRules } from '../services/workflow';
@@ -170,9 +170,12 @@ export async function createRunningBill(tx: Tx, d: z.infer<typeof raSchema>, use
       milestone: w.stage, milestonePercent: st.percent, qty: w.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate, sortOrder: i,
     };
   });
-  const { lines: calcs, totals } = calcTotals(rows, ctx.isInterState);
+  const { lines: calcs, totals: t0 } = calcTotals(rows, ctx.isInterState);
+  const totals = inCurrency(t0, order.currency);
   const date = d.date ?? new Date();
   const [inv] = await tx.insert(invoices).values({
+    // an export order is billed in its currency; the exchange rate is entered on each bill
+    currency: order.currency,
     number: draftNo(), type: d.proforma ? 'PROFORMA' : 'RUNNING_BILL', date, dueDate: d.dueDate ?? addDays(date, ctx.client.paymentTermsDays),
     clientId: order.clientId, siteId: order.siteId, orderId: order.id, placeOfSupply: ctx.placeOfSupply, isInterState: ctx.isInterState,
     billingGstin: ctx.billingGstin, notes: d.notes, ...totals, createdById: userId,
@@ -187,6 +190,7 @@ r.post('/invoices/:id/issue', requirePerm('invoices:create'), async (req, res) =
     const inv = await tx.query.invoices.findFirst({ where: eq(invoices.id, req.params.id) });
     if (!inv) throw notFound('Invoice');
     if (inv.status !== 'DRAFT') throw badRequest('Only drafts can be issued');
+    if (inv.currency !== 'INR' && !inv.exchangeRate) throw badRequest(`Enter the exchange rate (INR per ${inv.currency}) on this bill before issuing it`);
     let raBillNo: number | null = null;
     if (inv.type === 'RUNNING_BILL' && inv.orderId) {
       // continues the client's RA numbering when earlier RA bills were raised before the ERP
@@ -218,6 +222,17 @@ r.post('/invoices/:id/issue', requirePerm('invoices:create'), async (req, res) =
   });
   audit(req, 'issue', 'invoice', inv.id, { number: inv.number });
   res.json(inv);
+});
+
+/** Foreign-currency bill: the exchange rate (INR per unit) for the books — entered per bill, also correctable after issue. */
+r.patch('/invoices/:id/exchange-rate', requirePerm('invoices:create'), async (req, res) => {
+  const { exchangeRate } = z.object({ exchangeRate: z.coerce.number().positive() }).parse(req.body);
+  const inv = await db.query.invoices.findFirst({ where: eq(invoices.id, req.params.id), columns: { id: true, currency: true, status: true } });
+  if (!inv) throw notFound('Invoice');
+  if (inv.currency === 'INR') throw badRequest('This bill is in INR');
+  if (inv.status === 'CANCELLED') throw badRequest('The bill is cancelled');
+  const [row] = await db.update(invoices).set({ exchangeRate }).where(eq(invoices.id, inv.id)).returning();
+  res.json(row);
 });
 
 /**
@@ -344,7 +359,8 @@ r.get('/receivables', requirePerm('invoices:view'), async (req, res) => {
   const buckets = { current: 0, d0_30: 0, d31_60: 0, d61_90: 0, d90p: 0 };
   const byClient = new Map<string, { clientId: string; name: string; outstanding: number; overdue: number }>();
   for (const i of open) {
-    const bal = r2(i.total - i.amountPaid);
+    // export bills count in ₹ at their exchange rate
+    const bal = r2((i.total - i.amountPaid) * (i.currency === 'INR' ? 1 : Number(i.exchangeRate) || 0));
     const days = i.dueDate ? Math.floor((now - i.dueDate.getTime()) / 86400000) : 0;
     if (days <= 0) buckets.current += bal; else if (days <= 30) buckets.d0_30 += bal; else if (days <= 60) buckets.d31_60 += bal; else if (days <= 90) buckets.d61_90 += bal; else buckets.d90p += bal;
     const c = byClient.get(i.clientId) ?? { clientId: i.clientId, name: i.client.name, outstanding: 0, overdue: 0 };

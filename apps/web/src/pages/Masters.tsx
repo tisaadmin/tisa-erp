@@ -441,7 +441,8 @@ export function UsersPage() {
     { name: 'employeeCode', label: 'Employee code' }, { name: 'designation', label: 'Designation' }, { name: 'departmentId', label: 'Department', type: 'combo', options: deptOpts, hint: 'The department head approves their leave, expenses & requisitions' },
     { name: 'roleId', label: 'Role (access level)', type: 'combo', options: roleOpts, required: true }, { name: 'managerId', label: 'Reports to (approves expenses & leave)', type: 'combo', options: userOpts },
     { name: 'password', label: 'New password', hint: 'Min 8 chars. Leave blank to keep the current one. They choose their own at first sign-in unless you tick “Keep this password”.' },
-    ...(superAdmin ? [{ name: 'passwordFinal', label: 'Keep this password', type: 'checkbox' as const, hint: 'Don’t ask them to change it (e.g. a shared review / demo login)' }] : []),
+    ...(superAdmin ? [{ name: 'passwordFinal', label: 'Keep this password', type: 'checkbox' as const, hint: 'Don’t ask them to change it (e.g. a shared review / demo login)' },
+      { name: 'manualPoNumber', label: 'Can type PO numbers by hand', type: 'checkbox' as const, hint: 'For this person only, on top of their role — e.g. while PO numbers are brought in line with Tally' }] : []),
     { name: 'isFieldStaff', label: 'Field staff', type: 'checkbox', hint: 'Uses the mobile app' }, { name: 'active', label: 'Active', type: 'checkbox', hint: 'Can sign in' },
   ];
   return (

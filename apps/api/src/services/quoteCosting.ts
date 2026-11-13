@@ -44,7 +44,7 @@ export async function serviceItemIds(db: DbOrTx, lines: { itemId?: string | null
 export const isServiceLine = (l: { itemId?: string | null; hsnSac?: string | null }, svc: Set<string>) => (!!l.itemId && svc.has(l.itemId)) || /^99/.test(String(l.hsnSac ?? '').trim());
 
 /** Cost of the project and gross profit on the quotation's value (before GST). */
-export function costingSummary(q: { taxable: number; costing?: QuoteCosting | null }, lines: CostLine[], minGpPct = DEFAULT_COSTING.minGpPct, svc: Set<string> = new Set()) {
+export function costingSummary(q: { taxable: number; costing?: QuoteCosting | null; currency?: string | null; exchangeRate?: number | null }, lines: CostLine[], minGpPct = DEFAULT_COSTING.minGpPct, svc: Set<string> = new Set()) {
   const c = q.costing ?? {};
   const material = r2(lines.reduce((s, l) => s + (Number(l.costRate) || 0) * Number(l.qty), 0));
   const missing = lines.filter((l) => l.costRate == null && !isServiceLine(l, svc)).map((l) => l.description);
@@ -57,7 +57,8 @@ export function costingSummary(q: { taxable: number; costing?: QuoteCosting | nu
   const maintenance = m ? r2(maintenanceManDays * Number(m.dayRate)) : 0;
   const other = r2((c.other ?? []).reduce((s, t) => s + Number(t.amount), 0));
   const totalCost = r2(material + manpower + transport + maintenance + service + other);
-  const value = r2(Number(q.taxable));
+  // costs are in ₹; a foreign-currency quotation's value is converted at its exchange rate
+  const value = r2(Number(q.taxable) * (q.currency && q.currency !== 'INR' ? Number(q.exchangeRate) || 0 : 1));
   const grossProfit = r2(value - totalCost);
   const gpPct = value ? r2((grossProfit / value) * 100) : 0;
   return { value, material, manpower, manDays, transport, maintenance, maintenanceManDays, maintenanceVisits: m ? Number(m.visits) : 0, service, other, totalCost, grossProfit, gpPct, missingCost: missing, belowTarget: gpPct < minGpPct, minGpPct };

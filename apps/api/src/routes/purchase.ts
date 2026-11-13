@@ -7,7 +7,7 @@ import { accessorySheets, goodsReceiptItems, goodsReceipts, vendorBills, items, 
 import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { r3 } from '../lib/gst';
-import { badRequest, notFound, pageParams } from '../lib/http';
+import { badRequest, forbidden, notFound, pageParams } from '../lib/http';
 import { nextNumber } from '../lib/numbering';
 import { notifyPermission, notifyUsers } from '../lib/notify';
 import { can, requirePerm } from '../middleware/auth';
@@ -97,6 +97,8 @@ const all = (c: (SQL | undefined)[]) => { const x = c.filter((s): s is SQL => !!
 const poSchema = z.object({
   vendorId: z.string(), salesOrderId: opt, deliverToSiteId: opt, date: z.coerce.date().optional(), expectedDate: z.coerce.date().nullish(),
   terms: opt, notes: opt, requisitionId: opt, lines: z.array(lineSchema.extend({ qty: z.coerce.number().positive(), id: z.string().nullish() })).min(1), submit: z.boolean().default(false),
+  /** a PO number typed by hand (purchase_orders:manual_number — e.g. while numbering is brought in line with Tally) */
+  number: z.string().trim().max(60).nullish(),
 });
 
 async function poContext(vendorId: string) {
@@ -192,8 +194,14 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
     const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, undefined, d.deliverToSiteId || undefined) : null;
     const { rows, totals } = await priceLines(tx, d.lines, interState, 'purchasePrice');
     const sub = d.submit ? await submitState(totals.total) : { status: 'DRAFT', autoApproved: false };
+    let number: string;
+    if (d.number) {
+      if (!can(req.user, 'purchase_orders:manual_number')) throw forbidden('You may not type PO numbers — leave it blank for the next number');
+      if (await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.number, d.number), columns: { id: true } })) throw badRequest(`PO number ${d.number} is already used`);
+      number = d.number;
+    } else number = await nextNumber(tx, 'PURCHASE_ORDER', d.date);
     const [po] = await tx.insert(purchaseOrders).values({
-      number: await nextNumber(tx, 'PURCHASE_ORDER', d.date), date: d.date ?? new Date(), vendorId: d.vendorId, salesOrderId: d.salesOrderId,
+      number, date: d.date ?? new Date(), vendorId: d.vendorId, salesOrderId: d.salesOrderId,
       deliverToSiteId: d.deliverToSiteId, expectedDate: d.expectedDate, terms: d.terms ?? company.poTerms, notes: d.notes, isInterState: interState,
       ...totals, ...sub, createdById: req.user.id, requisitionId: rq?.id ?? null,
     }).returning();
@@ -225,6 +233,11 @@ r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, r
   const po = await db.transaction(async (tx) => {
     const ex = await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id) });
     if (!ex) throw notFound('Purchase order');
+    if (d.number && d.number !== ex.number) {
+      if (!can(req.user, 'purchase_orders:manual_number') && !isSuperAdminPerms(req.user.permissions)) throw forbidden('You may not change PO numbers');
+      if (await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.number, d.number), columns: { id: true } })) throw badRequest(`PO number ${d.number} is already used`);
+      await tx.update(purchaseOrders).set({ number: d.number }).where(eq(purchaseOrders.id, ex.id));
+    }
     const correcting = !['DRAFT', 'PENDING_APPROVAL'].includes(ex.status);
     if (correcting && !isSuperAdminPerms(req.user.permissions)) throw badRequest('Only draft / pending POs can be edited — ask the Super Admin to correct an issued PO');
     if (correcting) return correctIssuedPo(tx, ex, d, interState);

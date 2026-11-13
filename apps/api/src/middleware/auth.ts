@@ -45,7 +45,7 @@ export async function loadAuthUser(userId: string): Promise<AuthUser | null> {
   // only official-domain emails, or ones the Super Admin allowed, keep a session
   if (!(await mayUseEmail(u.email, u.externalEmail))) return null;
   const user: AuthUser = {
-    id: u.id, name: u.name, email: u.email, roleId: u.roleId, roleName: u.role.name, permissions: u.role.permissions,
+    id: u.id, name: u.name, email: u.email, roleId: u.roleId, roleName: u.role.name, permissions: [...new Set([...u.role.permissions, ...(u.extraPermissions ?? [])])],
     managerId: u.managerId, isFieldStaff: u.isFieldStaff, mustChangePassword: u.mustChangePassword,
   };
   cache.set(userId, { user, at: Date.now() });

@@ -60,11 +60,11 @@ export function PoEditor() {
   const rules = useGet<{ key: string; enabled: boolean }[]>('/settings/workflow');
   const [soId, setSoId] = useState<string | null>(sp.get('salesOrderId'));
   const accStatus = useGet<{ required: boolean; ready: boolean; sheet: { id: string; number: string; status: string } | null; toBuy: { itemId: string | null; description: string; unit: string; qty: number; rate: number }[] }>(soId && !sheetId ? `/orders/${soId}/accessories` : null);
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   // no role can skip this rule — only switching it off in Workflow rules allows a PO without an order
   const orderRequired = !!rules.data?.find((r) => r.key === 'poRequiresOrder')?.enabled;
   const accBlocked = !!accStatus.data && !accStatus.data.ready && !can('purchase_orders:without_accessories');
-  const [d, setD] = useState({ vendorId: null as string | null, salesOrderId: sp.get('salesOrderId'), deliverToSiteId: null as string | null, date: toInputDate(new Date()), expectedDate: '', terms: '', notes: '', lines: [emptyLine()] as Line[] });
+  const [d, setD] = useState({ vendorId: null as string | null, salesOrderId: sp.get('salesOrderId'), deliverToSiteId: null as string | null, date: toInputDate(new Date()), expectedDate: '', terms: '', notes: '', lines: [emptyLine()] as Line[], number: undefined as string | undefined });
   type Allowed = { itemIds: string[]; restricted: boolean; lines: { key: string; itemId: string | null; qty: number; ordered: number; remaining: number }[] };
   // a PO raised from an order (or an existing order-linked PO) keeps that order; it delivers to the order's site or the store
   const orderLocked = !!(sp.get('salesOrderId') || sheetId || (id && existing.data?.salesOrderId) || rq.req?.orderId);
@@ -73,7 +73,7 @@ export function PoEditor() {
   const limits = useMemo(() => (allowed.data?.restricted ? Object.fromEntries(allowed.data.lines.filter((l) => l.itemId).map((l) => [l.itemId!, l])) as Record<string, Allowed['lines'][number]> : undefined), [allowed.data]);
   useEffect(() => {
     const p = existing.data;
-    if (p) setD({ vendorId: p.vendorId, salesOrderId: p.salesOrderId, deliverToSiteId: p.deliverToSiteId, date: toInputDate(p.date), expectedDate: toInputDate(p.expectedDate), terms: p.terms ?? '', notes: p.notes ?? '', lines: p.items.map((l: any) => ({ ...l })) });
+    if (p) setD({ vendorId: p.vendorId, salesOrderId: p.salesOrderId, deliverToSiteId: p.deliverToSiteId, date: toInputDate(p.date), expectedDate: toInputDate(p.expectedDate), terms: p.terms ?? '', notes: p.notes ?? '', lines: p.items.map((l: any) => ({ ...l })), number: undefined });
   }, [existing.data]);
   useEffect(() => {
     // Pre-fill product lines from the sales order (at purchase price via the item master on save).
@@ -144,6 +144,9 @@ export function PoEditor() {
       )}
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
+          {(can('purchase_orders:manual_number') || (correcting && !!user?.permissions.includes('*'))) && (
+            <Field label="PO number" hint={id ? undefined : 'Leave blank for the next number in the series'}><Input value={d.number ?? (id ? existing.data.number : '')} placeholder="Automatic" onChange={(e) => setD({ ...d, number: e.target.value })} /></Field>
+          )}
           <Field label="Vendor" required><Combo options={(vendors.data?.data ?? []).map((v) => ({ value: v.id, label: v.name }))} value={d.vendorId} onChange={(v) => setD({ ...d, vendorId: v })} /></Field>
           <Field label="Against sales order" required={orderRequired && !orderLocked} hint={orderLocked ? 'Raised from this order — cannot be changed' : orderRequired ? 'Required — every PO is raised against a sales order' : undefined}>
             {orderLocked ? <div className="input truncate bg-slate-50 text-slate-700">{selOrder.data ? `${selOrder.data.number} · ${selOrder.data.client?.name ?? ''}` : '…'}</div>

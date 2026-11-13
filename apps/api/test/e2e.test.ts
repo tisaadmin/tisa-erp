@@ -2269,3 +2269,48 @@ test("Super Admin's own quantity increase on an order is applied without approva
   const r2 = await ok('sales', 'POST', `/orders/${o.id}/qty-requests`, { orderItemId: full.items[0].id, addQty: 1, reason: 'One spare' });
   assert.equal(r2.status, 'PENDING');
 });
+
+test('Super Admin corrects an order; export orders in USD are zero-rated and billed in USD with an exchange rate', async () => {
+  const o = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 4, rate: 1000, gstRate: 18 }, { itemId: ctx.nvr.id, qty: 1, rate: 5000, gstRate: 18 }] });
+  const full = await ok('admin', 'GET', `/orders/${o.id}`);
+  const body = (lines: any[], extra: any = {}) => ({ paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines, ...extra });
+  assert.equal((await call('sales', 'PUT', `/orders/${o.id}`, body([{ id: full.items[0].id, itemId: ctx.cam.id, qty: 4, rate: 1000 }]))).status, 403, 'Super Admin only');
+  // to USD: rates corrected, a line dropped, GST goes to 0, no rupee round-off
+  const fixed = await ok('admin', 'PUT', `/orders/${o.id}`, body([{ id: full.items[0].id, itemId: ctx.cam.id, qty: 4, rate: 12.34, gstRate: 18 }], { currency: 'USD', exchangeRate: 84.1 }));
+  assert.equal(fixed.currency, 'USD'); assert.equal(fixed.exchangeRate, 84.1);
+  assert.equal(fixed.taxable, 49.36); assert.equal(fixed.igst + fixed.cgst + fixed.sgst, 0); assert.equal(fixed.total, 49.36); assert.equal(fixed.roundOff, 0);
+  const after = await ok('admin', 'GET', `/orders/${o.id}`);
+  assert.equal(after.items.length, 1); assert.equal(after.items[0].id, full.items[0].id, 'the line keeps its identity');
+  // billed in USD; the exchange rate is needed before issuing
+  const dc = await ok('admin', 'POST', '/challans', { orderId: o.id, clientId: ctx.client.id, siteId: ctx.site.id, lines: [{ orderItemId: after.items[0].id, qty: 2 }] });
+  {
+    const bill = await ok('accounts', 'POST', '/invoices/running-bill', { orderId: o.id, stages: ['DELIVERY'] });
+    assert.equal(bill.currency, 'USD'); assert.equal(bill.igst + bill.cgst + bill.sgst, 0);
+    assert.equal((await call('accounts', 'POST', `/invoices/${bill.id}/issue`, {})).status, 400, 'exchange rate first');
+    await ok('accounts', 'PATCH', `/invoices/${bill.id}/exchange-rate`, { exchangeRate: 84.5 });
+    await ok('accounts', 'POST', `/invoices/${bill.id}/issue`, {});
+    const pdf = await call('accounts', 'GET', `/invoices/${bill.id}/pdf`);
+    assert.equal(pdf.ct, 'application/pdf');
+    // billed line: its rate and the currency are fixed now
+    assert.equal((await call('admin', 'PUT', `/orders/${o.id}`, body([{ id: after.items[0].id, itemId: ctx.cam.id, qty: 4, rate: 13 }], { currency: 'USD' }))).status, 400);
+    assert.equal((await call('admin', 'PUT', `/orders/${o.id}`, body([{ id: after.items[0].id, itemId: ctx.cam.id, qty: 4, rate: 12.34 }], { currency: "INR" }))).status, 400);
+    assert.equal((await call('admin', 'PUT', `/orders/${o.id}`, body([{ id: after.items[0].id, itemId: ctx.cam.id, qty: 1, rate: 12.34 }], { currency: 'USD' }))).status, 400, 'not below delivered');
+  }
+});
+
+test('manual PO numbers: only for people given the right', async () => {
+  const vendor = (await ok('stores', 'GET', '/vendors')).data[0];
+  await ok('admin', 'PUT', '/settings/workflow', { poRequiresAccessories: false });
+  const so = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 5, rate: 1000 }] });
+  const po = (who: string, number: string) => call(who, 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: so.id, number, lines: [{ itemId: ctx.cam.id, qty: 1 }] });
+  assert.equal((await po('stores', 'TISA/PO/MAN/001')).status, 403);
+  const users = (await ok('admin', 'GET', '/users?status=all')).data;
+  const stores = users.find((u: any) => u.email === 'stores@tisatech.in');
+  await ok('admin', 'PATCH', `/users/${stores.id}`, { manualPoNumber: true });
+  assert.equal((await ok('admin', 'GET', '/users?status=all')).data.find((u: any) => u.id === stores.id).manualPoNumber, true);
+  await new Promise((r) => setTimeout(r, 50));
+  const made = await po('stores', 'TISA/PO/MAN/001');
+  if (made.status !== 201) console.log('MANUALPO', made.status, JSON.stringify(made.data));
+  assert.equal(made.status, 201); assert.equal(made.data.number, 'TISA/PO/MAN/001');
+  assert.equal((await po('stores', 'TISA/PO/MAN/001')).status, 400, 'number already used');
+});

@@ -86,3 +86,33 @@ export function amountInWords(amount: number): string {
 }
 
 export const inr = (n: number) => n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+
+// ── Foreign-currency documents (exports) ──
+export const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED'] as const;
+const CUR_WORDS: Record<string, [string, string]> = { USD: ['US Dollars', 'Cents'], EUR: ['Euros', 'Cents'], GBP: ['Pounds Sterling', 'Pence'], AED: ['UAE Dirhams', 'Fils'] };
+/** A foreign-currency document is not rounded to the whole unit (cents matter); INR documents keep the rupee round-off. */
+export function inCurrency<T extends { taxable: number; cgst: number; sgst: number; igst: number; roundOff: number; total: number }>(t: T, currency?: string | null): T {
+  if (!currency || currency === 'INR') return t;
+  const raw = r2(t.taxable + t.cgst + t.sgst + t.igst);
+  return { ...t, roundOff: 0, total: raw };
+}
+/** 1,234.56 with the currency code (USD 1,234.56); INR keeps the Indian grouping. */
+export function money(n: number, currency?: string | null) {
+  if (!currency || currency === 'INR') return inr(n);
+  return `${currency} ${Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+/** Amount in words in the document's currency (international grouping for foreign currencies). */
+export function amountInWordsIn(amount: number, currency?: string | null) {
+  if (!currency || currency === 'INR') return amountInWords(amount);
+  const [unit, sub] = CUR_WORDS[currency] ?? [currency, 'Cents'];
+  const whole = Math.floor(Math.abs(amount)), cents = Math.round((Math.abs(amount) - whole) * 100);
+  const parts: string[] = [];
+  const groups: [number, string][] = [[1e9, 'Billion'], [1e6, 'Million'], [1e3, 'Thousand']];
+  let rest = whole;
+  for (const [v, name] of groups) { const n = Math.floor(rest / v); if (n) { parts.push(`${threeDigits(n)} ${name}`); rest %= v; } }
+  if (rest) parts.push(threeDigits(rest));
+  let s = `${unit} ${parts.length ? parts.join(' ') : 'Zero'}`;
+  if (cents) s += ` and ${twoDigits(cents)} ${sub}`;
+  return `${s} Only`;
+}

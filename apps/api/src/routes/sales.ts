@@ -11,7 +11,7 @@ import { rel, textSearch } from '../lib/search';
 import { audit } from '../lib/audit';
 import { notifyPermission, notifyUsers } from '../lib/notify';
 import { badRequest, forbidden, notFound, pageParams } from '../lib/http';
-import { calcTotals, r3 } from '../lib/gst';
+import { calcTotals, CURRENCIES, inCurrency, r3 } from '../lib/gst';
 import { nextNumber } from '../lib/numbering';
 import { pdfToBuffer } from '../lib/pdf';
 import { can, requirePerm, type AuthUser } from '../middleware/auth';
@@ -23,7 +23,7 @@ import { postStock } from '../services/stock';
 import { absorbOrders, autoAccessoryLines, mergeOrders, PreviewRollback } from '../services/orderMerge';
 import { costingConfig, costingSummary, isServiceLine, purchaseHistory, serviceItemIds, summaryText } from '../services/quoteCosting';
 import { materialKey, projectMaterialStatus } from '../services/projectStatus';
-import { createSalesOrder, notifyOrderCreated, orderSchema } from '../services/orders';
+import { createSalesOrder, editSalesOrder, exportLines, notifyOrderCreated, orderEditSchema, orderSchema } from '../services/orders';
 
 import { enforceRule } from '../services/workflow';
 const r = Router();
@@ -48,6 +48,7 @@ const qs = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 const quoteSchema = z.object({
   clientId: opt, leadId: opt, siteId: opt, date: z.coerce.date().optional(), validUntil: z.coerce.date().nullish(),
   subject: opt, placeOfSupply: opt, paymentTerms: termsSchema.nullish(), terms: opt, notes: opt, requisitionId: opt,
+  currency: z.enum(CURRENCIES).default('INR'), exchangeRate: z.coerce.number().positive().nullish(),
   lines: z.array(lineSchema.extend({ costRate: z.coerce.number().min(0).nullish(), costVendorId: opt, costVendor: opt })).min(1, 'Add at least one line'),
   costing: z.object({
     manpower: z.array(z.object({ role: z.string(), label: z.string(), dayRate: z.coerce.number().min(0), people: z.coerce.number().min(0), days: z.coerce.number().min(0) })).default([]),
@@ -163,9 +164,11 @@ r.post('/quotations', requirePerm('quotations:create'), async (req, res) => {
   const q = await db.transaction(async (tx) => {
     const rq = d.requisitionId ? await requisitionForDoc(tx, d.requisitionId, d.clientId, d.siteId ?? null) : null;
     const { placeOfSupply, interState } = await quoteTaxContext(tx, d);
-    const { rows, totals } = await priceLines(tx, d.lines, interState);
+    const { rows, totals: t0 } = await priceLines(tx, exportLines(d.lines, d.currency), interState);
+    const totals = inCurrency(t0, d.currency);
     const costs = await costFields(d.lines, req.user);
     const [q] = await tx.insert(quotations).values({
+      currency: d.currency, exchangeRate: d.currency === 'INR' ? null : d.exchangeRate ?? null,
       number: await nextNumber(tx, 'QUOTATION', d.date), date: d.date ?? new Date(), validUntil: d.validUntil, clientId: d.clientId,
       leadId: d.leadId, siteId: d.siteId, subject: d.subject, placeOfSupply, paymentTerms: d.paymentTerms ?? null,
       terms: d.terms ?? company.quoteTerms, notes: d.notes, ...totals, createdById: req.user.id, requisitionId: rq?.id ?? null,
@@ -188,9 +191,11 @@ r.put('/quotations/:id', requirePerm('quotations:edit'), async (req, res) => {
     if (!existing) throw notFound('Quotation');
     if (!['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(existing.status)) throw badRequest(`A ${existing.status.toLowerCase()} quotation cannot be edited — create a revision`);
     const { placeOfSupply, interState } = await quoteTaxContext(tx, d);
-    const { rows, totals } = await priceLines(tx, d.lines, interState);
+    const { rows, totals: t0 } = await priceLines(tx, exportLines(d.lines, d.currency), interState);
+    const totals = inCurrency(t0, d.currency);
     const costs = await costFields(d.lines, req.user, existing);
     const [q] = await tx.update(quotations).set({
+      currency: d.currency, exchangeRate: d.currency === 'INR' ? null : d.exchangeRate ?? null,
       date: d.date ?? existing.date, validUntil: d.validUntil, clientId: d.clientId, leadId: d.leadId, siteId: d.siteId, subject: d.subject,
       placeOfSupply, paymentTerms: d.paymentTerms ?? null, terms: d.terms, notes: d.notes, ...totals,
       costing: can(req.user, 'quotations:costing') ? d.costing ?? existing.costing ?? null : existing.costing,
@@ -294,7 +299,7 @@ r.post('/quotations/:id/adjust-prices', requirePerm('quotations:edit'), async (r
   const priced = (its: typeof q0.items) => {
     const lines = its.map((l) => ({ ...l, rate: Number(l.rate) > 0 ? roundTo(Number(l.rate) * (1 + d.percent / 100), d.round) : Number(l.rate) }));
     const { lines: calcs, totals } = calcTotals(lines.map((l) => ({ qty: Number(l.qty), rate: l.rate, discountPct: Number(l.discountPct) || 0, gstRate: Number(l.gstRate) })), interState);
-    return { lines: lines.map((l, i) => ({ ...l, taxable: calcs[i].taxable, taxAmount: calcs[i].taxAmount, amount: calcs[i].amount })), totals };
+    return { lines: lines.map((l, i) => ({ ...l, taxable: calcs[i].taxable, taxAmount: calcs[i].taxAmount, amount: calcs[i].amount })), totals: inCurrency(totals, q0.currency) };
   };
   const willRevise = !['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(q0.status);
   const showCost = can(req.user, 'quotations:costing') || can(req.user, 'quotations:approve');
@@ -343,7 +348,7 @@ r.post('/quotations/:id/convert', requirePerm('orders:create'), async (req, res)
       number: await nextNumber(tx, 'ORDER'), quotationId: q.id, clientId: q.clientId, siteId: body.siteId ?? q.siteId,
       clientPoNo: body.clientPoNo, clientPoDate: body.clientPoDate, placeOfSupply: q.placeOfSupply, paymentTerms: terms, terms: q.terms,
       notes: q.notes, subtotal: q.subtotal, discount: q.discount, taxable: q.taxable, cgst: q.cgst, sgst: q.sgst, igst: q.igst,
-      roundOff: q.roundOff, total: q.total, createdById: req.user.id, isProject: !!body.isProject,
+      roundOff: q.roundOff, total: q.total, createdById: req.user.id, isProject: !!body.isProject, currency: q.currency, exchangeRate: q.exchangeRate,
     }).returning();
     await tx.insert(salesOrderItems).values(q.items.map(({ id: _i, quotationId: _q, ...l }) => ({ ...l, orderId: o.id })));
     await tx.update(quotations).set({ status: 'CONVERTED' }).where(eq(quotations.id, q.id));
@@ -402,6 +407,15 @@ r.post('/orders', requirePerm('orders:create'), async (req, res) => {
   audit(req, 'create', 'order', o.id);
   await notifyOrderCreated(o.id, req.user.id);
   res.status(201).json(o);
+});
+
+/** Super Admin: correct an order — header, currency, rates and lines (see editSalesOrder for what stays protected). */
+r.put('/orders/:id', async (req, res) => {
+  if (!isSuperAdminPerms(req.user.permissions)) throw forbidden('Only the Super Admin can correct an order');
+  const d = orderEditSchema.parse(req.body);
+  const row = await db.transaction((tx) => editSalesOrder(tx, req.params.id, d));
+  audit(req, 'correct', 'order', req.params.id, { currency: d.currency, lines: d.lines.length });
+  res.json(row);
 });
 
 r.patch('/orders/:id', requirePerm('orders:edit'), async (req, res) => {

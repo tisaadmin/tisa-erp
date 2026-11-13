@@ -10,7 +10,7 @@ import { RequisitionBanner, useRequisition } from '../components/FromRequisition
 import { Badge, Button, Card, Field, Input, KV, Modal, PageHeader, Pager, SearchBox, Select, Spinner, Status, Table, Textarea, cx } from '../components/ui';
 import { api, openPdf } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { fmtDate, fmtDateTime, inr, label, qty, STAGE_LABEL, toInputDate } from '../lib/format';
+import { CURRENCIES, fmtDate, fmtDateTime, inr, label, money, qty, STAGE_LABEL, toInputDate } from '../lib/format';
 import { useAction, useClients, useGet, useSites, useItems, type Page, useListQuery } from '../lib/hooks';
 import { OrderAccessoriesCard } from './Accessories';
 import { OrderInstallationCard } from '../components/Installation';
@@ -68,7 +68,7 @@ export function QuotationsPage() {
         <Table rows={list.data?.data} exportAs={{ name: 'quotations', path: '/quotations', query: q }} to={(r) => `/quotations/${r.id}`} cols={[
           { key: 'number', label: 'Number' }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
           { key: 'party', label: 'Client / lead', render: (r) => <>{r.client?.name ?? r.lead?.companyName}{!r.client && <Badge t="violet">lead</Badge>}<div className="text-xs text-slate-400">{r.site?.name}</div></> },
-          { key: 'subject', label: 'Subject', render: (r) => r.subject ?? '—' }, { key: 'total', label: 'Total', num: true, render: (r) => inr(r.total) },
+          { key: 'subject', label: 'Subject', render: (r) => r.subject ?? '—' }, { key: 'total', label: 'Total', num: true, render: (r) => money(r.total, r.currency) },
           { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
         ]} />
         {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
@@ -77,7 +77,21 @@ export function QuotationsPage() {
   );
 }
 
-type DocState = { clientId: string | null; siteId: string | null; leadId?: string | null; stateCode?: string | null; date: string; validUntil?: string; subject?: string; clientPoNo?: string; clientPoDate?: string; expectedCompletion?: string; terms?: string; notes?: string; lines: Line[]; paymentTerms: Term[]; useTerms?: boolean; costing?: QuoteCosting; isProject?: boolean };
+type DocState = { clientId: string | null; siteId: string | null; leadId?: string | null; stateCode?: string | null; date: string; validUntil?: string; subject?: string; clientPoNo?: string; clientPoDate?: string; expectedCompletion?: string; terms?: string; notes?: string; lines: Line[]; paymentTerms: Term[]; useTerms?: boolean; costing?: QuoteCosting; isProject?: boolean; currency?: string; exchangeRate?: string };
+
+/** Document currency: INR, or a foreign currency for an export (zero-rated under LUT) with the INR exchange rate. */
+function CurrencyFields({ d, set, locked }: { d: DocState; set: (p: Partial<DocState>) => void; locked?: boolean }) {
+  const cur = d.currency ?? 'INR';
+  return (
+    <>
+      <Field label="Currency" hint={cur !== 'INR' ? 'Export — 0% GST (LUT)' : undefined}>
+        <Select value={cur} disabled={locked} onChange={(e) => set({ currency: e.target.value })} options={CURRENCIES.map((c) => ({ value: c, label: c === 'INR' ? 'INR (₹)' : `${c} — export` }))} />
+      </Field>
+      {cur !== 'INR' && <Field label={`Exchange rate (₹ per ${cur})`} hint="For reports in INR; each bill has its own"><Input type="number" min={0} step="any" value={d.exchangeRate ?? ''} onChange={(e) => set({ exchangeRate: e.target.value })} /></Field>}
+    </>
+  );
+}
+const curBody = (d: DocState) => ({ currency: d.currency ?? 'INR', exchangeRate: (d.currency ?? 'INR') !== 'INR' && d.exchangeRate ? Number(d.exchangeRate) : null });
 
 export function QuotationEditor() {
   const { id } = useParams();
@@ -93,7 +107,7 @@ export function QuotationEditor() {
   const [d, setD] = useState<DocState>({ clientId: sp.get('clientId'), siteId: null, leadId: sp.get('leadId'), date: toInputDate(new Date()), validUntil: toInputDate(new Date(Date.now() + 30 * 864e5)), lines: [emptyLine()], paymentTerms: [{ stage: 'ADVANCE', percent: 50 }, { stage: 'DELIVERY', percent: 40 }, { stage: 'COMMISSIONING', percent: 10 }], useTerms: true });
   useEffect(() => {
     const q = existing.data;
-    if (q) setD({ clientId: q.clientId, siteId: q.siteId, leadId: q.leadId, date: toInputDate(q.date), validUntil: toInputDate(q.validUntil), subject: q.subject ?? '', terms: q.terms ?? '', notes: q.notes ?? '', lines: linesFrom(q.items), paymentTerms: q.paymentTerms ?? [], useTerms: !!q.paymentTerms, stateCode: q.placeOfSupply, costing: { ...emptyCosting(), ...(q.costing ?? {}) } });
+    if (q) setD({ clientId: q.clientId, siteId: q.siteId, leadId: q.leadId, date: toInputDate(q.date), validUntil: toInputDate(q.validUntil), subject: q.subject ?? '', terms: q.terms ?? '', notes: q.notes ?? '', lines: linesFrom(q.items), paymentTerms: q.paymentTerms ?? [], useTerms: !!q.paymentTerms, stateCode: q.placeOfSupply, costing: { ...emptyCosting(), ...(q.costing ?? {}) }, currency: q.currency ?? 'INR', exchangeRate: q.exchangeRate != null ? String(q.exchangeRate) : '' });
   }, [existing.data]);
   useEffect(() => {
     if (!rq.ready || !rq.req) return;
@@ -103,7 +117,7 @@ export function QuotationEditor() {
   }, [rq.ready]);
   const inter = !!d.stateCode && d.stateCode !== companyState;
   const save = useAction((submit: boolean) => {
-    const body = { clientId: d.clientId, siteId: d.siteId, leadId: d.leadId, date: d.date, validUntil: d.validUntil || null, subject: d.subject, terms: d.terms || undefined, notes: d.notes, lines: d.lines, paymentTerms: d.useTerms ? d.paymentTerms : null, requisitionId, ...(canCost ? { costing: d.costing ?? null } : {}) };
+    const body = { clientId: d.clientId, siteId: d.siteId, leadId: d.leadId, date: d.date, validUntil: d.validUntil || null, subject: d.subject, terms: d.terms || undefined, notes: d.notes, lines: d.lines, paymentTerms: d.useTerms ? d.paymentTerms : null, requisitionId, ...curBody(d), ...(canCost ? { costing: d.costing ?? null } : {}) };
     return (id ? api(`/quotations/${id}`, { method: 'PUT', body }) : api('/quotations', { body })).then(async (q: any) => { if (submit) await api(`/quotations/${q.id}/status`, { body: { status: 'PENDING_APPROVAL' } }); return q; });
   }, { success: 'Quotation saved', invalidate: [['/quotations']], onSuccess: (q: any) => nav(`/quotations/${q.id}`) });
   if ((id && !existing.data) || rq.loading) return <Spinner />;
@@ -119,10 +133,12 @@ export function QuotationEditor() {
           <Field label="Date"><Input type="date" value={d.date} onChange={(e) => setD({ ...d, date: e.target.value })} /></Field>
           <Field label="Valid until"><Input type="date" value={d.validUntil ?? ''} onChange={(e) => setD({ ...d, validUntil: e.target.value })} /></Field>
           <Field label="Subject" className="md:col-span-3"><Input value={d.subject ?? ''} onChange={(e) => setD({ ...d, subject: e.target.value })} placeholder="e.g. Supply, installation & commissioning of IP CCTV system" /></Field>
+          <CurrencyFields d={d} set={(p) => setD((x) => ({ ...x, ...p }))} />
         </div>
         <div className="mt-2 text-xs text-slate-500">Tax: <b>{inter ? 'IGST (inter-state)' : 'CGST + SGST (intra-state)'}</b>{d.stateCode && ` · place of supply ${d.stateCode}`}</div>
       </Card>
-      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD((x) => ({ ...x, lines }))} interState={inter} costing={canCost} priceTools /></Card>
+      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD((x) => ({ ...x, lines }))} interState={inter} costing={canCost} priceTools currency={d.currency ?? 'INR'} fxRate={(d.currency ?? 'INR') !== 'INR' ? Number(d.exchangeRate) || 1 : 1} /></Card>
+      {canCost && (d.currency ?? 'INR') !== 'INR' && <div className="rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-900">Purchase rates are in ₹ and sales rates in {d.currency}: the margin tools and gross profit compare them at the exchange rate entered above{d.exchangeRate ? ` (₹${d.exchangeRate} per ${d.currency})` : ' — enter it'}.</div>}
       {canCost && <QuoteCostingEditor lines={d.lines} value={d.costing ?? emptyCosting()} onChange={(costing) => setD((x) => ({ ...x, costing }))} />}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title={<label className="flex items-center gap-2"><input type="checkbox" checked={d.useTerms} onChange={(e) => setD({ ...d, useTerms: e.target.checked })} /> Milestone payment schedule</label>}>
@@ -291,7 +307,7 @@ export function DocLines({ doc, extraCols, editLine }: { doc: any; extraCols?: {
               <tr key={l.id}><td>{i + 1}</td><td className="max-w-md">{l.milestone ? l.description.replace(/ — [^—]+ @ [\d.]+%$/, '') : l.description}{l.milestone && <div><Badge t="blue">{STAGE_LABEL[l.milestone]} @ {l.milestonePercent}%</Badge></div>}
                 {!editLine && l.useAltDescription && l.altDescription && <div className="mt-1 text-xs text-brand-800"><span className="text-slate-400">Prints as:</span> {l.altDescription}</div>}
                 {editLine?.desc(l)}</td><td>{editLine ? editLine.hsn(l) : l.hsnSac}</td>
-                <td className="num">{Number(l.qty) === 0 ? <Badge t="violet">Rate only</Badge> : <>{qty(l.qty)} {l.unit}</>}</td><td className="num">{inr(l.rate)}</td><td className="num">{l.discountPct ? `${l.discountPct}%` : ''}</td><td className="num">{l.gstRate}%</td><td className="num font-medium">{Number(l.qty) === 0 ? '—' : inr(l.taxable)}</td>
+                <td className="num">{Number(l.qty) === 0 ? <Badge t="violet">Rate only</Badge> : <>{qty(l.qty)} {l.unit}</>}</td><td className="num">{money(l.rate, doc.currency)}</td><td className="num">{l.discountPct ? `${l.discountPct}%` : ''}</td><td className="num">{l.gstRate}%</td><td className="num font-medium">{Number(l.qty) === 0 ? '—' : money(l.taxable, doc.currency)}</td>
                 {extraCols?.map((c) => <td key={c.label} className="num">{c.render(l)}</td>)}</tr>
             ))}
           </tbody>
@@ -336,7 +352,7 @@ export function OrdersPage() {
           { key: 'client', label: 'Client / site', render: (r) => <>{r.client?.name}<div className="max-w-xs truncate text-xs text-slate-400">{r.site?.name ?? r.sourceData?.title}</div></> },
           { key: 'clientPoNo', label: 'Client PO', render: (r) => r.clientPoNo ?? '—' },
           { key: 'terms', label: 'Payment terms', render: (r) => <span className="text-xs">{r.paymentTerms.map((t: Term) => `${t.percent}% ${STAGE_LABEL[t.stage].replace('Against ', '')}`).join(' · ')}</span> },
-          { key: 'total', label: 'Value', num: true, render: (r) => inr(r.total) }, { key: 'status', label: 'Status', render: (r) => <>{r.isProject && <Badge t="violet">Project</Badge>} <Status s={r.status} /></> },
+          { key: 'total', label: 'Value', num: true, render: (r) => money(r.total, r.currency) }, { key: 'status', label: 'Status', render: (r) => <>{r.isProject && <Badge t="violet">Project</Badge>} <Status s={r.status} /></> },
         ]} />}
         {list.data && <Pager page={q.page} pageSize={q.pageSize} total={list.data.total} onPage={(p) => setQ({ ...q, page: p })} />}
       </Card>
@@ -345,26 +361,42 @@ export function OrdersPage() {
 }
 
 export function OrderEditor() {
+  const { id } = useParams();
   const nav = useNavigate();
   const companyState = useCompanyState();
-  const [d, setD] = useState<DocState>({ clientId: null, siteId: null, date: toInputDate(new Date()), lines: [emptyLine()], paymentTerms: [{ stage: 'ADVANCE', percent: 30 }, { stage: 'DELIVERY', percent: 60 }, { stage: 'COMMISSIONING', percent: 10 }] });
+  // id = Super Admin correcting an existing order
+  const existing = useGet<any>(id ? `/orders/${id}` : null);
+  const [d, setD] = useState<DocState>({ clientId: null, siteId: null, date: toInputDate(new Date()), lines: [emptyLine()], paymentTerms: [{ stage: 'ADVANCE', percent: 30 }, { stage: 'DELIVERY', percent: 60 }, { stage: 'COMMISSIONING', percent: 10 }], currency: 'INR' });
+  useEffect(() => {
+    const o = existing.data;
+    if (o) setD({ clientId: o.clientId, siteId: o.siteId, stateCode: o.placeOfSupply, date: toInputDate(o.date), clientPoNo: o.clientPoNo ?? '', clientPoDate: toInputDate(o.clientPoDate), expectedCompletion: toInputDate(o.expectedCompletion),
+      terms: o.terms ?? '', notes: o.notes ?? '', paymentTerms: o.paymentTerms, isProject: o.isProject, currency: o.currency ?? 'INR', exchangeRate: o.exchangeRate != null ? String(o.exchangeRate) : '',
+      lines: o.items.map((l: any) => ({ ...linesFrom([l])[0], id: l.id, paymentTerms: l.paymentTerms ?? undefined })) });
+  }, [existing.data]);
   const inter = !!d.stateCode && d.stateCode !== companyState;
-  const save = useAction(() => api('/orders', { body: { clientId: d.clientId, siteId: d.siteId, date: d.date, clientPoNo: d.clientPoNo, clientPoDate: d.clientPoDate || null, expectedCompletion: d.expectedCompletion || null, paymentTerms: d.paymentTerms, terms: d.terms, notes: d.notes, lines: d.lines, isProject: !!d.isProject } }),
-    { success: 'Order created', invalidate: [['/orders']], onSuccess: (o: any) => nav(`/orders/${o.id}`) });
+  const header = { date: d.date, clientPoNo: d.clientPoNo, clientPoDate: d.clientPoDate || null, expectedCompletion: d.expectedCompletion || null, paymentTerms: d.paymentTerms, terms: d.terms, notes: d.notes, isProject: !!d.isProject, ...curBody(d) };
+  const save = useAction(() => (id
+    ? api(`/orders/${id}`, { method: 'PUT', body: { ...header, lines: d.lines } })
+    : api('/orders', { body: { clientId: d.clientId, siteId: d.siteId, ...header, lines: d.lines } })),
+  { success: id ? 'Order corrected' : 'Order created', invalidate: [['/orders']], onSuccess: (o: any) => nav(`/orders/${o.id}`) });
+  if (id && !existing.data) return <Spinner />;
   return (
     <div className="space-y-4">
-      <PageHeader back="/orders" title="New order form" actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>Create order</Button>} />
+      <PageHeader back={id ? `/orders/${id}` : '/orders'} title={id ? `Correct ${existing.data.number}` : 'New order form'} actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>{id ? 'Save corrections' : 'Create order'}</Button>} />
+      {id && <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">Super Admin correction. Lines keep their deliveries, bills and POs. A line can't go below what was delivered or billed; a billed line keeps its rate and GST; lines with challans, bills or accessories can't be removed. The currency can't change once billing has started. Client and site stay as they are.</div>}
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
-          <PartyPicker clientId={d.clientId} siteId={d.siteId} onChange={(v) => setD((x) => ({ ...x, ...v, stateCode: v.stateCode ?? x.stateCode }))} />
+          {id ? <Field label="Client / site"><div className="pt-2 text-sm">{existing.data.client?.name}{existing.data.site ? ` · ${existing.data.site.name}` : ''}</div></Field>
+            : <PartyPicker clientId={d.clientId} siteId={d.siteId} onChange={(v) => setD((x) => ({ ...x, ...v, stateCode: v.stateCode ?? x.stateCode }))} />}
           <Field label="Order date"><Input type="date" value={d.date} onChange={(e) => setD({ ...d, date: e.target.value })} /></Field>
           <Field label="Target completion"><Input type="date" value={d.expectedCompletion ?? ''} onChange={(e) => setD({ ...d, expectedCompletion: e.target.value })} /></Field>
           <Field label="Client PO no."><Input value={d.clientPoNo ?? ''} onChange={(e) => setD({ ...d, clientPoNo: e.target.value })} /></Field>
           <Field label="Client PO date"><Input type="date" value={d.clientPoDate ?? ''} onChange={(e) => setD({ ...d, clientPoDate: e.target.value })} /></Field>
+          <CurrencyFields d={d} set={(p) => setD((x) => ({ ...x, ...p }))} />
         </div>
         <ProjectSwitch className="mt-3" on={!!d.isProject} onChange={(isProject) => setD({ ...d, isProject })} />
       </Card>
-      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} /></Card>
+      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} currency={d.currency ?? 'INR'} /></Card>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Milestone payment schedule"><PaymentTermsEditor terms={d.paymentTerms} onChange={(paymentTerms) => setD({ ...d, paymentTerms })} /></Card>
         <Card title="Terms & notes">
@@ -381,7 +413,7 @@ type Billing = { lines: { orderItemId: string; description: string; unit: string
 export function OrderDetail() {
   const { id } = useParams();
   const nav = useNavigate();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
   const { data: o } = useGet<any>(`/orders/${id}`);
   const billing = useGet<Billing>(`/orders/${id}/billing`);
   const invoices = useGet<Page<any>>('/invoices', { orderId: id, pageSize: 100 });
@@ -417,6 +449,7 @@ export function OrderDetail() {
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/orders/${o.id}/pdf`)}>Order acknowledgement</Button>
           {can('challans:create') && <Link to={`/challans/new?orderId=${o.id}`}><Button icon={<Truck className="size-4" />}>Delivery challan</Button></Link>}
           {can('purchase_orders:create') && <Link to={`/purchase-orders/new?salesOrderId=${o.id}`}><Button>Raise PO</Button></Link>}
+          {!!user?.permissions.includes('*') && !['CANCELLED', 'MERGED'].includes(o.status) && <Link to={`/orders/${o.id}/edit`}><Button>Edit (Super Admin)</Button></Link>}
           {can('invoices:create') && <Button variant="primary" icon={<Receipt className="size-4" />} onClick={() => setRa({})}>Running bill</Button>}
           {can('orders:edit') && !['MERGED', 'CLOSED', 'CANCELLED'].includes(o.status) && <MergeOrdersButton orderId={o.id} number={o.number} />}
           <DeleteOrderButton orderId={o.id} onDeleted={() => nav('/orders')} />
@@ -434,12 +467,12 @@ export function OrderDetail() {
       <div className="grid gap-4 lg:grid-cols-3">
         <Card title="Order details" className="lg:col-span-2">
           <KV cols={3} items={[['Date', fmtDate(o.date)], ['Client PO', o.clientPoNo ? `${o.clientPoNo}${o.clientPoDate ? ` · ${fmtDate(o.clientPoDate)}` : ''}` : null], ['Target completion', fmtDate(o.expectedCompletion)], ['Place of supply', o.placeOfSupply], ...(o.sourceRef ? [['Imported from', o.sourceRef.replace(/^FFH:/, 'FFH SO ')] as [string, string]] : []),
-            ...(o.sourceData?.system === 'FFH' ? [['FFH title', o.sourceData.title ?? '—'], ['FFH status', [o.sourceData.deliveryStatus, o.sourceData.billingStatus, o.sourceData.installedStatus].filter(Boolean).join(' · ') || '—'], ['FFH owner', o.sourceData.owner ?? '—']] as [string, string][] : o.sourceData?.title ? [['Project', o.sourceData.title]] as [string, string][] : []), ['Order value', inr(o.total)], ['Payment terms', stages.map((t) => `${t.percent}% ${STAGE_LABEL[t.stage]}`).join(', ')]]} />
+            ...(o.sourceData?.system === 'FFH' ? [['FFH title', o.sourceData.title ?? '—'], ['FFH status', [o.sourceData.deliveryStatus, o.sourceData.billingStatus, o.sourceData.installedStatus].filter(Boolean).join(' · ') || '—'], ['FFH owner', o.sourceData.owner ?? '—']] as [string, string][] : o.sourceData?.title ? [['Project', o.sourceData.title]] as [string, string][] : []), ['Order value', money(o.total, o.currency)], ...(o.currency !== 'INR' ? [['Currency', `${o.currency} — export (LUT)${o.exchangeRate ? ` · ₹${o.exchangeRate}` : ''}`]] as [string, string][] : []), ['Payment terms', stages.map((t) => `${t.percent}% ${STAGE_LABEL[t.stage]}`).join(', ')]]} />
         </Card>
         {billing.data && (
           <Card title="Billing progress">
             <div className="mb-2 h-2.5 rounded-full bg-slate-100"><div className="h-2.5 rounded-full bg-brand-500" style={{ width: `${Math.min(100, billing.data.summary.billedPct)}%` }} /></div>
-            <KV cols={2} items={[['Billed (taxable)', inr(billing.data.summary.billedTaxable)], ['Balance (taxable)', inr(billing.data.summary.balanceTaxable)], ['Billed', `${billing.data.summary.billedPct}%`], ['Invoices', invoices.data?.total ?? 0]]} />
+            <KV cols={2} items={[['Billed (taxable)', money(billing.data.summary.billedTaxable, o.currency)], ['Balance (taxable)', money(billing.data.summary.balanceTaxable, o.currency)], ['Billed', `${billing.data.summary.billedPct}%`], ['Invoices', invoices.data?.total ?? 0]]} />
           </Card>
         )}
       </div>
@@ -461,7 +494,7 @@ export function OrderDetail() {
             <tbody>
               {billing.data?.lines.map((l) => (
                 <tr key={l.orderItemId}>
-                  <td className="max-w-xs">{l.description}<div className="text-xs text-slate-400">{inr(l.rate)} / {l.unit}</div></td>
+                  <td className="max-w-xs">{l.description}<div className="text-xs text-slate-400">{money(l.rate, o.currency)} / {l.unit}</div></td>
                   <td className="num">{qty(l.qty)}</td>
                   <td className={cx('num', l.deliveredQty >= l.qty ? 'text-emerald-700' : '')}>{qty(l.deliveredQty)}</td>
                   <td className="num">{can('orders:edit') ? <button className="text-brand-700 hover:underline" onClick={() => setProgress({ id: l.orderItemId, description: l.description, installedQty: l.installedQty, max: l.qty })}>{qty(l.installedQty)}</button> : qty(l.installedQty)}</td>
@@ -489,7 +522,7 @@ export function OrderDetail() {
         <Card title="Invoices & running bills" pad={false}>
           <Table rows={invoices.data?.data} to={(r) => `/invoices/${r.id}`} empty="No bills yet" cols={[
             { key: 'number', label: 'Number' }, { key: 'ra', label: 'RA', render: (r) => (r.raBillNo ? `RA-${r.raBillNo}` : label(r.type)) }, { key: 'date', label: 'Date', render: (r) => fmtDate(r.date) },
-            { key: 'total', label: 'Total', num: true, render: (r) => inr(r.total) }, { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
+            { key: 'total', label: 'Total', num: true, render: (r) => money(r.total, r.currency) }, { key: 'status', label: 'Status', render: (r) => <Status s={r.status} /> },
           ]} />
         </Card>
         <Card title="Delivery challans & POs" pad={false}>
@@ -504,7 +537,7 @@ export function OrderDetail() {
       </Modal>
 
       <Modal open={!!ra} onClose={() => setRa(null)} title="Create running bill" wide
-        footer={<><span className="mr-auto self-center text-sm">Taxable value: <b>{inr(raTaxable)}</b> + GST</span><Button onClick={() => setRa(null)}>Cancel</Button><Button variant="primary" loading={createRa.isPending} disabled={raTaxable <= 0} onClick={() => createRa.mutate(undefined)}>Create draft bill</Button></>}>
+        footer={<><span className="mr-auto self-center text-sm">Taxable value: <b>{money(raTaxable, o.currency)}</b>{o.currency === 'INR' ? ' + GST' : ' (export, no GST)'}</span><Button onClick={() => setRa(null)}>Cancel</Button><Button variant="primary" loading={createRa.isPending} disabled={raTaxable <= 0} onClick={() => createRa.mutate(undefined)}>Create draft bill</Button></>}>
         {certified && <div className="mb-3 rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-900">Client-certified billing: each line starts from the cumulative quantity of the last RA bill. Enter the <b>additional</b> quantity delivered / installed for this RA — the cumulative is worked out for you (up to the ordered quantity).</div>}
         <div className="mb-3 flex flex-wrap items-center gap-2">
           {!certified && <>
@@ -855,7 +888,7 @@ function SiteGroups({ rows, onSite }: { rows: any[]; onSite: (siteId: string) =>
                 <td className="w-28">{fmtDate(r.date)}</td>
                 <td className="max-w-xs truncate text-sm text-slate-500">{r.sourceData?.title ?? ''}</td>
                 <td className="w-36">{r.clientPoNo ?? '—'}</td>
-                <td className="num w-32">{inr(r.total)}</td>
+                <td className="num w-32">{money(r.total, r.currency)}</td>
                 <td className="w-40">{r.isProject && <Badge t="violet">Project</Badge>} <Status s={r.status} /></td>
               </tr>))}
           </tbody></table>

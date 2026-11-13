@@ -68,6 +68,7 @@ const companyFields: FieldDef[] = [
   { name: 'pan', label: 'PAN' }, { name: 'stateCode', label: 'State (GST)', type: 'combo', options: stateOpts, required: true }, { name: 'city', label: 'City' },
   { name: 'address', label: 'Office address (street — city and pincode separately)', type: 'textarea', span: 2 }, { name: 'pincode', label: 'Pincode' },
   { name: 'registeredAddress', label: 'Registered address (printed on documents)', type: 'textarea', span: 3 },
+  { name: 'lutArn', label: 'LUT ARN (exports)', hint: 'Printed on export invoices in foreign currency (supply under LUT without IGST)' },
   { name: 'phone', label: 'Phone' }, { name: 'email', label: 'Email' }, { name: 'website', label: 'Website' },
   { name: 'officeEmail', label: 'Office email (gets service reports)' }, { name: 'workdayStart', label: 'Workday starts (HH:MM)', hint: 'Check-ins >15 min later are marked late' },
   { name: 'bankName', label: 'Bank' }, { name: 'bankAccount', label: 'Account no.' }, { name: 'bankIfsc', label: 'IFSC' }, { name: 'bankBranch', label: 'Branch' },

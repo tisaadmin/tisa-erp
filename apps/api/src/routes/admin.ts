@@ -36,7 +36,17 @@ const userSchema = z.object({
   password: z.string().min(8).optional(),
   /** Super Admin only: the password given is final — no change asked at first sign-in (e.g. the App Store review login) */
   passwordFinal: z.boolean().optional(),
+  /** Super Admin only: rights for this person on top of their role (e.g. purchase_orders:manual_number) */
+  extraPermissions: z.array(z.string()).optional(),
+  /** Super Admin only: may type PO numbers by hand (shortcut for purchase_orders:manual_number) */
+  manualPoNumber: z.boolean().optional(),
 });
+const MANUAL_PO = 'purchase_orders:manual_number';
+const withExtras = (cur: string[], d: { extraPermissions?: string[]; manualPoNumber?: boolean }) => {
+  let x = d.extraPermissions ?? cur;
+  if (d.manualPoNumber !== undefined) x = d.manualPoNumber ? [...new Set([...x, MANUAL_PO])] : x.filter((p) => p !== MANUAL_PO);
+  return x;
+};
 
 r.get('/users', requirePerm('users:view'), async (req, res) => {
   const { search } = pageParams(req.query);
@@ -49,7 +59,7 @@ r.get('/users', requirePerm('users:view'), async (req, res) => {
     ),
     orderBy: [asc(users.name)],
   });
-  res.json({ data: rows, total: rows.length });
+  res.json({ data: rows.map((u) => ({ ...u, manualPoNumber: (u.extraPermissions ?? []).includes(MANUAL_PO) })), total: rows.length });
 });
 
 /** Lightweight list any signed-in user can read, for assignee pickers. */
@@ -94,11 +104,13 @@ async function withDept<T extends { departmentId?: string | null; department?: s
 r.post('/users', requirePerm('users:create'), async (req, res) => {
   const { password, passwordFinal, ...data0 } = userSchema.parse(req.body);
   const data = await withDept(data0);
+  const { manualPoNumber, extraPermissions, ...data1 } = data;
+  const extras = isSuperAdminPerms(req.user.permissions) ? withExtras([], { manualPoNumber, extraPermissions }) : [];
   if (!password) throw badRequest('Password is required (min 8 characters)');
   if ((await isSuperRole(data.roleId)) && !isSuperAdminPerms(req.user.permissions)) throw badRequest('Only the Super Admin can create another Super Admin');
   const rule = await emailRule(req, data.email);
   if (await db.query.users.findFirst({ where: eq(users.email, data.email), columns: { id: true } })) throw badRequest(`${data.email} already has a login`);
-  const [row] = await db.insert(users).values({ ...data, ...rule, mustChangePassword: !(passwordFinal && isSuperAdminPerms(req.user.permissions)), passwordHash: await bcrypt.hash(password, 10) }).returning({ id: users.id });
+  const [row] = await db.insert(users).values({ ...data1, extraPermissions: extras, ...rule, mustChangePassword: !(passwordFinal && isSuperAdminPerms(req.user.permissions)), passwordHash: await bcrypt.hash(password, 10) }).returning({ id: users.id });
   audit(req, 'create', 'user', row.id, { ...data, ...rule });
   res.status(201).json(row);
 });
@@ -111,7 +123,9 @@ r.patch('/users/:id', requirePerm('users:edit'), async (req, res) => {
   if (!cur) throw notFound('User');
   const superCaller = isSuperAdminPerms(req.user.permissions);
   if ((isSuperAdminPerms(cur.role.permissions) || (await isSuperRole(data.roleId))) && !superCaller) throw badRequest('Only the Super Admin can change a Super Admin account or make someone Super Admin');
-  const set: Partial<typeof users.$inferInsert> = { ...data };
+  const { manualPoNumber, extraPermissions, ...rest } = data;
+  const set: Partial<typeof users.$inferInsert> = { ...rest };
+  if (superCaller && (manualPoNumber !== undefined || extraPermissions !== undefined)) set.extraPermissions = withExtras(cur.extraPermissions ?? [], { manualPoNumber, extraPermissions });
   if (data.email && data.email !== cur.email) {
     Object.assign(set, await emailRule(req, data.email));
     const clash = await db.query.users.findFirst({ where: eq(users.email, data.email), columns: { id: true } });
@@ -296,7 +310,7 @@ r.get('/settings', async (_req, res) => {
 const settingsSchema = z.object({
   name: z.string().min(2), legalName: z.string().nullish(),
   gstin: z.string().regex(GSTIN_REGEX, 'Invalid GSTIN').nullish().or(z.literal('')),
-  pan: z.string().nullish(), stateCode: z.string().length(2), address: z.string().nullish(), registeredAddress: z.string().nullish(), city: z.string().nullish(),
+  pan: z.string().nullish(), stateCode: z.string().length(2), address: z.string().nullish(), registeredAddress: z.string().nullish(), lutArn: z.string().nullish(), city: z.string().nullish(),
   pincode: z.string().nullish(), phone: z.string().nullish(), email: z.string().nullish(), website: z.string().nullish(),
   bankName: z.string().nullish(), bankAccount: z.string().nullish(), bankIfsc: z.string().nullish(), bankBranch: z.string().nullish(),
   invoiceTerms: z.string().nullish(), quoteTerms: z.string().nullish(), poTerms: z.string().nullish(), officeEmail: z.string().nullish(),

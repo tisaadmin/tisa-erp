@@ -35,7 +35,7 @@ r.get('/dashboard', async (req, res) => {
   })());
 
   if (can(u, 'orders:view')) jobs.push((async () => {
-    const [m] = await db.select({ n: sql<number>`count(*)::int`, value: sql<number>`coalesce(sum(${salesOrders.total}),0)::float` })
+    const [m] = await db.select({ n: sql<number>`count(*)::int`, value: sql<number>`coalesce(sum(${salesOrders.total} * case when ${salesOrders.currency} = 'INR' then 1 else coalesce(${salesOrders.exchangeRate}, 0) end),0)::float` })
       .from(salesOrders).where(and(gte(salesOrders.date, monthStart), ne(salesOrders.status, 'CANCELLED')));
     const open = await db.$count(salesOrders, inArray(salesOrders.status, ['OPEN', 'IN_PROGRESS']));
     out.orders = { thisMonth: m, open };
@@ -43,14 +43,16 @@ r.get('/dashboard', async (req, res) => {
 
   if (can(u, 'invoices:view')) jobs.push((async () => {
     const live = and(inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID', 'PAID']), ne(invoices.type, 'PROFORMA'));
-    const [billed] = await db.select({ value: sql<number>`coalesce(sum(${invoices.total}),0)::float` }).from(invoices).where(and(live, gte(invoices.date, monthStart)));
-    const [out1] = await db.select({ value: sql<number>`coalesce(sum(${invoices.total} - ${invoices.amountPaid}),0)::float` })
+    // foreign-currency (export) bills count in INR at their exchange rate
+    const fx = sql`(case when ${invoices.currency} = 'INR' then 1 else coalesce(${invoices.exchangeRate}, 0) end)`;
+    const [billed] = await db.select({ value: sql<number>`coalesce(sum(${invoices.total} * ${fx}),0)::float` }).from(invoices).where(and(live, gte(invoices.date, monthStart)));
+    const [out1] = await db.select({ value: sql<number>`coalesce(sum((${invoices.total} - ${invoices.amountPaid}) * ${fx}),0)::float` })
       .from(invoices).where(and(inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID']), ne(invoices.type, 'PROFORMA')));
-    const [overdue] = await db.select({ value: sql<number>`coalesce(sum(${invoices.total} - ${invoices.amountPaid}),0)::float`, n: sql<number>`count(*)::int` })
+    const [overdue] = await db.select({ value: sql<number>`coalesce(sum((${invoices.total} - ${invoices.amountPaid}) * ${fx}),0)::float`, n: sql<number>`count(*)::int` })
       .from(invoices).where(and(inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID']), ne(invoices.type, 'PROFORMA'), lt(invoices.dueDate, now)));
     const trend = await db.execute(sql`
       select to_char(date_trunc('month', ${invoices.date} at time zone 'Asia/Kolkata'), 'YYYY-MM') as month,
-             coalesce(sum(${invoices.taxable}),0)::float as billed, coalesce(sum(${invoices.amountPaid}),0)::float as collected
+             coalesce(sum(${invoices.taxable} * ${fx}),0)::float as billed, coalesce(sum(${invoices.amountPaid} * ${fx}),0)::float as collected
       from ${invoices}
       where ${invoices.status} in ('ISSUED','PARTIALLY_PAID','PAID') and ${invoices.type} <> 'PROFORMA'
         and ${invoices.date} >= date_trunc('month', now()) - interval '5 months'

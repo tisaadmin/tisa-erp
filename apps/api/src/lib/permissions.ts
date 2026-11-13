@@ -13,7 +13,7 @@ export const MODULES = {
   quotations: ['view', 'create', 'edit', 'delete', 'approve', 'costing'],
   orders: ['view', 'create', 'edit', 'delete', 'without_quote', 'assign_project', 'approve'],
   accessories: ['view', 'create', 'edit', 'approve'],
-  purchase_orders: ['view', 'create', 'edit', 'delete', 'approve', 'without_order', 'without_accessories', 'extra_items'],
+  purchase_orders: ['view', 'create', 'edit', 'delete', 'approve', 'without_order', 'without_accessories', 'extra_items', 'manual_number'],
   /** approve: a GRN more than 10% over the PO quantity */
   grn: ['view', 'create', 'approve'],
   /** supplier bills (payables) and payments made to vendors */

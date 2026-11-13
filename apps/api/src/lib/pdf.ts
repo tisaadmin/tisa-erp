@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import PDFDocument from 'pdfkit';
-import { amountInWords, inr, INDIAN_STATES } from './gst';
+import { amountInWords, amountInWordsIn, inr, INDIAN_STATES, money } from './gst';
 import { fmtDate, fmtDateTime } from './dates';
 import { absPath } from './files';
 
@@ -31,6 +31,8 @@ export type CommercialDoc = {
   notesTitle?: string;
   signatory?: string;
   footerNote?: string;
+  /** document currency (default INR) — amounts, totals and words are shown in it */
+  currency?: string | null;
 };
 
 const GREY = '#555555';
@@ -122,10 +124,11 @@ export function renderCommercialDoc(company: Company, d: CommercialDoc): PDFKit.
   };
   drawHead();
   doc.font('Helvetica').fontSize(8).fillColor('#000');
+  const fx = !!d.currency && d.currency !== 'INR';
   d.rows.forEach((r, idx) => {
     const cells = d.columns.map((c) => {
       const v = r[c.key];
-      return v == null ? '' : c.money && typeof v === 'number' ? inr(v) : String(v);
+      return v == null ? '' : c.money && typeof v === 'number' ? (fx ? money(v, d.currency).replace(`${d.currency} `, '') : inr(v)) : String(v);
     });
     const heights = d.columns.map((c, i) => doc.heightOfString(cells[i], { width: c.width - 6 }));
     const rh = Math.max(...heights) + 6;
@@ -149,19 +152,20 @@ export function renderCommercialDoc(company: Company, d: CommercialDoc): PDFKit.
     const rows: [string, number][] = [];
     if (t.discount) rows.push(['Gross', t.subtotal ?? t.taxable + t.discount], ['Discount', -t.discount]);
     rows.push(['Taxable value', t.taxable]);
-    if (t.igst) rows.push(['IGST', t.igst]);
+    if (fx) rows.push(['IGST (export, LUT)', 0]);
+    else if (t.igst) rows.push(['IGST', t.igst]);
     else { rows.push(['CGST', t.cgst], ['SGST', t.sgst]); }
     if (t.roundOff) rows.push(['Round off', t.roundOff]);
     const top = doc.y;
     rows.forEach(([k, v], i) => {
       doc.font('Helvetica').fontSize(8.5).fillColor(GREY).text(k, 360, top + i * 13, { width: 100, align: 'right' });
-      doc.fillColor('#000').text(inr(v), 465, top + i * 13, { width: 87, align: 'right' });
+      doc.fillColor('#000').text(fx ? money(v, d.currency).replace(`${d.currency} `, '') : inr(v), 465, top + i * 13, { width: 87, align: 'right' });
     });
     const ty = top + rows.length * 13 + 3;
     doc.rect(360, ty, 195, 18).fill('#eef3f7');
-    doc.font('Helvetica-Bold').fontSize(10).fillColor(ACCENT).text('Grand Total (Rs.)', 362, ty + 4.5, { width: 98, align: 'right' });
-    doc.text(inr(t.total), 465, ty + 4.5, { width: 87, align: 'right' });
-    doc.font('Helvetica-Oblique').fontSize(8).fillColor('#000').text(amountInWords(t.total), 40, top, { width: 300 });
+    doc.font('Helvetica-Bold').fontSize(10).fillColor(ACCENT).text(fx ? `Grand Total (${d.currency})` : 'Grand Total (Rs.)', 362, ty + 4.5, { width: 98, align: 'right' });
+    doc.text(fx ? money(t.total, d.currency).replace(`${d.currency} `, '') : inr(t.total), 465, ty + 4.5, { width: 87, align: 'right' });
+    doc.font('Helvetica-Oblique').fontSize(8).fillColor('#000').text(fx ? amountInWordsIn(t.total, d.currency) : amountInWords(t.total), 40, top, { width: 300 });
     doc.y = ty + 26;
   }
 

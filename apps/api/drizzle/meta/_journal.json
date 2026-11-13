@@ -204,6 +204,13 @@
       "when": 1794567956516,
       "tag": "0028_currency_export",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1794568342117,
+      "tag": "0029_user_extra_permissions",
+      "breakpoints": true
     }
   ]
 }

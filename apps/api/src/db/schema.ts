@@ -111,6 +111,8 @@ export const users = pgTable('users', {
   /** department name (kept in step with departmentId, for display / old data) */
   department: text(),
   departmentId: text().references((): AnyPgColumn => departments.id, { onDelete: 'set null' }),
+  /** permissions given to this person on top of their role (e.g. purchase_orders:manual_number) */
+  extraPermissions: text().array().notNull().default([]),
   roleId: text().notNull().references(() => roles.id),
   managerId: text(),
   isFieldStaff: boolean().notNull().default(false),
