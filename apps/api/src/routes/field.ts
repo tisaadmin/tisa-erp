@@ -641,7 +641,8 @@ r.get('/projects', async (req, res) => {
   if (!['tickets:view', 'requisitions:view', 'orders:view'].some((p) => can(req.user, p))) throw forbidden();
   const search = qs(req.query.search);
   let ids = await myProjectOrderIds(db, [req.user.id, ...(await teamIds(req.user.id))]);
-  if (can(req.user, 'orders:view') && (search || req.query.all === '1')) {
+  // office users see every open project on request; anyone raising a requisition picks from every open project (?pick=1)
+  if ((can(req.user, 'orders:view') && (search || req.query.all === '1')) || (req.query.pick === '1' && can(req.user, 'requisitions:create'))) {
     const rows = await db.select({ id: salesOrders.id }).from(salesOrders).where(and(inArray(salesOrders.status, ['OPEN', 'IN_PROGRESS']), eq(salesOrders.isProject, true))).orderBy(desc(salesOrders.date)).limit(300);
     ids = [...new Set([...ids, ...rows.map((x) => x.id)])];
   }

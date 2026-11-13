@@ -11,7 +11,7 @@ export default function NewRequisition() {
   const p = useLocalSearchParams<{ siteId?: string; ticketId?: string; orderId?: string; edit?: string }>();
   // edit = a requisition sent back to me: make the changes and resubmit (same number)
   const editing = useFetch<any>(p.edit ? `/requisitions/${p.edit}` : null);
-  const projects = useFetch<{ id: string; number: string; site: { id: string; name: string } | null; client: { name: string } }[]>('/projects');
+  const projects = useFetch<{ id: string; number: string; site: { id: string; name: string } | null; client: { name: string } }[]>('/projects?pick=1');
   const sites = useFetch<{ data: any[] }>('/sites?active=true&all=1&pageSize=10000');
   const items = useFetch<{ data: any[] }>('/items?active=true&all=1&pageSize=10000');
   const [d, setD] = useState({ type: 'MATERIAL', priority: 'MEDIUM', siteId: p.siteId as string | undefined, orderId: p.orderId as string | undefined, description: '' });
@@ -60,7 +60,7 @@ export default function NewRequisition() {
       )}
       <Field label="Type"><Chips options={['MATERIAL', 'PENDING_WORK', 'REPAIR']} value={d.type} onChange={(type) => setD({ ...d, type })} /></Field>
       <Field label="Priority"><Chips options={['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']} value={d.priority} onChange={(priority) => setD({ ...d, priority })} /></Field>
-      {!!projects.data?.length && <Field label="Project (shows the order and accessories quantities)"><Picker items={projects.data} value={d.orderId} placeholder="Not for a project" onChange={(x) => setD({ ...d, orderId: x.id, siteId: undefined })} getLabel={(x) => x.site?.name ?? x.number} getSub={(x) => `${x.number} · ${x.client.name}`} /></Field>}
+      {!!projects.data?.length && <Field label="Project (shows the order and accessories quantities)"><Picker items={projects.data} value={d.orderId} onChange={(x) => setD({ ...d, orderId: x.id, siteId: undefined })} getLabel={(x) => x.site?.name ?? x.number} getSub={(x) => `${x.number} · ${x.client.name}`} placeholder="Not for a project — search by site, client or SO no." /></Field>}
       {d.orderId ? <Pressable onPress={() => setD({ ...d, orderId: undefined })}><Text style={[s.muted, { color: C.brand }]}>Not for a project? Clear</Text></Pressable>
         : <Field label="Site (leave blank if not known — the office will assign it)"><Picker items={sites.data?.data ?? []} value={d.siteId} onChange={(x) => setD({ ...d, siteId: x.id })} getLabel={(x) => x.name} getSub={(x) => x.client?.name} /></Field>}
       <Field label="What is needed / pending?"><Input multiline value={d.description} onChangeText={(description) => setD({ ...d, description })} /></Field>
