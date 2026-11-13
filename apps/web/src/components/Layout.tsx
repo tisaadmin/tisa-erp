@@ -1,6 +1,6 @@
 import {
   Bell, Boxes, ListChecks, Upload, Building2, Camera, ClipboardCheck, ClipboardList, FileSignature, FileText, Gauge, HandCoins, LifeBuoy, LogOut, MapPin, Menu,
-  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText, HardHat, Calculator, Hash, ListTodo, MessagesSquare, CalendarDays, IndianRupee } from 'lucide-react';
+  PackageCheck, Receipt, ScrollText, Settings, ShieldCheck, ShoppingCart, Target, Truck, UserCheck, Users, Wallet, Wrench, X, ListPlus, Workflow, GitMerge, ReceiptText, HardHat, Calculator, Hash, ListTodo, MessagesSquare, CalendarDays, IndianRupee, Scale } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
@@ -36,6 +36,7 @@ const NAV: { group: string; items: NavItem[] }[] = [
     { to: '/vendor-bills', label: 'Vendor Bills', icon: <ReceiptText />, perm: 'vendor_bills:view' },
     { to: '/inventory', label: 'Inventory', icon: <Boxes />, perm: 'items:view' },
     { to: '/vendors', label: 'Vendors', icon: <Users />, perm: 'vendors:view' },
+    { to: '/tally-recon', label: 'Tally Reconciliation', icon: <Scale />, perm: 'vendor_bills:view' },
   ] },
   { group: 'Service', items: [
     { to: '/projects', label: 'Projects', icon: <HardHat />, perm: 'tickets:view' },

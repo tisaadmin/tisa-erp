@@ -12,6 +12,7 @@ import { initRealtime } from './lib/realtime';
 import { authenticate } from './middleware/auth';
 import { recordActivity } from './lib/activity';
 import activityRoutes from './routes/activity';
+import reconRoutes from './routes/recon';
 import adminRoutes from './routes/admin';
 import authRoutes from './routes/auth';
 import billingRoutes from './routes/billing';
@@ -65,7 +66,7 @@ export function createApp() {
   const api = express.Router();
   api.use(authenticate);
   api.use(recordActivity);
-  for (const r of [adminRoutes, masterRoutes, salesRoutes, purchaseRoutes, billingRoutes, serviceRoutes, fieldRoutes, expenseRoutes, notificationRoutes, dashboardRoutes, importRoutes, orderImportRoutes, accessoryRoutes, recordRoutes, vendorBillRoutes, raImportRoutes, orderQtyRoutes, inboxRoutes, teamRoutes, payrollRoutes, activityRoutes]) api.use(r);
+  for (const r of [adminRoutes, masterRoutes, salesRoutes, purchaseRoutes, billingRoutes, serviceRoutes, fieldRoutes, expenseRoutes, notificationRoutes, dashboardRoutes, importRoutes, orderImportRoutes, accessoryRoutes, recordRoutes, vendorBillRoutes, raImportRoutes, orderQtyRoutes, inboxRoutes, teamRoutes, payrollRoutes, activityRoutes, reconRoutes]) api.use(r);
   app.use('/api', api);
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'Not found')));
 

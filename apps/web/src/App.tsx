@@ -1,4 +1,5 @@
 import { SiteDetail } from './pages/SiteDetail';
+import { TallyReconPage } from './pages/TallyRecon';
 import { RaImportPage } from './pages/RaImport';
 import { CostingSettingsPage } from './components/QuoteCosting';
 import { Navigate, Route, Routes } from 'react-router-dom';
@@ -64,6 +65,7 @@ export default function App() {
         <Route path="purchase-orders/:id/edit" element={<PoEditor />} />
         <Route path="grns" element={<GrnsPage />} />
         <Route path="vendor-bills" element={<VendorBillsPage />} />
+        <Route path="tally-recon" element={<TallyReconPage />} />
         <Route path="vendor-bills/new" element={<VendorBillEditor />} />
         <Route path="vendor-bills/:id" element={<VendorBillDetail />} />
         <Route path="vendor-bills/:id/edit" element={<VendorBillEditor />} />

@@ -2314,3 +2314,15 @@ test('manual PO numbers: only for people given the right', async () => {
   assert.equal(made.status, 201); assert.equal(made.data.number, 'TISA/PO/MAN/001');
   assert.equal((await po('stores', 'TISA/PO/MAN/001')).status, 400, 'number already used');
 });
+
+test('Tally reconciliation: a purchase invoice register is matched to the vendor bills (nothing changes)', async () => {
+  const v = (await ok('stores', 'GET', '/vendors')).data[0];
+  const block = (no: string, ref: string, amt: number, party = v.name) => ` <DBCFIXED>\r\n  <DBCDATE>1-Apr-26</DBCDATE>\r\n  <DBCPARTY>${party}</DBCPARTY>\r\n</DBCFIXED>\r\n <DBCVCHTYPE>Purchase</DBCVCHTYPE>\r\n <DBCVCHNO>${no}</DBCVCHNO>\r\n <DBCVCHREF>${ref}</DBCVCHREF>\r\n <DBCVCHREFDATE>1-Apr-26</DBCVCHREFDATE>\r\n <DBCGSTIN>${v.gstin ?? ''}</DBCGSTIN>\r\n <DBCORDERNODATE>TISA/PO/1 dt.1-Apr-26</DBCORDERNODATE>\r\n <DBCGROSSAMT>${amt}</DBCGROSSAMT>\r\n <DBCLEDAMT>-${amt}</DBCLEDAMT>\r\n`;
+  const xml = `<ENVELOPE>\r\n${block('T/PUR/1', 'NOPE-1', 999)}${block('T/PUR/2', 'NOPE-2', 500, 'Some Unknown Traders')}</ENVELOPE>`;
+  const fd = new FormData(); fd.append('file', new Blob([Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, 'utf16le')])]), 'Purchase Invoices.xml');
+  const out = await ok('accounts', 'POST', '/recon/tally', undefined, fd);
+  assert.equal(out.kind, 'PURCHASE_INVOICES'); assert.equal(out.tallyVouchers, 2); assert.equal(out.from, '2026-04-01');
+  assert.equal(out.count.ONLY_TALLY, 2);
+  assert.ok(out.unknownVendors.some((u: any) => u.party === 'Some Unknown Traders'));
+  assert.equal((await call('tech', 'POST', '/recon/tally', undefined, fd)).status, 403);
+});
