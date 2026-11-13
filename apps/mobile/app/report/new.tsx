@@ -3,7 +3,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Image, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import SignatureScreen, { type SignatureViewRef } from 'react-native-signature-canvas';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Btn, C, Card, Chips, Field, Input, Picker, Screen, s, useFetch, useRun } from '../../src/components/ui';
 import { api, filePart } from '../../src/lib/api';
 import { getFix, takePhoto } from '../../src/lib/geo';
@@ -115,7 +115,7 @@ export default function NewReport() {
       <Btn variant="success" icon="send" title="Submit report" busy={busy} onPress={submit} />
 
       <Modal visible={signing} animationType="slide" onRequestClose={() => setSigning(false)}>
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
+        <SafeAreaProvider><SafeAreaView edges={['top', 'bottom']} style={{ flex: 1, backgroundColor: '#fff' }}>
           <Text style={[s.cardTitle, { padding: 16 }]}>Client signature</Text>
           <View style={{ flex: 1, borderTopWidth: 1, borderBottomWidth: 1, borderColor: C.border }}>
             <SignatureScreen ref={sigRef} onOK={(sig) => { setSignature(sig); setSigning(false); }} onEmpty={() => undefined} descriptionText="" webStyle=".m-signature-pad--footer{display:none} body,html{height:100%}" backgroundColor="#ffffff" penColor="#0f172a" />
@@ -125,7 +125,7 @@ export default function NewReport() {
             <Btn style={{ flex: 1 }} variant="secondary" title="Cancel" onPress={() => setSigning(false)} />
             <Btn style={{ flex: 1 }} title="Save" onPress={() => sigRef.current?.readSignature()} />
           </View>
-        </SafeAreaView>
+        </SafeAreaView></SafeAreaProvider>
       </Modal>
     </Screen>
   );

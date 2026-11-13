@@ -4,7 +4,7 @@ import { useCallback, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator, Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '../lib/api';
 import { label } from '../lib/format';
 
@@ -150,7 +150,7 @@ export function Picker<T extends { id: string }>({ value, items, getLabel, getSu
         <Ionicons name="chevron-down" size={16} color={C.muted} />
       </Pressable>
       <Modal visible={open} animationType="slide" onRequestClose={() => setOpen(false)}>
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }}>
+        <SafeAreaProvider><SafeAreaView edges={['top', 'bottom']} style={{ flex: 1, backgroundColor: '#fff' }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', padding: 12, gap: 8 }}>
             <Input autoFocus placeholder="Search…" value={q} onChangeText={setQ} style={{ flex: 1 }} />
             <Pressable onPress={() => setOpen(false)} hitSlop={10}><Text style={{ color: C.brand, fontWeight: '600' }}>Close</Text></Pressable>
@@ -158,7 +158,7 @@ export function Picker<T extends { id: string }>({ value, items, getLabel, getSu
           <FlatList data={list} keyExtractor={(i) => i.id} keyboardShouldPersistTaps="handled"
             renderItem={({ item }) => <Row title={getLabel(item)} sub={getSub?.(item)} onPress={() => { onChange(item); setOpen(false); setQ(''); }} />}
             ListEmptyComponent={<Empty text="No matches" />} />
-        </SafeAreaView>
+        </SafeAreaView></SafeAreaProvider>
       </Modal>
     </>
   );
