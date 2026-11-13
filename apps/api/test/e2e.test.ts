@@ -2244,3 +2244,15 @@ test('requisition sent back with remarks: requester changes it and resubmits (sa
   assert.ok(it?.sendBack && it.sendBack.required);
   await ok('svc', 'POST', `/requisitions/${rq.id}/approve`, {});
 });
+
+test("Super Admin's own quantity increase on an order is applied without approval", async () => {
+  const o = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 12, rate: 100 }] });
+  const full = await ok('admin', 'GET', `/orders/${o.id}`);
+  const r = await ok('admin', 'POST', `/orders/${o.id}/qty-requests`, { orderItemId: full.items[0].id, addQty: 20, reason: 'Additional as per layouts' });
+  assert.equal(r.status, 'APPROVED');
+  const after = await ok('admin', 'GET', `/orders/${o.id}`);
+  assert.equal(after.items[0].qty, 32); assert.equal(after.taxable, 3200);
+  // anyone else still asks for approval
+  const r2 = await ok('sales', 'POST', `/orders/${o.id}/qty-requests`, { orderItemId: full.items[0].id, addQty: 1, reason: 'One spare' });
+  assert.equal(r2.status, 'PENDING');
+});

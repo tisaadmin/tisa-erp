@@ -1,6 +1,7 @@
 /**
  * Order page: rate-only items and quantity additions (need approval).
  */
+import { toast } from 'sonner';
 import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { api } from '../lib/api';
@@ -18,7 +19,7 @@ export function OrderQtyCard({ orderId, items, closed }: { orderId: string; item
   const [form, setForm] = useState<{ orderItemId: string; addQty: string; reason: string; clientRef: string } | null>(null);
   const [decide, setDecide] = useState<{ r: Req; decision: 'APPROVE' | 'REJECT'; note: string } | null>(null);
   const inv = [['/orders'], [`/orders/${orderId}`], [`/orders/${orderId}/qty-requests`]];
-  const ask = useAction(() => api(`/orders/${orderId}/qty-requests`, { body: { ...form, addQty: Number(form!.addQty) } }), { success: 'Sent for approval', invalidate: inv, onSuccess: () => setForm(null) });
+  const ask = useAction(() => api(`/orders/${orderId}/qty-requests`, { body: { ...form, addQty: Number(form!.addQty) } }), { invalidate: [...inv, ['/orders']], onSuccess: (r: any) => { setForm(null); toast.success(r.status === 'APPROVED' ? 'Quantity added to the order' : 'Sent for approval'); } });
   const dec = useAction(() => api(`/orders/${orderId}/qty-requests/${decide!.r.id}/decide`, { body: { decision: decide!.decision, note: decide!.note || null } }), { success: 'Decided', invalidate: [...inv, [`/orders/${orderId}/billing`]], onSuccess: () => setDecide(null) });
   const rateOnly = items.filter((i) => Number(i.qty) === 0);
   const canAsk = !closed && (can('orders:edit') || can('orders:create') || can('orders:approve'));
@@ -40,7 +41,7 @@ export function OrderQtyCard({ orderId, items, closed }: { orderId: string; item
               <td className="max-w-xs text-sm">{r.reason}{r.clientRef && <div className="text-xs text-slate-500">Client ref: {r.clientRef}</div>}{r.decisionNote && <div className="text-xs text-slate-500">Note: {r.decisionNote}</div>}</td>
               <td className="text-sm">{r.requestedBy}<div className="text-xs text-slate-400">{fmtDateTime(r.createdAt)}</div></td>
               <td><Status s={r.status} />{r.decidedBy && <div className="text-xs text-slate-400">{r.decidedBy}</div>}</td>
-              <td>{r.status === 'PENDING' && can('orders:approve') && r.requestedById !== user?.id && <div className="flex gap-1">
+              <td>{r.status === 'PENDING' && can('orders:approve') && (r.requestedById !== user?.id || !!user?.permissions.includes('*')) && <div className="flex gap-1">
                 <Button size="sm" variant="success" onClick={() => setDecide({ r, decision: 'APPROVE', note: '' })}>Approve</Button>
                 <Button size="sm" onClick={() => setDecide({ r, decision: 'REJECT', note: '' })}>Reject</Button></div>}</td>
             </tr>))}</tbody>

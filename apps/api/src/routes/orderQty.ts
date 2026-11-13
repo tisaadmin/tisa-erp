@@ -13,6 +13,7 @@ import { audit } from '../lib/audit';
 import { badRequest, forbidden, notFound } from '../lib/http';
 import { notifyPermission, notifyUsers } from '../lib/notify';
 import { can, requirePerm } from '../middleware/auth';
+import { isSuperAdminPerms } from '../lib/loginPolicy';
 import { recalcOrder } from '../services/orders';
 
 const r = Router();
@@ -43,6 +44,18 @@ r.post('/orders/:id/qty-requests', async (req, res) => {
   if (['CANCELLED', 'CLOSED', 'MERGED'].includes(o.status)) throw badRequest(`${o.number} is ${o.status.toLowerCase()}`);
   const it = await db.query.salesOrderItems.findFirst({ where: and(eq(salesOrderItems.id, d.orderItemId), eq(salesOrderItems.orderId, o.id)) });
   if (!it) throw badRequest('That line is not on this order');
+  // the Super Admin's own change needs nobody's approval: applied straight away
+  if (isSuperAdminPerms(req.user.permissions)) {
+    const row = await db.transaction(async (tx) => {
+      const [row] = await tx.insert(orderQtyRequests).values({ orderId: o.id, orderItemId: it.id, addQty: d.addQty, reason: d.reason, clientRef: d.clientRef || null, requestedById: req.user.id,
+        status: 'APPROVED', decidedById: req.user.id, decidedAt: new Date(), decisionNote: 'Added by the Super Admin' }).returning();
+      await tx.update(salesOrderItems).set({ qty: r3(Number(it.qty) + d.addQty) }).where(eq(salesOrderItems.id, it.id));
+      await recalcOrder(tx, o.id);
+      return row;
+    });
+    audit(req, 'approve', 'order_qty_request', row.id, { order: o.number, line: it.description, addQty: d.addQty, auto: true });
+    return res.status(201).json(row);
+  }
   const [row] = await db.insert(orderQtyRequests).values({ orderId: o.id, orderItemId: it.id, addQty: d.addQty, reason: d.reason, clientRef: d.clientRef || null, requestedById: req.user.id }).returning();
   audit(req, 'create', 'order_qty_request', row.id, { order: o.number, line: it.description, addQty: d.addQty });
   await notifyPermission('orders:approve', {
@@ -58,7 +71,7 @@ r.post('/orders/:id/qty-requests/:reqId/decide', requirePerm('orders:approve'), 
     const q = await tx.query.orderQtyRequests.findFirst({ where: and(eq(orderQtyRequests.id, req.params.reqId), eq(orderQtyRequests.orderId, req.params.id)) });
     if (!q) throw notFound('Request');
     if (q.status !== 'PENDING') throw badRequest('Already decided');
-    if (q.requestedById === req.user.id && !req.user.permissions.includes('*')) throw badRequest('Someone else has to approve your own request');
+    if (q.requestedById === req.user.id && !isSuperAdminPerms(req.user.permissions)) throw badRequest('Someone else has to approve your own request');
     const [row] = await tx.update(orderQtyRequests).set({ status: d.decision === 'APPROVE' ? 'APPROVED' : 'REJECTED', decidedById: req.user.id, decidedAt: new Date(), decisionNote: d.note || null })
       .where(eq(orderQtyRequests.id, q.id)).returning();
     if (d.decision === 'APPROVE') {

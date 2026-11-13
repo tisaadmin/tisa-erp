@@ -25,6 +25,8 @@ export type InboxItem = {
   lines: string[]; link: string;
   approve: InboxAction & { label: string };
   reject: InboxAction & { label: string; field: string; required: boolean };
+  /** back to the requester to make amends (requisitions) */
+  sendBack?: InboxAction & { label: string; field: string; required: boolean };
 };
 
 const fmtQty = (n: number) => String(Math.round(Number(n) * 1000) / 1000);
