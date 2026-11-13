@@ -17,7 +17,7 @@ type Mat = { itemId?: string | null; description: string; qty: string; unit: str
 export default function NewReport() {
   const p = useLocalSearchParams<{ ticketId?: string; siteId?: string }>();
   const ticket = useFetch<any>(p.ticketId ? `/tickets/${p.ticketId}` : null);
-  const items = useFetch<{ data: any[] }>('/items?active=true&pageSize=500');
+  const items = useFetch<{ data: any[] }>('/items?active=true&all=1&pageSize=10000');
   const cats = useFetch<{ data: any[] }>('/categories?pageSize=100');
   const [timeIn] = useState(new Date().toISOString());
   const [d, setD] = useState({

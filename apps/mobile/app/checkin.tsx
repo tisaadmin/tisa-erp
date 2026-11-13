@@ -13,7 +13,7 @@ type Site = { id: string; name: string; code: string; latitude?: number; longitu
  */
 export default function CheckIn() {
   const p = useLocalSearchParams<{ siteId?: string; ticketId?: string; purpose?: string }>();
-  const sites = useFetch<{ data: Site[] }>('/sites?active=true&pageSize=500');
+  const sites = useFetch<{ data: Site[] }>('/sites?active=true&all=1&pageSize=10000');
   const [fix, setFix] = useState<Fix | null>(null);
   const [siteId, setSiteId] = useState<string | undefined>(p.siteId);
   const [purpose, setPurpose] = useState<'ARRIVAL' | 'WORK_START' | 'PROGRESS' | 'COMPLETION'>((p.purpose as never) ?? 'ARRIVAL');

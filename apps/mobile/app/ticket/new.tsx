@@ -4,7 +4,7 @@ import { Btn, Chips, Field, Input, Picker, Screen, useFetch, useRun } from '../.
 import { api } from '../../src/lib/api';
 
 export default function NewTicket() {
-  const sites = useFetch<{ data: any[] }>('/sites?active=true&pageSize=500');
+  const sites = useFetch<{ data: any[] }>('/sites?active=true&all=1&pageSize=10000');
   const cats = useFetch<{ data: any[] }>('/categories?pageSize=100');
   const [d, setD] = useState<Record<string, any>>({ type: 'COMPLAINT', priority: 'MEDIUM' });
   const { busy, run } = useRun();

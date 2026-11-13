@@ -12,7 +12,7 @@ const CATS = ['TRAVEL', 'FUEL', 'FOOD', 'LODGING', 'LOCAL_PURCHASE', 'COURIER', 
 const blank = (): Line => ({ date: todayIso(), category: 'TRAVEL', description: '', amount: '' });
 
 export default function NewExpense() {
-  const sites = useFetch<{ data: any[] }>('/sites?active=true&pageSize=500');
+  const sites = useFetch<{ data: any[] }>('/sites?active=true&all=1&pageSize=10000');
   const [title, setTitle] = useState(`Expenses ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`);
   const [lines, setLines] = useState<Line[]>([blank()]);
   const { busy, run } = useRun();

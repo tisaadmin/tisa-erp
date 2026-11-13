@@ -12,14 +12,22 @@ export default function NewRequisition() {
   // edit = a requisition sent back to me: make the changes and resubmit (same number)
   const editing = useFetch<any>(p.edit ? `/requisitions/${p.edit}` : null);
   const projects = useFetch<{ id: string; number: string; site: { id: string; name: string } | null; client: { name: string } }[]>('/projects');
-  const sites = useFetch<{ data: any[] }>('/sites?active=true&pageSize=500');
-  const items = useFetch<{ data: any[] }>('/items?active=true&pageSize=500');
+  const sites = useFetch<{ data: any[] }>('/sites?active=true&all=1&pageSize=10000');
+  const items = useFetch<{ data: any[] }>('/items?active=true&all=1&pageSize=10000');
   const [d, setD] = useState({ type: 'MATERIAL', priority: 'MEDIUM', siteId: p.siteId as string | undefined, orderId: p.orderId as string | undefined, description: '' });
   const [lines, setLines] = useState<{ itemId?: string; description: string; qty: string; unit: string; excessAction?: 'QUOTE' | 'ACCESSORY' }[]>([{ description: '', qty: '1', unit: 'Nos' }]);
   // for a project: what the order / accessories list allows, already at site, still available
   const avail = useFetch<{ lines: { itemId: string | null; description: string; unit: string; orderQty: number; accessoryQty: number; sent: number; openRequested: number; available: number }[] }>(d.orderId ? `/projects/${d.orderId}/requestable` : null);
   const availOf = (itemId?: string) => (itemId ? avail.data?.lines.find((l) => l.itemId === itemId) : undefined);
   const project = (projects.data ?? []).find((x) => x.id === d.orderId);
+  // for a project: its order and accessories items first (with what is available), then the rest of the inventory
+  const pickable = (() => {
+    const all = items.data?.data ?? [];
+    if (!d.orderId || !avail.data) return all;
+    const mine = avail.data.lines.filter((a) => a.itemId).map((a) => ({ id: a.itemId!, name: a.description, unit: a.unit, sku: '', sub: `On this project · ${a.available} available` }));
+    const ids = new Set(mine.map((m) => m.id));
+    return [...mine, ...all.filter((x: any) => !ids.has(x.id))];
+  })();
   const siteId = project?.site?.id ?? d.siteId;
   const [photos, setPhotos] = useState<{ id: string; uri: string }[]>([]);
   useEffect(() => {
@@ -74,7 +82,7 @@ export default function NewRequisition() {
             const extra = d.orderId && l.description ? Math.max(0, (Number(l.qty) || 0) - (a?.available ?? 0)) : 0;
             return (
             <View key={i} style={{ gap: 6 }}>
-              <Picker items={items.data?.data ?? []} value={l.itemId} placeholder="Pick item" getLabel={(x) => x.name} getSub={(x) => x.sku}
+              <Picker items={pickable} value={l.itemId} placeholder={d.orderId ? 'Pick item (project items first)' : 'Pick item'} getLabel={(x) => x.name} getSub={(x) => x.sub ?? x.sku}
                 onChange={(x) => setLines(lines.map((y, j) => (j === i ? { ...y, itemId: x.id, description: x.name, unit: x.unit } : y)))} />
               <View style={{ flexDirection: 'row', gap: 6 }}>
                 <Input style={{ flex: 1 }} placeholder="Description" value={l.description} onChangeText={(v) => setLines(lines.map((y, j) => (j === i ? { ...y, description: v } : y)))} />
