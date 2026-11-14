@@ -184,6 +184,7 @@ export function PoDetail() {
   const { id } = useParams();
   const nav = useNavigate();
   const { can, user } = useAuth();
+  const reopen = useAction(() => api(`/purchase-orders/${id}/reopen`, { body: {} }), { success: 'PO reopened', invalidate: [['/purchase-orders']] });
   const { data: po } = useGet<any>(`/purchase-orders/${id}`);
   const [grn, setGrn] = useState<{ vendorInvoiceNo: string; vendorInvoiceDate: string; notes: string; overQtyReason: string; lines: Record<string, { received: number; rejected: number; serialNos: string }> } | null>(null);
   const loc = useLocation();
@@ -209,6 +210,7 @@ export function PoDetail() {
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/purchase-orders/${po.id}/pdf`)}>PDF</Button>
           {['DRAFT', 'PENDING_APPROVAL'].includes(po.status) && can('purchase_orders:edit') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit</Button></Link>}
           {!['DRAFT', 'PENDING_APPROVAL', 'CANCELLED', 'CLOSED'].includes(po.status) && !!user?.permissions.includes('*') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit (Super Admin)</Button></Link>}
+          {po.status === 'CLOSED' && (!!user?.permissions.includes('*') || can('purchase_orders:approve')) && <Button loading={reopen.isPending} onClick={() => confirm(`Reopen ${po.number}? It goes back to sent / part-received / received by what has been received, so goods can be received, billed and the PO corrected.`) && reopen.mutate(undefined)}>Reopen</Button>}
           {(PO_ACTIONS[po.status] ?? []).filter((x) => can(x.perm)).map((x) => <Button key={x.a} variant={x.variant} loading={act.isPending} onClick={() => act.mutate(x.a)}>{x.label}</Button>)}
           {canReceive && <Button variant="primary" icon={<PackageCheck className="size-4" />} onClick={() => setGrn({ vendorInvoiceNo: '', vendorInvoiceDate: '', notes: '', overQtyReason: '', lines: Object.fromEntries(po.items.map((l: any) => [l.id, { received: Math.max(0, l.qty - l.receivedQty), rejected: 0, serialNos: '' }])) })}>Receive goods (GRN)</Button>}
         </>} />

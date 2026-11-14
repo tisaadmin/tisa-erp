@@ -2326,3 +2326,17 @@ test('Tally reconciliation: a purchase invoice register is matched to the vendor
   assert.ok(out.unknownVendors.some((u: any) => u.party === 'Some Unknown Traders'));
   assert.equal((await call('tech', 'POST', '/recon/tally', undefined, fd)).status, 403);
 });
+
+test('closed PO can be reopened by Management / Super Admin (status from what was received); imported FFH POs in bulk', async () => {
+  let po = await ok('stores', 'GET', `/purchase-orders/${ctx.po.id}`);
+  if (po.status !== 'CLOSED') await ok('stores', 'POST', `/purchase-orders/${po.id}/close`, {});
+  assert.equal((await call('stores', 'POST', `/purchase-orders/${po.id}/reopen`, {})).status, 403);
+  const r = await ok('director', 'POST', `/purchase-orders/${po.id}/reopen`, {});
+  po = await ok('stores', 'GET', `/purchase-orders/${ctx.po.id}`);
+  const rcv = po.items.reduce((s: number, i: any) => s + Number(i.receivedQty), 0);
+  assert.equal(r.status, rcv === 0 ? 'SENT' : po.items.every((i: any) => Number(i.receivedQty) >= Number(i.qty)) ? 'RECEIVED' : 'PARTIALLY_RECEIVED');
+  assert.equal((await call('director', 'POST', `/purchase-orders/${po.id}/reopen`, {})).status, 400, 'only closed ones');
+  assert.equal((await call('director', 'POST', '/purchase-orders/reopen-imported', {})).status, 403);
+  const bulk = await ok('admin', 'POST', '/purchase-orders/reopen-imported', {});
+  assert.equal(typeof bulk.reopened, 'number');
+});

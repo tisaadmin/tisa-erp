@@ -308,6 +308,41 @@ const PO_FROM: Record<string, string[]> = {
   close: ['PARTIALLY_RECEIVED', 'SENT', 'APPROVED'], cancel: ['DRAFT', 'PENDING_APPROVAL', 'APPROVED', 'SENT'],
 };
 
+/** What a PO's status should be from what has been received: nothing → sent, some → part-received, all → received. */
+async function liveStatus(poId: string) {
+  const its = await db.query.purchaseOrderItems.findMany({ where: eq(purchaseOrderItems.poId, poId), columns: { qty: true, receivedQty: true } });
+  const rcv = its.reduce((s, i) => s + Number(i.receivedQty), 0);
+  if (rcv <= 0) return 'SENT';
+  return its.every((i) => Number(i.receivedQty) >= Number(i.qty) - 1e-9) ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
+}
+const mayReopen = (u: Request['user']) => isSuperAdminPerms(u.permissions) || can(u, 'purchase_orders:approve');
+
+/** Reopen a closed PO (e.g. brought in from the old ERP as history): it goes back to sent / part-received / received by what was received. */
+r.post('/purchase-orders/:id/reopen', async (req, res) => {
+  if (!mayReopen(req.user)) throw forbidden('Only Management or the Super Admin can reopen a closed PO');
+  const po = await db.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id) });
+  if (!po) throw notFound('Purchase order');
+  if (po.status !== 'CLOSED') throw badRequest(`Only a closed PO can be reopened — this one is ${po.status.toLowerCase().replace('_', ' ')}`);
+  const status = await liveStatus(po.id);
+  const [row] = await db.update(purchaseOrders).set({ status }).where(eq(purchaseOrders.id, po.id)).returning();
+  audit(req, 'reopen', 'purchase_order', po.id, { to: status });
+  res.json(row);
+});
+
+/** Super Admin: reopen every PO brought in from the old ERP (FFH) that was closed on import, so they can be received, billed and edited. */
+r.post('/purchase-orders/reopen-imported', async (req, res) => {
+  if (!isSuperAdminPerms(req.user.permissions)) throw forbidden('Only the Super Admin can do this');
+  const rows = await db.query.purchaseOrders.findMany({ where: and(eq(purchaseOrders.status, 'CLOSED'), ilike(purchaseOrders.sourceRef, 'FFH:%')), columns: { id: true } });
+  const count: Record<string, number> = {};
+  for (const p of rows) {
+    const status = await liveStatus(p.id);
+    await db.update(purchaseOrders).set({ status }).where(eq(purchaseOrders.id, p.id));
+    count[status] = (count[status] ?? 0) + 1;
+  }
+  audit(req, 'reopen_imported', 'purchase_order', null, { count });
+  res.json({ reopened: rows.length, count });
+});
+
 r.post('/purchase-orders/:id/:action', async (req, res) => {
   const action = req.params.action as keyof typeof PO_FLOW;
   if (!PO_FLOW[action]) throw notFound('Action');
