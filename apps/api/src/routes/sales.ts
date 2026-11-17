@@ -23,7 +23,7 @@ import { postStock } from '../services/stock';
 import { absorbOrders, autoAccessoryLines, mergeOrders, PreviewRollback } from '../services/orderMerge';
 import { costingConfig, costingSummary, isServiceLine, purchaseHistory, serviceItemIds, summaryText } from '../services/quoteCosting';
 import { materialKey, projectMaterialStatus } from '../services/projectStatus';
-import { createSalesOrder, editSalesOrder, exportLines, notifyOrderCreated, orderEditSchema, orderSchema } from '../services/orders';
+import { createSalesOrder, editDraftOrder, editSalesOrder, exportLines, notifyOrderCreated, orderEditSchema, orderSchema } from '../services/orders';
 
 import { enforceRule } from '../services/workflow';
 const r = Router();
@@ -405,13 +405,47 @@ r.post('/orders', requirePerm('orders:create'), async (req, res) => {
   const d = orderSchema.parse(req.body);
   const o = await db.transaction((tx) => createSalesOrder(tx, d, req.user.id));
   audit(req, 'create', 'order', o.id);
-  await notifyOrderCreated(o.id, req.user.id);
+  if (o.status !== 'DRAFT') await notifyOrderCreated(o.id, req.user.id);
   res.status(201).json(o);
 });
 
-/** Super Admin: correct an order — header, currency, rates and lines (see editSalesOrder for what stays protected). */
+/** who may change a draft order: the person who made it, or anyone with order edit rights */
+const mayEditDraft = (u: Request['user'], o: { createdById: string | null }) => o.createdById === u.id || can(u, 'orders:edit') || isSuperAdminPerms(u.permissions);
+
+/** Draft → confirmed (open): from now on it cannot be edited (only corrected by the Super Admin), and challans, POs and bills can be raised. */
+r.post('/orders/:id/confirm', async (req, res) => {
+  const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id) });
+  if (!o) throw notFound('Order');
+  if (o.status !== 'DRAFT') throw badRequest(`${o.number} is not a draft`);
+  if (!mayEditDraft(req.user, o)) throw forbidden('Only the person who made the draft (or someone who may edit orders) can confirm it');
+  const [row] = await db.update(salesOrders).set({ status: 'OPEN' }).where(eq(salesOrders.id, o.id)).returning();
+  audit(req, 'confirm', 'order', o.id);
+  await notifyOrderCreated(o.id, req.user.id);
+  res.json(row);
+});
+
+r.delete('/orders/:id', async (req, res) => {
+  const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id) });
+  if (!o) throw notFound('Order');
+  if (o.status !== 'DRAFT') throw badRequest('Only a draft order can be deleted — cancel it instead');
+  if (!mayEditDraft(req.user, o)) throw forbidden();
+  await db.delete(salesOrders).where(eq(salesOrders.id, o.id));
+  audit(req, 'delete', 'order', o.id, { number: o.number });
+  res.json({ ok: true });
+});
+
+/** A draft is edited by its creator (or order editors) in full; a confirmed order only by the Super Admin (correction, see editSalesOrder). */
 r.put('/orders/:id', async (req, res) => {
-  if (!isSuperAdminPerms(req.user.permissions)) throw forbidden('Only the Super Admin can correct an order');
+  const cur = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), columns: { status: true, createdById: true } });
+  if (!cur) throw notFound('Order');
+  if (cur.status === 'DRAFT') {
+    if (!mayEditDraft(req.user, cur)) throw forbidden('Only the person who made this draft can edit it');
+    const d = orderSchema.parse(req.body);
+    const row = await db.transaction((tx) => editDraftOrder(tx, req.params.id, d));
+    audit(req, 'update', 'order', req.params.id);
+    return res.json(row);
+  }
+  if (!isSuperAdminPerms(req.user.permissions)) throw forbidden('A confirmed order cannot be edited — ask the Super Admin to correct it');
   const d = orderEditSchema.parse(req.body);
   const row = await db.transaction((tx) => editSalesOrder(tx, req.params.id, d));
   audit(req, 'correct', 'order', req.params.id, { currency: d.currency, lines: d.lines.length });
@@ -618,7 +652,7 @@ r.post('/challans', requirePerm('challans:create'), async (req, res) => {
       const order = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, d.orderId) });
       if (!order || order.clientId !== d.clientId) throw badRequest('Order does not belong to this client');
       if (order.siteId && (d.siteId ?? null) !== order.siteId) throw badRequest(`The site comes from order ${order.number} and cannot be changed on the challan`);
-      if (['CANCELLED', 'CLOSED'].includes(order.status)) throw badRequest(`Order is ${order.status.toLowerCase()}`);
+      if (['CANCELLED', 'CLOSED', 'DRAFT'].includes(order.status)) throw badRequest(order.status === 'DRAFT' ? `${order.number} is still a draft — confirm the order first` : `Order is ${order.status.toLowerCase()}`);
     }
     const byId = new Map(orderLines.map((l) => [l.id, l]));
     const lines = d.lines.map((l, i) => {

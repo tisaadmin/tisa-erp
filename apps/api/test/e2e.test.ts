@@ -2362,3 +2362,25 @@ test('expense approval chain: everyone → first approver → final approver →
   assert.equal((await ok('tech', 'GET', `/expenses/${c.id}`)).status, 'PAID');
   await ok('admin', 'PUT', '/settings/expense-flow', { firstApproverId: null, finalApproverId: null });
 });
+
+test('draft order / PO: the creator edits while draft; once confirmed / submitted it is locked', async () => {
+  const body = { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 2, rate: 1000 }] };
+  const o = await ok('admin', 'POST', '/orders', { ...body, draft: true });
+  assert.equal(o.status, 'DRAFT');
+  // nothing can be raised against a draft
+  assert.equal((await call('admin', 'POST', '/invoices/running-bill', { orderId: o.id, stages: ['DELIVERY'] })).status, 400);
+  const e = await ok('admin', 'PUT', `/orders/${o.id}`, { ...body, lines: [{ itemId: ctx.cam.id, qty: 5, rate: 1000 }] });
+  assert.equal(e.taxable, 5000);
+  assert.equal((await call('tech', 'PUT', `/orders/${o.id}`, body)).status, 403, 'not the creator');
+  await ok('admin', 'POST', `/orders/${o.id}/confirm`, {});
+  assert.equal((await ok('admin', 'GET', `/orders/${o.id}`)).status, 'OPEN');
+  assert.equal((await call('sales', 'PUT', `/orders/${o.id}`, body)).status, 403, 'confirmed: locked');
+  // PO: a draft is editable by its maker; submitted → locked
+  const vendor = (await ok('stores', 'GET', '/vendors')).data[0];
+  await ok('admin', 'PUT', '/settings/workflow', { poRequiresAccessories: false });
+  const po = await ok('stores', 'POST', '/purchase-orders', { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.cam.id, qty: 1 }] });
+  await ok('stores', 'PUT', `/purchase-orders/${po.id}`, { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.cam.id, qty: 2 }] });
+  await ok('stores', 'POST', `/purchase-orders/${po.id}/submit`, {});
+  const st = (await ok('stores', 'GET', `/purchase-orders/${po.id}`)).status;
+  if (st === 'PENDING_APPROVAL') assert.equal((await call('stores', 'PUT', `/purchase-orders/${po.id}`, { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] })).status, 400, 'submitted: locked');
+});

@@ -138,7 +138,7 @@ r.post('/orders/:id/installation-ticket', requirePerm('tickets:create'), async (
   if (d.assignedToId && !can(req.user, 'tickets:assign') && d.assignedToId !== req.user.id) throw forbidden('Only the projects head / a manager can assign installation work to others');
   const order = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), with: { site: true } });
   if (!order) throw notFound('Order');
-  if (['CANCELLED', 'CLOSED'].includes(order.status)) throw badRequest(`Order ${order.number} is ${order.status.toLowerCase()}`);
+  if (['CANCELLED', 'CLOSED', 'DRAFT'].includes(order.status)) throw badRequest(order.status === 'DRAFT' ? `Order ${order.number} is still a draft — confirm it first` : `Order ${order.number} is ${order.status.toLowerCase()}`);
   if (!order.siteId || !order.site) throw badRequest(`Order ${order.number} has no site — set the order's site first`);
   const dc = d.challanId ? await db.query.deliveryChallans.findFirst({ where: eq(deliveryChallans.id, d.challanId) }) : null;
   if (d.challanId && (!dc || dc.orderId !== order.id)) throw badRequest('That delivery challan is not for this order');

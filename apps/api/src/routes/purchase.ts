@@ -63,7 +63,8 @@ const r2q = (n: number) => Math.round(n * 1000) / 1000;
 async function checkPoParties(d: { salesOrderId?: string | null; deliverToSiteId?: string | null; requisitionId?: string | null }, existingOrderId?: string | null) {
   if (existingOrderId && d.salesOrderId !== existingOrderId) throw badRequest('The sales order of a PO cannot be changed — cancel this PO and raise a new one against the right order');
   if (d.salesOrderId) {
-    const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, d.salesOrderId), columns: { number: true, siteId: true } });
+    const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, d.salesOrderId), columns: { number: true, siteId: true, status: true } });
+    if (o?.status === 'DRAFT') throw badRequest(`${o.number} is still a draft — the order must be confirmed before material is ordered`);
     if (!o) throw badRequest('Order not found');
     if (d.deliverToSiteId && d.deliverToSiteId !== o.siteId) throw badRequest(`Deliver to the site of order ${o.number}, or to the store — the site cannot be changed on the PO`);
   }
@@ -217,10 +218,14 @@ r.post('/purchase-orders', requirePerm('purchase_orders:create'), async (req, re
   res.status(201).json({ ...po, smallPoAlert: alert });
 });
 
-r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, res) => {
+r.put('/purchase-orders/:id', async (req, res) => {
   const d = poSchema.parse(req.body);
-  const ex0 = await db.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id), columns: { salesOrderId: true } });
+  const ex0 = await db.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id), columns: { salesOrderId: true, status: true, createdById: true } });
   if (!ex0) throw notFound('Purchase order');
+  // a draft is edited by the person who made it (or the purchase team); once submitted it is locked — only the Super Admin corrects it
+  const sa = isSuperAdminPerms(req.user.permissions);
+  if (ex0.status === 'DRAFT') { if (!(ex0.createdById === req.user.id || can(req.user, 'purchase_orders:edit') || sa)) throw forbidden('Only the person who made this draft can edit it'); }
+  else if (!sa) throw badRequest('This PO has been submitted — it can no longer be edited. If it was sent back it becomes a draft again; otherwise ask the Super Admin to correct it');
   await checkPoParties(d, ex0.salesOrderId);
   if (d.requisitionId && !d.salesOrderId) {
     const rq0 = await db.query.requisitions.findFirst({ where: eq(requisitions.id, d.requisitionId), columns: { orderId: true } });
@@ -238,8 +243,8 @@ r.put('/purchase-orders/:id', requirePerm('purchase_orders:edit'), async (req, r
       if (await tx.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.number, d.number), columns: { id: true } })) throw badRequest(`PO number ${d.number} is already used`);
       await tx.update(purchaseOrders).set({ number: d.number }).where(eq(purchaseOrders.id, ex.id));
     }
-    const correcting = !['DRAFT', 'PENDING_APPROVAL'].includes(ex.status);
-    if (correcting && !isSuperAdminPerms(req.user.permissions)) throw badRequest('Only draft / pending POs can be edited — ask the Super Admin to correct an issued PO');
+    const correcting = ex.status !== 'DRAFT';
+    if (correcting && !isSuperAdminPerms(req.user.permissions)) throw badRequest('Only a draft PO can be edited — ask the Super Admin to correct it');
     if (correcting) return correctIssuedPo(tx, ex, d, interState);
     const { rows, totals } = await priceLines(tx, d.lines, interState, 'purchasePrice');
     const sub = d.submit ? await submitState(totals.total) : { status: ex.status, autoApproved: false };
@@ -347,9 +352,11 @@ r.post('/purchase-orders/:id/:action', async (req, res) => {
   const action = req.params.action as keyof typeof PO_FLOW;
   if (!PO_FLOW[action]) throw notFound('Action');
   const { comment } = z.object({ comment: opt }).parse(req.body ?? {});
-  if (!can(req.user, PO_FLOW[action].perm)) throw badRequest(`You need ${PO_FLOW[action].perm} to ${action} a PO`);
   const po = await db.query.purchaseOrders.findFirst({ where: eq(purchaseOrders.id, req.params.id) });
   if (!po) throw notFound('Purchase order');
+  // the person who made a draft may submit (or cancel) it themselves
+  const ownDraft = po.createdById === req.user.id && po.status === 'DRAFT' && (action === 'submit' || action === 'cancel');
+  if (!ownDraft && !can(req.user, PO_FLOW[action].perm)) throw badRequest(`You need ${PO_FLOW[action].perm} to ${action} a PO`);
   if (!PO_FROM[action].includes(po.status)) throw badRequest(`Cannot ${action} a PO in ${po.status} state`);
   // a draft made before the rule (no sales order) cannot go ahead without one
   if (['submit', 'approve'].includes(action) && !po.salesOrderId) await enforceRule('poRequiresOrder', req.user, `PO ${po.number} has no sales order — edit it and choose the order form first`);

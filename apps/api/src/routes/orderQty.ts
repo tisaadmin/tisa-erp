@@ -41,7 +41,7 @@ r.post('/orders/:id/qty-requests', async (req, res) => {
   }).parse(req.body);
   const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id) });
   if (!o) throw notFound('Order');
-  if (['CANCELLED', 'CLOSED', 'MERGED'].includes(o.status)) throw badRequest(`${o.number} is ${o.status.toLowerCase()}`);
+  if (['CANCELLED', 'CLOSED', 'MERGED', 'DRAFT'].includes(o.status)) throw badRequest(o.status === 'DRAFT' ? `${o.number} is a draft — edit its quantities directly` : `${o.number} is ${o.status.toLowerCase()}`);
   const it = await db.query.salesOrderItems.findFirst({ where: and(eq(salesOrderItems.id, d.orderItemId), eq(salesOrderItems.orderId, o.id)) });
   if (!it) throw badRequest('That line is not on this order');
   // the Super Admin's own change needs nobody's approval: applied straight away

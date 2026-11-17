@@ -143,6 +143,7 @@ export async function createRunningBill(tx: Tx, d: z.infer<typeof raSchema>, use
   await tx.execute(sql`select id from ${salesOrders} where id = ${d.orderId} for update`);
   const { order, lines } = await orderBillingStatus(tx, d.orderId);
   if (['CANCELLED'].includes(order.status)) throw badRequest('Order is cancelled');
+  if (order.status === 'DRAFT') throw badRequest(`${order.number} is still a draft — confirm the order before billing`);
   const ctx = await resolvePlaceOfSupply(tx, order.clientId, order.siteId);
   const byId = new Map(lines.map((l) => [l.orderItemId, l]));
 

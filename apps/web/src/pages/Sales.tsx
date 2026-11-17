@@ -340,7 +340,7 @@ export function OrdersPage() {
       <Card pad={false}>
         <div className="flex flex-wrap gap-2 border-b border-slate-100 p-3">
           <SearchBox value={q.search ?? ''} onChange={(v) => setQ({ ...q, search: v, page: 1 })} placeholder="Order no., FFH SO no., PO or title…" />
-          <Select className="w-44" value={q.status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} placeholder="All statuses" options={['OPEN', 'IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']} />
+          <Select className="w-44" value={q.status ?? ''} onChange={(e) => setQ({ ...q, status: e.target.value, page: 1 })} placeholder="All statuses" options={['DRAFT', 'OPEN', 'IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']} />
           <Combo className="w-72" options={siteOpts} value={q.siteId || null} onChange={(v) => setQ({ ...q, siteId: v ?? '', page: 1 })} placeholder="All sites" />
           <Select className="w-40" value={q.project ?? ''} onChange={(e) => setQ({ ...q, project: e.target.value, page: 1 })} placeholder="Projects & others" options={[{ value: '1', label: 'Projects only' }, { value: '0', label: 'Not projects' }]} />
           <label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={q.sort === 'site'} onChange={(e) => setQ({ ...q, sort: e.target.checked ? 'site' : '', page: 1, pageSize: e.target.checked ? 200 : 50 })} /> Group by site</label>
@@ -375,18 +375,22 @@ export function OrderEditor() {
   }, [existing.data]);
   const inter = !!d.stateCode && d.stateCode !== companyState;
   const header = { date: d.date, clientPoNo: d.clientPoNo, clientPoDate: d.clientPoDate || null, expectedCompletion: d.expectedCompletion || null, paymentTerms: d.paymentTerms, terms: d.terms, notes: d.notes, isProject: !!d.isProject, ...curBody(d) };
-  const save = useAction(() => (id
-    ? api(`/orders/${id}`, { method: 'PUT', body: { ...header, lines: d.lines } })
-    : api('/orders', { body: { clientId: d.clientId, siteId: d.siteId, ...header, lines: d.lines } })),
-  { success: id ? 'Order corrected' : 'Order created', invalidate: [['/orders']], onSuccess: (o: any) => nav(`/orders/${o.id}`) });
+  const isDraft = !!id && existing.data?.status === 'DRAFT';
+  const save = useAction((asDraft: boolean) => (id
+    ? api(`/orders/${id}`, { method: 'PUT', body: isDraft ? { clientId: d.clientId, siteId: d.siteId, ...header, lines: d.lines } : { ...header, lines: d.lines } })
+      .then(async (o: any) => (isDraft && !asDraft ? api(`/orders/${id}/confirm`, { body: {} }) : o))
+    : api('/orders', { body: { clientId: d.clientId, siteId: d.siteId, ...header, lines: d.lines, draft: asDraft } })),
+  { success: id ? (isDraft ? 'Saved' : 'Order corrected') : 'Saved', invalidate: [['/orders']], onSuccess: (o: any) => nav(`/orders/${o.id}`) });
   if (id && !existing.data) return <Spinner />;
   return (
     <div className="space-y-4">
-      <PageHeader back={id ? `/orders/${id}` : '/orders'} title={id ? `Correct ${existing.data.number}` : 'New order form'} actions={<Button variant="primary" loading={save.isPending} onClick={() => save.mutate(undefined)}>{id ? 'Save corrections' : 'Create order'}</Button>} />
-      {id && <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">Super Admin correction. Lines keep their deliveries, bills and POs. A line can't go below what was delivered or billed; a billed line keeps its rate and GST; lines with challans, bills or accessories can't be removed. The currency can't change once billing has started. Client and site stay as they are.</div>}
+      <PageHeader back={id ? `/orders/${id}` : '/orders'} title={id ? (isDraft ? `Edit draft ${existing.data.number}` : `Correct ${existing.data.number}`) : 'New order form'}
+        actions={id && !isDraft ? <Button variant="primary" loading={save.isPending} onClick={() => save.mutate(false)}>Save corrections</Button>
+          : <><Button loading={save.isPending} onClick={() => save.mutate(true)}>Save as draft</Button><Button variant="primary" loading={save.isPending} onClick={() => confirm('Create the order? After this it can no longer be edited.') && save.mutate(false)}>{isDraft ? 'Save & confirm order' : 'Create order'}</Button></>} />
+      {id && !isDraft && <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">Super Admin correction. Lines keep their deliveries, bills and POs. A line can't go below what was delivered or billed; a billed line keeps its rate and GST; lines with challans, bills or accessories can't be removed. The currency can't change once billing has started. Client and site stay as they are.</div>}
       <Card>
         <div className="grid gap-3 md:grid-cols-4">
-          {id ? <Field label="Client / site"><div className="pt-2 text-sm">{existing.data.client?.name}{existing.data.site ? ` · ${existing.data.site.name}` : ''}</div></Field>
+          {id && !isDraft ? <Field label="Client / site"><div className="pt-2 text-sm">{existing.data.client?.name}{existing.data.site ? ` · ${existing.data.site.name}` : ''}</div></Field>
             : <PartyPicker clientId={d.clientId} siteId={d.siteId} onChange={(v) => setD((x) => ({ ...x, ...v, stateCode: v.stateCode ?? x.stateCode }))} />}
           <Field label="Order date"><Input type="date" value={d.date} onChange={(e) => setD({ ...d, date: e.target.value })} /></Field>
           <Field label="Target completion"><Input type="date" value={d.expectedCompletion ?? ''} onChange={(e) => setD({ ...d, expectedCompletion: e.target.value })} /></Field>
@@ -423,6 +427,8 @@ export function OrderDetail() {
   const [proforma, setProforma] = useState(false);
   const saveProgress = useAction(() => api(`/orders/${id}/items/${progress!.id}/progress`, { method: 'PATCH', body: { installedQty: progress!.installedQty } }), { success: 'Progress updated', invalidate: [['/orders']], onSuccess: () => setProgress(null) });
   const setStatus = useAction((status: string) => api(`/orders/${id}`, { method: 'PATCH', body: { status } }), { success: 'Updated', invalidate: [['/orders']] });
+  const confirmOrder = useAction(() => api(`/orders/${id}/confirm`, { body: {} }), { success: 'Order confirmed — the purchase team has been notified', invalidate: [['/orders']] });
+  const delDraft = useAction(() => api(`/orders/${id}`, { method: 'DELETE' }), { success: 'Draft deleted', invalidate: [['/orders']], onSuccess: () => nav('/orders') });
   const setBasis = useAction((billingBasis: string) => api(`/orders/${id}`, { method: 'PATCH', body: { billingBasis } }), { success: 'Billing basis changed', invalidate: [['/orders'], [`/orders/${id}`]] });
   const setProject = useAction((isProject: boolean) => api(`/orders/${id}`, { method: 'PATCH', body: { isProject } }), { success: 'Updated', invalidate: [['/orders'], [`/orders/${id}`], ['/projects']] });
   const createRa = useAction(() => api('/invoices/running-bill', { body: { orderId: id, proforma, lines: Object.entries(ra!).filter(([, v]) => v > 0).map(([k, v]) => { const [orderItemId, stage] = k.split('|'); return { orderItemId, stage, qty: v }; }) } }),
@@ -437,6 +443,8 @@ export function OrderDetail() {
   const stages = o.paymentTerms as Term[];
   /** site brought in from the client's RA bills: bill on certified quantities, carrying on from the last RA */
   const certified = o.billingBasis === 'CERTIFIED';
+  const draft = o.status === 'DRAFT';
+  const mayEditDraft = draft && (o.createdById === user?.id || can('orders:edit') || !!user?.permissions.includes('*'));
   const fillStage = (stage: string) => {
     const next: Record<string, number> = { ...(ra ?? {}) };
     for (const l of billing.data?.lines ?? []) for (const s of l.stages) if (s.stage === stage) next[`${l.orderItemId}|${s.stage}`] = s.billableQty;
@@ -447,14 +455,20 @@ export function OrderDetail() {
       <PageHeader log={<RecordLog entity="orders" id={o.id} createdById={o.createdById} createdAt={o.createdAt} />} back="/orders" title={<>{o.number} <Status s={o.status} />{o.isProject && <Badge t="violet">Project</Badge>}</>} subtitle={<>{o.client.name}{o.site && ` · ${o.site.name}`}{o.quotation && <> · from <Link className="text-brand-700" to={`/quotations/${o.quotation.id}`}>{o.quotation.number}</Link></>}</>}
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/orders/${o.id}/pdf`)}>Order acknowledgement</Button>
-          {can('challans:create') && <Link to={`/challans/new?orderId=${o.id}`}><Button icon={<Truck className="size-4" />}>Delivery challan</Button></Link>}
-          {can('purchase_orders:create') && <Link to={`/purchase-orders/new?salesOrderId=${o.id}`}><Button>Raise PO</Button></Link>}
-          {!!user?.permissions.includes('*') && !['CANCELLED', 'MERGED'].includes(o.status) && <Link to={`/orders/${o.id}/edit`}><Button>Edit (Super Admin)</Button></Link>}
-          {can('invoices:create') && <Button variant="primary" icon={<Receipt className="size-4" />} onClick={() => setRa({})}>Running bill</Button>}
+          {draft && mayEditDraft && <>
+            <Link to={`/orders/${o.id}/edit`}><Button>Edit draft</Button></Link>
+            <Button variant="danger" loading={delDraft.isPending} onClick={() => confirm(`Delete draft ${o.number}?`) && delDraft.mutate(undefined)}>Delete draft</Button>
+            <Button variant="primary" loading={confirmOrder.isPending} onClick={() => confirm(`Confirm ${o.number}? After this it can no longer be edited, and challans, POs and bills can be raised against it.`) && confirmOrder.mutate(undefined)}>Confirm order</Button>
+          </>}
+          {!draft && can('challans:create') && <Link to={`/challans/new?orderId=${o.id}`}><Button icon={<Truck className="size-4" />}>Delivery challan</Button></Link>}
+          {!draft && can('purchase_orders:create') && <Link to={`/purchase-orders/new?salesOrderId=${o.id}`}><Button>Raise PO</Button></Link>}
+          {!draft && !!user?.permissions.includes('*') && !['CANCELLED', 'MERGED'].includes(o.status) && <Link to={`/orders/${o.id}/edit`}><Button>Edit (Super Admin)</Button></Link>}
+          {!draft && can('invoices:create') && <Button variant="primary" icon={<Receipt className="size-4" />} onClick={() => setRa({})}>Running bill</Button>}
           {can('orders:edit') && !['MERGED', 'CLOSED', 'CANCELLED'].includes(o.status) && <MergeOrdersButton orderId={o.id} number={o.number} />}
           <DeleteOrderButton orderId={o.id} onDeleted={() => nav('/orders')} />
           {can('orders:edit') && o.status !== 'CLOSED' && <Select className="w-36" value="" onChange={(e) => e.target.value && setStatus.mutate(e.target.value)} options={['IN_PROGRESS', 'COMPLETED', 'CLOSED', 'CANCELLED']} placeholder="Set status…" />}
         </>} />
+      {draft && <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900"><b>Draft</b> — {mayEditDraft ? 'you can still edit it. Confirm the order when it is final; after that it is locked (only the Super Admin can correct it)' : 'the person who made it can still edit it'}. Challans, POs and bills can be raised only once it is confirmed.</div>}
       {o.mergedInto && <div className="rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-800">This order was merged into <Link className="font-medium underline" to={`/orders/${o.mergedInto.id}`}>{o.mergedInto.number}</Link> — its deliveries and documents are there now{o.items?.length ? '; the lines below are kept here as history' : ''}.</div>}
       {!!o.mergedFrom?.length && <div className="rounded-md bg-sky-50 px-4 py-2 text-sm text-sky-800">Includes merged orders: {o.mergedFrom.map((m: any, n: number) => <span key={m.id}>{n ? ', ' : ''}<Link className="underline" to={`/orders/${m.id}`}>{m.number}</Link></span>)}</div>}
       {can('orders:edit') && !['CLOSED', 'CANCELLED', 'MERGED'].includes(o.status) && <ProjectSwitch on={!!o.isProject} disabled={setProject.isPending} onChange={(v) => setProject.mutate(v)} />}

@@ -483,7 +483,7 @@ async function prepareRequisition(d: z.infer<typeof reqSchema>) {
   if (d.orderId) {
     const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, d.orderId), columns: { id: true, number: true, status: true, siteId: true, clientId: true } });
     if (!o) throw badRequest('Project (order) not found');
-    if (['CANCELLED', 'CLOSED'].includes(o.status)) throw badRequest(`Order ${o.number} is ${o.status.toLowerCase()}`);
+    if (['CANCELLED', 'CLOSED', 'DRAFT'].includes(o.status)) throw badRequest(o.status === 'DRAFT' ? `Order ${o.number} is still a draft — confirm it first` : `Order ${o.number} is ${o.status.toLowerCase()}`);
     if (d.siteId && o.siteId && d.siteId !== o.siteId) throw badRequest(`The site comes from order ${o.number}`);
     d.siteId = o.siteId ?? d.siteId; d.clientId = o.clientId;
     if (d.type === 'MATERIAL') lines = (await classifyProjectLines(db, o.id, d.items.map((i) => ({ ...i, excessAction: i.excessAction ?? null })))).lines;
@@ -528,7 +528,7 @@ r.post('/requisitions', requirePerm('requisitions:create'), async (req, res) => 
   if (d.orderId) {
     const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, d.orderId), columns: { id: true, number: true, status: true, siteId: true, clientId: true } });
     if (!o) throw badRequest('Project (order) not found');
-    if (['CANCELLED', 'CLOSED'].includes(o.status)) throw badRequest(`Order ${o.number} is ${o.status.toLowerCase()}`);
+    if (['CANCELLED', 'CLOSED', 'DRAFT'].includes(o.status)) throw badRequest(o.status === 'DRAFT' ? `Order ${o.number} is still a draft — confirm it first` : `Order ${o.number} is ${o.status.toLowerCase()}`);
     if (d.siteId && o.siteId && d.siteId !== o.siteId) throw badRequest(`The site comes from order ${o.number}`);
     d.siteId = o.siteId ?? d.siteId; d.clientId = o.clientId;
     if (d.type === 'MATERIAL') lines = (await classifyProjectLines(db, o.id, d.items.map((i) => ({ ...i, excessAction: i.excessAction ?? null })))).lines;

@@ -24,6 +24,8 @@ export const orderSchema = z.object({
   isProject: z.boolean().optional(),
   /** INR, or a foreign currency for an export (lines are then zero-rated — export under LUT) */
   currency: z.enum(CURRENCIES).default('INR'), exchangeRate: z.coerce.number().positive().nullish(),
+  /** save as a draft: editable by its creator, nothing can be raised against it until it is confirmed */
+  draft: z.boolean().optional(),
   lines: z.array(lineSchema).min(1),
 });
 /** an export in a foreign currency is zero-rated (supply under LUT without payment of IGST) */
@@ -41,7 +43,7 @@ export async function createSalesOrder(tx: DbOrTx, d: OrderInput, userId: string
     number: await nextNumber(tx, 'ORDER', d.date), date: d.date ?? new Date(), clientId: d.clientId, siteId: d.siteId,
     clientPoNo: d.clientPoNo, clientPoDate: d.clientPoDate, placeOfSupply: ctx.placeOfSupply, paymentTerms: d.paymentTerms,
     expectedCompletion: d.expectedCompletion, terms: d.terms, notes: d.notes, sourceRef: d.sourceRef ?? null, isProject: !!d.isProject, ...inCurrency(totals, cur), createdById: userId,
-    currency: cur, exchangeRate: cur === 'INR' ? null : d.exchangeRate ?? null,
+    currency: cur, exchangeRate: cur === 'INR' ? null : d.exchangeRate ?? null, ...(d.draft ? { status: 'DRAFT' } : {}),
   }).returning();
   await tx.insert(salesOrderItems).values(rows.map((l) => ({ ...l, paymentTerms: (l.paymentTerms as never) ?? null, orderId: o.id })));
   return o;
@@ -84,6 +86,26 @@ export async function recalcOrder(tx: DbOrTx, orderId: string) {
     }
   }
   await tx.update(salesOrders).set(inCurrency(totals, o.currency)).where(eq(salesOrders.id, orderId));
+}
+
+/** A draft order: everything can change (client, site, lines) — nothing has been raised against it. */
+export async function editDraftOrder(tx: DbOrTx, orderId: string, d: z.infer<typeof orderSchema>) {
+  const o = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, orderId) });
+  if (!o) throw notFound('Order');
+  if (o.status !== 'DRAFT') throw badRequest(`${o.number} is no longer a draft — it cannot be edited`);
+  validateTerms(d.paymentTerms);
+  for (const [i, l] of d.lines.entries()) validateTerms(l.paymentTerms as never, `Line ${i + 1} payment terms`);
+  const ctx = await resolvePlaceOfSupply(tx, d.clientId, d.siteId);
+  const cur = d.currency ?? 'INR';
+  const { rows, totals } = await priceLines(tx, exportLines(d.lines, cur), ctx.isInterState);
+  await tx.delete(salesOrderItems).where(eq(salesOrderItems.orderId, orderId));
+  await tx.insert(salesOrderItems).values(rows.map((l) => ({ ...l, paymentTerms: (l.paymentTerms as never) ?? null, orderId })));
+  const [row] = await tx.update(salesOrders).set({
+    clientId: d.clientId, siteId: d.siteId ?? null, placeOfSupply: ctx.placeOfSupply, date: d.date ?? o.date, clientPoNo: d.clientPoNo, clientPoDate: d.clientPoDate,
+    expectedCompletion: d.expectedCompletion, terms: d.terms, notes: d.notes, paymentTerms: d.paymentTerms, isProject: !!d.isProject,
+    currency: cur, exchangeRate: cur === 'INR' ? null : d.exchangeRate ?? null, ...inCurrency(totals, cur),
+  }).where(eq(salesOrders.id, orderId)).returning();
+  return row;
 }
 
 export const orderEditSchema = orderSchema.omit({ clientId: true, siteId: true }).extend({

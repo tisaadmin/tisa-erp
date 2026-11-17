@@ -128,7 +128,7 @@ export function PoEditor() {
   const poTotal = totalsOf(d.lines, inter).total;
   const small = !!limitQ.data && limitQ.data.poNoApprovalBelow > 0 && poTotal > 0 && poTotal < limitQ.data.poNoApprovalBelow;
   if ((id && !existing.data) || rq.loading) return <Spinner />;
-  const correcting = !!id && !['DRAFT', 'PENDING_APPROVAL'].includes(existing.data.status);
+  const correcting = !!id && existing.data.status !== 'DRAFT';
   return (
     <div className="space-y-4">
       <RequisitionBanner req={rq.req} />
@@ -208,10 +208,10 @@ export function PoDetail() {
       <PageHeader log={<RecordLog entity="purchase-orders" id={po.id} createdById={po.createdById} createdAt={po.createdAt} />} back="/purchase-orders" title={<>{po.number} <Status s={po.status} />{po.autoApproved && <span className="ml-2 align-middle text-xs font-normal text-emerald-700">no approval needed (small PO)</span>}</>} subtitle={po.vendor.name}
         actions={<>
           <Button icon={<FileDown className="size-4" />} onClick={() => openPdf(`/purchase-orders/${po.id}/pdf`)}>PDF</Button>
-          {['DRAFT', 'PENDING_APPROVAL'].includes(po.status) && can('purchase_orders:edit') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit</Button></Link>}
-          {!['DRAFT', 'PENDING_APPROVAL', 'CANCELLED', 'CLOSED'].includes(po.status) && !!user?.permissions.includes('*') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit (Super Admin)</Button></Link>}
+          {po.status === 'DRAFT' && (can('purchase_orders:edit') || po.createdById === user?.id) && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit</Button></Link>}
+          {!['DRAFT', 'CANCELLED', 'CLOSED'].includes(po.status) && !!user?.permissions.includes('*') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit (Super Admin)</Button></Link>}
           {po.status === 'CLOSED' && (!!user?.permissions.includes('*') || can('purchase_orders:approve')) && <Button loading={reopen.isPending} onClick={() => confirm(`Reopen ${po.number}? It goes back to sent / part-received / received by what has been received, so goods can be received, billed and the PO corrected.`) && reopen.mutate(undefined)}>Reopen</Button>}
-          {(PO_ACTIONS[po.status] ?? []).filter((x) => can(x.perm)).map((x) => <Button key={x.a} variant={x.variant} loading={act.isPending} onClick={() => act.mutate(x.a)}>{x.label}</Button>)}
+          {(PO_ACTIONS[po.status] ?? []).filter((x) => can(x.perm) || (po.status === 'DRAFT' && po.createdById === user?.id && (x.a === 'submit' || x.a === 'cancel'))).map((x) => <Button key={x.a} variant={x.variant} loading={act.isPending} onClick={() => act.mutate(x.a)}>{x.label}</Button>)}
           {canReceive && <Button variant="primary" icon={<PackageCheck className="size-4" />} onClick={() => setGrn({ vendorInvoiceNo: '', vendorInvoiceDate: '', notes: '', overQtyReason: '', lines: Object.fromEntries(po.items.map((l: any) => [l.id, { received: Math.max(0, l.qty - l.receivedQty), rejected: 0, serialNos: '' }])) })}>Receive goods (GRN)</Button>}
         </>} />
       <Card><KV cols={4} items={[['Date', fmtDate(po.date)], ['Expected', fmtDate(po.expectedDate)], ['Against order', po.salesOrder ? <Link className="text-brand-700" to={`/orders/${po.salesOrder.id}`}>{po.salesOrder.number}</Link> : null], ['Deliver to', po.deliverToSite?.name ?? 'Store'], ['Tax', po.isInterState ? 'IGST' : 'CGST + SGST']]} /></Card>
