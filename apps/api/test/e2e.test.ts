@@ -2340,3 +2340,25 @@ test('closed PO can be reopened by Management / Super Admin (status from what wa
   const bulk = await ok('admin', 'POST', '/purchase-orders/reopen-imported', {});
   assert.equal(typeof bulk.reopened, 'number');
 });
+
+test('expense approval chain: everyone → first approver → final approver → accounts pays', async () => {
+  const users = (await ok('admin', 'GET', '/users?status=all')).data;
+  const nidhi = users.find((u: any) => u.email === 'sales@tisatech.in');
+  const raju = users.find((u: any) => u.email === 'director@tisatech.in');
+  assert.equal((await call('tech', 'PUT', '/settings/expense-flow', { firstApproverId: nidhi.id, finalApproverId: raju.id })).status, 403);
+  await ok('admin', 'PUT', '/settings/expense-flow', { firstApproverId: nidhi.id, finalApproverId: raju.id });
+  const c = await ok('tech', 'POST', '/expenses', { title: 'Chain test', submit: true, lines: [{ date: '2026-11-20', category: 'TRAVEL', description: 'Auto', amount: 300 }] });
+  assert.equal(c.approverId, nidhi.id, 'goes to the first approver');
+  assert.equal((await call('svc', 'POST', `/expenses/${c.id}/approve`, {})).status, 403, 'not the reporting manager any more');
+  const v = await ok('sales', 'GET', `/expenses/${c.id}`);
+  assert.equal(v.decide.approveLabel, `Approve & send to ${raju.name}`);
+  await ok('sales', 'POST', `/expenses/${c.id}/approve`, {});
+  assert.equal((await call('accounts', 'POST', `/expenses/${c.id}/approve`, {})).status, 403, 'final approval is the final approver');
+  const inbox = await ok('director', 'GET', '/approvals/inbox');
+  assert.ok(inbox.items.some((x: any) => x.id === c.id));
+  await ok('director', 'POST', `/expenses/${c.id}/approve`, {});
+  assert.equal((await ok('accounts', 'GET', `/expenses/${c.id}`)).status, 'ACCOUNTS_APPROVED');
+  await ok('accounts', 'POST', `/expenses/${c.id}/pay`, { paymentRef: 'UTR1' });
+  assert.equal((await ok('tech', 'GET', `/expenses/${c.id}`)).status, 'PAID');
+  await ok('admin', 'PUT', '/settings/expense-flow', { firstApproverId: null, finalApproverId: null });
+});

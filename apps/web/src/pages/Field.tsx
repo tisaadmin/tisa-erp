@@ -541,8 +541,10 @@ export function ExpenseDetail() {
   const submit = useAction(() => api(`/expenses/${id}/submit`, { body: {} }), { success: 'Submitted', invalidate: [['/expenses']] });
   if (!c) return <Spinner />;
   const mine = c.userId === user?.id;
-  const managerStage = c.status === 'SUBMITTED' && !mine && (c.approverId === user?.id || can('expenses:approve'));
-  const financeStage = ['MANAGER_APPROVED', 'ACCOUNTS_APPROVED'].includes(c.status) && !mine && can('expenses:finance');
+  // the server says who may decide now (first approver → final approver → accounts pays)
+  const managerStage = !!c.decide && c.status === 'SUBMITTED';
+  const financeStage = !!c.decide && c.status !== 'SUBMITTED';
+  void can;
   return (
     <div className="space-y-4">
       <PageHeader log={<RecordLog entity="expenses" id={c.id} createdById={c.userId} createdAt={c.createdAt} />} back="/expenses" title={<>{c.number} <Status s={c.status} /></>} subtitle={`${c.user.name} · ${c.title}`}
@@ -556,7 +558,7 @@ export function ExpenseDetail() {
         ]} />
       </Card>
       {(managerStage || financeStage) && (
-        <Card title={managerStage ? 'Manager approval' : c.status === 'MANAGER_APPROVED' ? 'Accounts approval' : 'Record payment'}>
+        <Card title={c.decide.stage}>
           <div className="grid gap-3 sm:grid-cols-3">
             {c.status !== 'ACCOUNTS_APPROVED' && <Field label="Approve amount (blank = full)"><Input type="number" value={d.approvedTotal} onChange={(e) => setD({ ...d, approvedTotal: e.target.value })} placeholder={String(c.approvedTotal ?? c.total)} /></Field>}
             {c.status === 'ACCOUNTS_APPROVED' && <Field label="Payment reference"><Input value={d.paymentRef} onChange={(e) => setD({ ...d, paymentRef: e.target.value })} /></Field>}
@@ -564,12 +566,13 @@ export function ExpenseDetail() {
           </div>
           <div className="mt-3 flex gap-2">
             {c.status === 'ACCOUNTS_APPROVED' ? <Button variant="success" loading={act.isPending} onClick={() => act.mutate('pay')}>Mark paid</Button>
-              : <Button variant="success" loading={act.isPending} onClick={() => act.mutate('approve')}>Approve</Button>}
+              : <Button variant="success" loading={act.isPending} onClick={() => act.mutate('approve')}>{c.decide.approveLabel}</Button>}
             <Button loading={act.isPending} onClick={() => act.mutate('send-back')}>Send back</Button>
             <Button variant="danger" loading={act.isPending} onClick={() => act.mutate('reject')}>Reject</Button>
           </div>
         </Card>
       )}
+      {!managerStage && !financeStage && c.waitingFor && <div className="rounded-md bg-sky-50 px-4 py-2 text-sm text-sky-900">Waiting for: <b>{c.waitingFor}</b></div>}
       <Card title="History">
         <ul className="space-y-2 text-sm">{c.history.map((h: any) => <li key={h.id} className="border-l-2 border-brand-200 pl-3"><div className="text-xs text-slate-500">{fmtDateTime(h.createdAt)} · {h.userName}</div>{label(h.action)} → <Status s={h.toStatus} />{h.comment && <> — “{h.comment}”</>}</li>)}</ul>
       </Card>

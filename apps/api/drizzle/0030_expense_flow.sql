@@ -1,0 +1,1 @@
+ALTER TABLE "company_settings" ADD COLUMN "expense_flow" jsonb DEFAULT '{}'::jsonb NOT NULL;

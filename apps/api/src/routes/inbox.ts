@@ -3,6 +3,7 @@
  * POs, quotations (low margin), GRNs / challans over the PO / order, order quantity requests, accessories lists,
  * requisitions, expense claims and leave. Each item says how to approve it and how to send it back.
  */
+import { getCompany } from '../services/company';
 import { Router } from 'express';
 import { and, asc, desc, eq, inArray, isNull, ne, or, type SQL } from 'drizzle-orm';
 import { db } from '../db';
@@ -147,16 +148,20 @@ r.get('/approvals/inbox', async (req, res) => {
   if (can(u, 'expenses:view')) jobs.push((async () => {
     const conds: SQL[] = [and(eq(expenseClaims.status, 'SUBMITTED'), eq(expenseClaims.approverId, u.id))!];
     if (can(u, 'expenses:approve')) conds.push(and(eq(expenseClaims.status, 'SUBMITTED'), isNull(expenseClaims.approverId))!);
-    if (can(u, 'expenses:finance')) conds.push(inArray(expenseClaims.status, ['MANAGER_APPROVED', 'ACCOUNTS_APPROVED']));
+    const company = await getCompany();
+    const flow = (company.expenseFlow ?? {}) as { firstApproverId?: string | null; finalApproverId?: string | null };
+    if (flow.finalApproverId ? flow.finalApproverId === u.id : can(u, 'expenses:finance')) conds.push(eq(expenseClaims.status, 'MANAGER_APPROVED'));
+    if (can(u, 'expenses:finance')) conds.push(eq(expenseClaims.status, 'ACCOUNTS_APPROVED'));
+    const finalName = flow.finalApproverId ? (await db.query.users.findFirst({ where: eq(users.id, flow.finalApproverId), columns: { name: true } }))?.name ?? null : null;
     const rows = await db.query.expenseClaims.findMany({ where: and(or(...conds), ne(expenseClaims.userId, u.id)), orderBy: [desc(expenseClaims.createdAt)],
       with: { user: { columns: { name: true } }, lines: true } });
     for (const c of rows) {
       const pay = c.status === 'ACCOUNTS_APPROVED';
       out.push({
         kind: 'EXPENSE', id: c.id, number: c.number, title: `Expenses — ${c.user.name}`, amount: Number(c.approvedTotal ?? c.total), date: c.createdAt, by: c.user.name,
-        sub: `${c.title} · ${c.lines.length} item(s)`, note: c.status === 'SUBMITTED' ? null : c.status === 'MANAGER_APPROVED' ? 'Approved by the manager — accounts check' : 'Approved — to be paid',
+        sub: `${c.title} · ${c.lines.length} item(s)`, note: c.status === 'SUBMITTED' ? null : c.status === 'MANAGER_APPROVED' ? (finalName ? 'First approval done — for your final approval' : 'Approved by the manager — accounts check') : 'Approved — to be paid',
         lines: c.lines.slice(0, 10).map((l) => `${l.category.replace(/_/g, ' ').toLowerCase()}: ${l.description} — ${rs(l.amount)}${l.receiptId ? ' (receipt)' : ''}`), link: `/expenses/${c.id}`,
-        approve: { label: pay ? 'Mark paid' : 'Approve', path: `/expenses/${c.id}/${pay ? 'pay' : 'approve'}`, body: {} },
+        approve: { label: pay ? 'Mark paid' : c.status === 'SUBMITTED' && finalName && finalName !== u.name ? `Approve & send to ${finalName}` : 'Approve', path: `/expenses/${c.id}/${pay ? 'pay' : 'approve'}`, body: {} },
         reject: { label: 'Send back', path: `/expenses/${c.id}/send-back`, body: {}, field: 'comment', required: true },
       });
     }

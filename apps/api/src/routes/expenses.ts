@@ -9,7 +9,32 @@ import { r2 } from '../lib/gst';
 import { badRequest, forbidden, notFound, pageParams } from '../lib/http';
 import { nextNumber } from '../lib/numbering';
 import { notifyPermission, notifyUsers } from '../lib/notify';
-import { can, requirePerm } from '../middleware/auth';
+import { can, requirePerm, type AuthUser } from '../middleware/auth';
+import { isSuperAdminPerms } from '../lib/loginPolicy';
+import { getCompany } from '../services/company';
+
+/** The company's expense approval chain (Settings): first approver, then final approver; unset = reporting manager, then accounts. */
+async function expenseFlow() {
+  const c = await getCompany();
+  const f = (c.expenseFlow ?? {}) as { firstApproverId?: string | null; finalApproverId?: string | null };
+  return { first: f.firstApproverId || null, final: f.finalApproverId || null };
+}
+async function nameOf(id: string | null) {
+  if (!id) return null;
+  return (await db.query.users.findFirst({ where: eq(users.id, id), columns: { name: true } }))?.name ?? null;
+}
+/** May this person decide the claim at its current stage? */
+async function stageOf(c: { status: string; userId: string; approverId: string | null }, u: AuthUser) {
+  const flow = await expenseFlow();
+  const sa = isSuperAdminPerms(u.permissions);
+  if (c.userId === u.id) return { can: false, flow };
+  // with a company first approver, only the assigned approver decides (no one else with approval rights)
+  if (c.status === 'SUBMITTED') return { can: c.approverId === u.id || sa || (!flow.first && can(u, 'expenses:approve')), flow };
+  // after the first approval: the final approver when one is set, else accounts
+  if (c.status === 'MANAGER_APPROVED') return { can: flow.final ? flow.final === u.id || sa : can(u, 'expenses:finance'), flow };
+  if (c.status === 'ACCOUNTS_APPROVED') return { can: can(u, 'expenses:finance'), flow };
+  return { can: false, flow };
+}
 
 /**
  * Expense claim workflow
@@ -45,7 +70,9 @@ async function linkReceipts(tx: Tx, claimId: string, userId: string, lines: z.in
 }
 
 async function submitClaim(tx: Tx, req: Request, claimId: string, from: string) {
-  const approverId = await approverFor(req.user.id);
+  // the company's first approver for everyone's claims (their own go to the reporting manager)
+  const flow = await expenseFlow();
+  const approverId = flow.first && flow.first !== req.user.id ? flow.first : await approverFor(req.user.id);
   const [c] = await tx.update(expenseClaims).set({ status: 'SUBMITTED', approverId, submittedAt: new Date() }).where(eq(expenseClaims.id, claimId)).returning();
   await log(tx, claimId, req.user.id, 'SUBMITTED', from, 'SUBMITTED');
   return c;
@@ -65,7 +92,9 @@ r.get('/expenses', requirePerm('expenses:view'), async (req, res) => {
   else if (scope === 'approvals') {
     const conds: SQL[] = [and(eq(expenseClaims.status, 'SUBMITTED'), eq(expenseClaims.approverId, req.user.id))!];
     if (can(req.user, 'expenses:approve')) conds.push(and(eq(expenseClaims.status, 'SUBMITTED'), isNull(expenseClaims.approverId))!);
-    if (can(req.user, 'expenses:finance')) conds.push(inArray(expenseClaims.status, ['MANAGER_APPROVED', 'ACCOUNTS_APPROVED']));
+    const flow = await expenseFlow();
+    if (flow.final ? flow.final === req.user.id : can(req.user, 'expenses:finance')) conds.push(eq(expenseClaims.status, 'MANAGER_APPROVED'));
+    if (can(req.user, 'expenses:finance')) conds.push(eq(expenseClaims.status, 'ACCOUNTS_APPROVED'));
     where = and(or(...conds), ne(expenseClaims.userId, req.user.id));
   } else if (scope === 'all') {
     if (!can(req.user, 'expenses:finance') && !can(req.user, 'expenses:approve')) throw forbidden();
@@ -86,7 +115,8 @@ r.get('/expenses', requirePerm('expenses:view'), async (req, res) => {
 async function loadClaim(req: Request, id: string) {
   const c = await db.query.expenseClaims.findFirst({ where: eq(expenseClaims.id, id), with: withAll });
   if (!c) throw notFound('Expense claim');
-  const mayView = c.userId === req.user.id || c.approverId === req.user.id || c.user.managerId === req.user.id
+  const flow = await expenseFlow();
+  const mayView = c.userId === req.user.id || c.approverId === req.user.id || c.user.managerId === req.user.id || flow.final === req.user.id || flow.first === req.user.id
     || can(req.user, 'expenses:approve') || can(req.user, 'expenses:finance') || (await manages(req.user.id, c.userId));
   if (!mayView) throw forbidden();
   return c;
@@ -101,7 +131,15 @@ r.get('/expenses/:id', requirePerm('expenses:view'), async (req, res) => {
   const ids = [...new Set(history.map((h) => h.userId))];
   const names = ids.length ? await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, ids)) : [];
   const m = new Map(names.map((n) => [n.id, n.name]));
-  res.json({ ...c, history: history.map((h) => ({ ...h, userName: m.get(h.userId) })), receipts });
+  // what the viewer can do now, and where an approval sends it next
+  const st = await stageOf(c, req.user);
+  const finalName = await nameOf(st.flow.final);
+  const decide = st.can ? {
+    stage: c.status === 'SUBMITTED' ? 'First approval' : c.status === 'MANAGER_APPROVED' ? (st.flow.final ? 'Final approval' : 'Accounts approval') : 'Record payment',
+    approveLabel: c.status === 'SUBMITTED' ? (st.flow.final && finalName ? `Approve & send to ${finalName}` : 'Approve') : c.status === 'ACCOUNTS_APPROVED' ? 'Mark paid' : 'Approve',
+  } : null;
+  const waitingFor = c.status === 'SUBMITTED' ? c.approver?.name ?? 'the approver' : c.status === 'MANAGER_APPROVED' ? finalName ?? 'accounts' : c.status === 'ACCOUNTS_APPROVED' ? 'payment by accounts' : null;
+  res.json({ ...c, history: history.map((h) => ({ ...h, userName: m.get(h.userId) })), receipts, decide, waitingFor });
 });
 
 r.post('/expenses', requirePerm('expenses:create'), async (req, res) => {
@@ -159,9 +197,10 @@ r.post('/expenses/:id/:action', async (req, res) => {
 
   const isManagerStage = c.status === 'SUBMITTED';
   const isFinanceStage = c.status === 'MANAGER_APPROVED' || c.status === 'ACCOUNTS_APPROVED';
-  if (isManagerStage && !(c.approverId === req.user.id || can(req.user, 'expenses:approve'))) throw forbidden('Only the reporting manager can approve at this stage');
-  if (isFinanceStage && !can(req.user, 'expenses:finance')) throw forbidden('Accounts approval required');
   if (!isManagerStage && !isFinanceStage) throw badRequest(`Claim is ${c.status.toLowerCase().replace('_', ' ')}`);
+  const st = await stageOf(c, req.user);
+  if (!st.can) throw forbidden(isManagerStage ? 'This claim is with its first approver' : c.status === 'MANAGER_APPROVED' && st.flow.final ? `This claim is with ${(await nameOf(st.flow.final)) ?? 'the final approver'} for approval` : 'Accounts approval required');
+  if (action === 'pay' && !can(req.user, 'expenses:finance')) throw forbidden('Accounts records the payment');
   if ((action === 'reject' || action === 'send-back') && !d.comment) throw badRequest('Please give a reason');
   if (d.approvedTotal != null && d.approvedTotal > c.total) throw badRequest('Approved amount cannot exceed claimed amount');
 
@@ -182,7 +221,12 @@ r.post('/expenses/:id/:action', async (req, res) => {
   });
   const payload = { type: 'EXPENSE' as const, link: `/expenses/${c.id}`, entityType: 'EXPENSE', entityId: c.id };
   await notifyUsers([c.userId], { ...payload, title: `Expense ${c.number}: ${to.replace('_', ' ').toLowerCase()}`, body: d.comment ?? `Rs. ${(updated.approvedTotal ?? updated.total).toLocaleString('en-IN')}` });
-  if (to === 'MANAGER_APPROVED') await notifyPermission('expenses:finance', { ...payload, title: `Expense ${c.number} ready for accounts`, body: `${c.user.name} · Rs. ${(updated.approvedTotal ?? c.total).toLocaleString('en-IN')}` }, req.user.id);
+  if (to === 'MANAGER_APPROVED') {
+    const body = `${c.user.name} · Rs. ${(updated.approvedTotal ?? c.total).toLocaleString('en-IN')}${d.comment ? ` · “${d.comment}”` : ''}`;
+    if (st.flow.final) await notifyUsers([st.flow.final], { ...payload, type: 'APPROVAL' as never, title: `Expense ${c.number} approved by ${req.user.name} — for your approval`, body }, req.user.id);
+    else await notifyPermission('expenses:finance', { ...payload, title: `Expense ${c.number} ready for accounts`, body }, req.user.id);
+  }
+  if (to === 'ACCOUNTS_APPROVED' && st.flow.final) await notifyPermission('expenses:finance', { ...payload, title: `Expense ${c.number} approved — to be paid`, body: `${c.user.name} · Rs. ${(updated.approvedTotal ?? c.total).toLocaleString('en-IN')}` }, req.user.id);
   audit(req, action, 'expense', c.id, d);
   res.json(updated);
 });

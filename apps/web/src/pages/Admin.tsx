@@ -1,6 +1,7 @@
 import { Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { FormFields, type FieldDef } from '../components/MasterPage';
+import { Combo } from '../components/Combo';
 import { toast } from 'sonner';
 import { Link } from 'react-router-dom';
 import { Badge, Button, Card, Field, Input, PageHeader, Spinner, Stat, Table, Tabs, cx } from '../components/ui';
@@ -372,6 +373,26 @@ function TeamMessagingCard({ canEdit }: { canEdit: boolean }) {
   );
 }
 
+/** Expense claims: everyone's claims go to a first approver, then a final approver; accounts then pays. */
+function ExpenseFlowCard({ canEdit }: { canEdit: boolean }) {
+  const q = useGet<{ firstApproverId?: string | null; finalApproverId?: string | null }>('/settings/expense-flow');
+  const users = useGet<any>('/users', { pageSize: 500 });
+  const [v, setV] = useState<{ firstApproverId: string | null; finalApproverId: string | null } | null>(null);
+  const cur = v ?? { firstApproverId: q.data?.firstApproverId ?? null, finalApproverId: q.data?.finalApproverId ?? null };
+  const save = useAction(() => api('/settings/expense-flow', { method: 'PUT', body: cur }), { success: 'Saved', invalidate: [['/settings/expense-flow']], onSuccess: () => setV(null) });
+  const opts = (users.data?.data ?? []).filter((u: any) => u.active).map((u: any) => ({ value: u.id, label: u.name, sub: u.email }));
+  return (
+    <Card title="Expense claim approvals">
+      <p className="text-sm text-slate-600">Everyone's expense claims (vouchers) go to the <b>first approver</b>; once approved they go to the <b>final approver</b>, then accounts records the payment. Leave blank to use each person's reporting manager, then accounts.</p>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <Field label="1. First approver"><Combo options={opts} value={cur.firstApproverId} disabled={!canEdit} onChange={(x) => setV({ ...cur, firstApproverId: x })} placeholder="Reporting manager" /></Field>
+        <Field label="2. Final approver"><Combo options={opts} value={cur.finalApproverId} disabled={!canEdit} onChange={(x) => setV({ ...cur, finalApproverId: x })} placeholder="Accounts" /></Field>
+      </div>
+      {canEdit && <Button className="mt-3" variant="primary" disabled={!v} loading={save.isPending} onClick={() => save.mutate(undefined)}>Save</Button>}
+    </Card>
+  );
+}
+
 /** POs below this total (incl. GST) go to the purchase team without approval. */
 function SmallPoCard({ canEdit }: { canEdit: boolean }) {
   const q = useGet<{ poNoApprovalBelow: number }>('/settings/purchase');
@@ -419,6 +440,7 @@ export function WorkflowPage() {
       </Card>
       <SmallPoCard canEdit={can('settings:edit')} />
       <TeamMessagingCard canEdit={can('settings:edit')} />
+      <ExpenseFlowCard canEdit={can('settings:edit')} />
       <Card title="Accessories approval">
         <p className="text-sm text-slate-600">Accessory sheets are approved by roles with <b>Accessories → Approve</b> (Roles &amp; Access). Nobody can approve a sheet they prepared.</p>
       </Card>

@@ -317,6 +317,22 @@ const settingsSchema = z.object({
   workdayStart: z.string().regex(/^\d{2}:\d{2}$/).optional(),
 });
 
+// ── Expense approval chain ──
+r.get('/settings/expense-flow', async (_req, res) => {
+  const c = await db.query.companySettings.findFirst({ columns: { expenseFlow: true } });
+  res.json(c?.expenseFlow ?? {});
+});
+r.put('/settings/expense-flow', requirePerm('settings:edit'), async (req, res) => {
+  const d = z.object({ firstApproverId: z.string().nullish(), finalApproverId: z.string().nullish() }).parse(req.body);
+  for (const id of [d.firstApproverId, d.finalApproverId]) if (id && !(await db.query.users.findFirst({ where: eq(users.id, id), columns: { id: true } }))) throw badRequest('User not found');
+  if (d.firstApproverId && d.firstApproverId === d.finalApproverId) throw badRequest('The first and final approvers must be different people');
+  const flow = { firstApproverId: d.firstApproverId || null, finalApproverId: d.finalApproverId || null };
+  await db.update(companySettings).set({ expenseFlow: flow }).where(eq(companySettings.id, 1));
+  clearCompanyCache();
+  audit(req, 'update', 'expense_flow', '1', flow);
+  res.json(flow);
+});
+
 // ── Workflow rules ──
 r.get('/settings/workflow', async (_req, res) => {
   const rules = await workflowRules();

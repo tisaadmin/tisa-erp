@@ -82,6 +82,8 @@ export const companySettings = pgTable('company_settings', {
   workflowRules: jsonb().$type<Record<string, boolean>>().notNull().default({}),
   /** team tools: who may message whom (ALL = everyone; DEPARTMENT = own department, department heads and Management) */
   teamConfig: jsonb().$type<{ messaging?: 'ALL' | 'DEPARTMENT' }>().notNull().default({}),
+  /** expense claims: everyone's claims go first to firstApproverId, then to finalApproverId (unset = reporting manager, then accounts) */
+  expenseFlow: jsonb().$type<{ firstApproverId?: string | null; finalApproverId?: string | null }>().notNull().default({}),
   /** official email domains that may sign in (sub-domains included); other addresses only if the Super Admin allows them per user */
   loginDomains: text().array().notNull().default(['tisa.in']),
   /** rate card for quotation costing: manpower roles (₹/man-day), transport presets, service cost % of project value */
