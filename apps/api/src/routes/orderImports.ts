@@ -7,6 +7,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { CURRENCIES, inCurrency } from '../lib/gst';
 import { db } from '../db';
 import { clients, importJobs, items, quotationItems, quotations, salesOrderItems, salesOrders, sites, vendors } from '../db/schema';
 import { audit } from '../lib/audit';
@@ -19,7 +20,7 @@ import { enforceRule } from '../services/workflow';
 import { UNIT_MAP } from '../import/engine';
 import { parseOrderDocument, type ParsedOrderDoc } from '../import/orderDoc';
 import { guessItemType, suggestClients, suggestItems, suggestSites, systemGuesser } from '../import/orderMatch';
-import { createSalesOrder, notifyOrderCreated, replaceOrderLines, termsSchema } from '../services/orders';
+import { createSalesOrder, notifyOrderCreated, replaceOrderLines, termsSchema, exportLines } from '../services/orders';
 import { getCompany, resolvePlaceOfSupply } from '../services/company';
 import { priceLines } from '../services/lines';
 import { validateTerms } from '../services/billing';
@@ -116,6 +117,8 @@ r.get('/order-imports/:id/sites', perm, async (req, res) => {
 });
 
 const commitSchema = z.object({
+  /** INR, or a foreign currency (export, zero-rated) — the rates in the file are in it */
+  currency: z.enum(CURRENCIES).default('INR'), exchangeRate: z.coerce.number().positive().nullish(),
   clientId: z.string().nullish(),
   newClient: z.object({
     name: z.string().trim().min(2, 'Enter the new client name'), type: z.string().default('CORPORATE'), gstin: z.string().trim().nullish(),
@@ -250,7 +253,8 @@ async function commitOrderImport(job: Job, doc: ParsedOrderDoc, d: CommitInput, 
         itemId: l.action === 'match' ? l.itemId : l.action === 'new' ? idByKey.get(keyOfItem(l))! : null,
         description: l.description, hsnSac: l.hsnSac || null, unit: l.unit, qty: l.qty, rate: l.rate, discountPct: l.discountPct, gstRate: l.gstRate,
       }));
-      const { rows, totals } = await priceLines(tx, qLines, ctx.placeOfSupply !== company.stateCode);
+      const { rows, totals: t0 } = await priceLines(tx, exportLines(qLines, d.currency), ctx.placeOfSupply !== company.stateCode);
+      const totals = inCurrency(t0, d.currency);
       // purchase rates / vendors from the sheet are kept only for people who may see costs
       const costing = can(user, 'quotations:costing');
       const vendorRows = costing && lines.some((l) => l.costVendor) ? await tx.select({ id: vendors.id, name: vendors.name }).from(vendors) : [];
@@ -260,6 +264,7 @@ async function commitOrderImport(job: Job, doc: ParsedOrderDoc, d: CommitInput, 
         number: await nextNumber(tx, 'QUOTATION', date), date, validUntil: d.validUntil ?? new Date(date.getTime() + 30 * 864e5), clientId: client.id, siteId,
         subject: d.subject || doc.subject || doc.title || null, placeOfSupply: ctx.placeOfSupply, paymentTerms: d.paymentTerms,
         terms: d.terms || company.quoteTerms, notes: noteParts.join('\n').replace(/^Imported from/, 'Created from'), ...totals, createdById: userId,
+        currency: d.currency, exchangeRate: d.currency === 'INR' ? null : d.exchangeRate ?? null,
       }).returning();
       await tx.insert(quotationItems).values(rows.map(({ paymentTerms: _pt, ...l }, i) => ({
         ...l, quotationId: q.id,
@@ -271,7 +276,7 @@ async function commitOrderImport(job: Job, doc: ParsedOrderDoc, d: CommitInput, 
     }
 
     const input = {
-      isProject: !!d.isProject,
+      isProject: !!d.isProject, currency: d.currency, exchangeRate: d.currency === 'INR' ? null : d.exchangeRate ?? null,
       clientId: client.id, siteId, date: d.date, clientPoNo: d.clientPoNo || null, clientPoDate: d.clientPoDate ?? null,
       expectedCompletion: d.expectedCompletion ?? null, paymentTerms: d.paymentTerms, terms: d.terms || null, notes: noteParts.join('\n'),
       sourceRef: dup && d.allowDuplicate ? null : sourceRef,
@@ -371,7 +376,7 @@ r.post('/order-imports/bulk/commit', perm, async (req, res) => {
       // items are matched again for every file, so a new item created by an earlier file is reused, not duplicated
       const a = await assess(doc, d.defaultCategoryId ?? null);
       if (a.status !== 'ready' || !a.dup) { out.push({ jobId: id, fileName: job.fileName, status: a.status, reasons: a.reasons }); continue; }
-      const result = await commitOrderImport(job, doc, { target: 'ORDER',
+      const result = await commitOrderImport(job, doc, { target: 'ORDER', currency: 'INR',
         clientId: a.dup.clientId, site: a.dup.siteId ? { mode: 'existing', siteId: a.dup.siteId } : { mode: 'none' },
         paymentTerms: a.dup.paymentTerms as CommitInput['paymentTerms'],
         lines: a.linesFull.map((l) => ({ ...l, newItem: { ...l.newItem, categoryId: l.newItem.categoryId ?? d.defaultCategoryId ?? null } })),

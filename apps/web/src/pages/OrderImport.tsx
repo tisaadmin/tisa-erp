@@ -6,7 +6,7 @@ import { Combo } from '../components/Combo';
 import { PaymentTermsEditor, Totals, totalsOf, type Term } from '../components/LineItems';
 import { Badge, Button, Card, Field, Input, KV, PageHeader, Select, Textarea, cx } from '../components/ui';
 import { api } from '../lib/api';
-import { inr } from '../lib/format';
+import { inr, CURRENCIES } from '../lib/format';
 import { useCategories, useClients, useGet, useItems } from '../lib/hooks';
 import { useAuth } from '../lib/auth';
 import { stateOpts } from './Masters';
@@ -62,7 +62,7 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
   const [siteId, setSiteId] = useState<string | null>(null);
   const [newSite, setNewSite] = useState<NewSite>({ name: '', address: '', city: '', stateCode: '', contactName: '', phone: '' });
   const [lines, setLines] = useState<ImpLine[]>([]);
-  const [hdr, setHdr] = useState({ date: '', clientPoNo: '', clientPoDate: '', expectedCompletion: '', notes: '', subject: '', validUntil: '', isProject: false });
+  const [hdr, setHdr] = useState({ date: '', clientPoNo: '', clientPoDate: '', expectedCompletion: '', notes: '', subject: '', validUntil: '', isProject: false, currency: 'INR', exchangeRate: '' });
   const [terms, setTerms] = useState<Term[]>(DEFAULT_TERMS);
   const [allowDuplicate, setAllowDuplicate] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -105,7 +105,7 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
       setNewClient({ name, type: guessClientType(name), gstin: bill.gstin ?? '', billingAddress: bill.text ?? '', city: bill.city ?? '', stateCode: bill.stateCode ?? '', contactName: r.doc.contact ?? '', phone: '', email: '' });
       setNewSite({ name: '', address: ship.text ?? bill.text ?? '', city: ship.city ?? bill.city ?? '', stateCode: ship.stateCode ?? bill.stateCode ?? '', contactName: r.doc.contact ?? '', phone: '' });
       setLines(r.lines);
-      setHdr({ date: r.doc.date ?? '', clientPoNo: r.doc.poNo ?? '', clientPoDate: r.doc.poDate ?? '', expectedCompletion: '', notes: '', subject: r.doc.subject ?? r.doc.title ?? '', validUntil: '', isProject: false });
+      setHdr({ date: r.doc.date ?? '', clientPoNo: r.doc.poNo ?? '', clientPoDate: r.doc.poDate ?? '', expectedCompletion: '', notes: '', subject: r.doc.subject ?? r.doc.title ?? '', validUntil: '', isProject: false, currency: 'INR', exchangeRate: '' });
       setAllowDuplicate(false);
   }
 
@@ -171,6 +171,7 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
           site: siteMode === 'existing' && clientMode === 'existing' ? { mode: 'existing', siteId } : siteMode === 'new' ? { mode: 'new', ...newSite } : { mode: 'none' },
           date: hdr.date || undefined, clientPoNo: hdr.clientPoNo || null, clientPoDate: hdr.clientPoDate || null, expectedCompletion: hdr.expectedCompletion || null,
           notes: hdr.notes || null, paymentTerms: terms, target, isProject: hdr.isProject, subject: hdr.subject || null, validUntil: hdr.validUntil || null,
+          currency: hdr.currency, exchangeRate: hdr.currency !== 'INR' && hdr.exchangeRate ? Number(hdr.exchangeRate) : null,
           lines: lines.map(({ suggestions: _s, srNo: _n, parentKey: _p, manufacturer: _m, sheet, section: _se, ...l }) => ({ ...l, include: l.include && !(sheet && offSheets.includes(sheet)) })),
         },
       });
@@ -325,6 +326,9 @@ export function OrderImportPage({ mode = 'order' }: { mode?: 'order' | 'quote' }
                 <Field label="Target completion"><Input type="date" value={hdr.expectedCompletion} onChange={(e) => setHdr({ ...hdr, expectedCompletion: e.target.value })} /></Field>
                 <ProjectSwitch className="sm:col-span-4" on={hdr.isProject} onChange={(isProject) => setHdr({ ...hdr, isProject })} />
                 </>}
+                <Field label="Currency" hint={hdr.currency !== 'INR' ? 'Export — 0% GST (LUT)' : 'Rates in the file are in this currency'}>
+                  <Select value={hdr.currency} onChange={(e) => setHdr({ ...hdr, currency: e.target.value })} options={CURRENCIES.map((c) => ({ value: c, label: c === 'INR' ? 'INR (₹)' : `${c} — export` }))} /></Field>
+                {hdr.currency !== 'INR' && <Field label={`Exchange rate (₹ per ${hdr.currency})`}><Input type="number" min={0} step="any" value={hdr.exchangeRate} onChange={(e) => setHdr({ ...hdr, exchangeRate: e.target.value })} /></Field>}
               </div>
             </Card>
           </div>
