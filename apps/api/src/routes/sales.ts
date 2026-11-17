@@ -306,7 +306,7 @@ r.post('/quotations/:id/adjust-prices', requirePerm('quotations:edit'), async (r
   const cfg = await costingConfig();
   const svc = await serviceItemIds(db, q0.items);
   const after = priced(q0.items);
-  const gp = (taxable: number, its: typeof q0.items) => (showCost ? costingSummary({ taxable, costing: q0.costing }, its, cfg.minGpPct, svc) : null);
+  const gp = (taxable: number, its: typeof q0.items) => (showCost ? costingSummary({ taxable, costing: q0.costing, currency: q0.currency, exchangeRate: q0.exchangeRate }, its, cfg.minGpPct, svc) : null);
   const summary = {
     willRevise, nextStatus: willRevise ? 'DRAFT' : q0.status === 'APPROVED' ? 'DRAFT' : q0.status,
     before: { taxable: Number(q0.taxable), total: Number(q0.total), gpPct: gp(Number(q0.taxable), q0.items)?.gpPct ?? null },

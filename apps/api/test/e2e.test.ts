@@ -2384,3 +2384,19 @@ test('draft order / PO: the creator edits while draft; once confirmed / submitte
   const st = (await ok('stores', 'GET', `/purchase-orders/${po.id}`)).status;
   if (st === 'PENDING_APPROVAL') assert.equal((await call('stores', 'PUT', `/purchase-orders/${po.id}`, { vendorId: vendor.id, salesOrderId: o.id, lines: [{ itemId: ctx.cam.id, qty: 3 }] })).status, 400, 'submitted: locked');
 });
+
+test('order: a new item requested by a user is added only on approval; USD quotation costing in USD', async () => {
+  const o = await ok('admin', 'POST', '/orders', { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, qty: 2, rate: 1000 }] });
+  const r = await ok('sales', 'POST', `/orders/${o.id}/qty-requests`, { newLine: { itemId: ctx.nvr.id, description: 'NVR 8 channel', unit: 'Nos', rate: 7000 }, addQty: 1, reason: 'Client asked for recording' });
+  assert.equal(r.status, 'PENDING');
+  assert.equal((await ok('admin', 'GET', `/orders/${o.id}`)).items.length, 1, 'not on the order yet');
+  const list = await ok('admin', 'GET', `/orders/${o.id}/qty-requests`);
+  assert.equal(list[0].isNew, true); assert.equal(list[0].description, 'NVR 8 channel');
+  await ok('director', 'POST', `/orders/${o.id}/qty-requests/${r.id}/decide`, { decision: 'APPROVE' });
+  const after = await ok('admin', 'GET', `/orders/${o.id}`);
+  assert.equal(after.items.length, 2); assert.equal(after.taxable, 2000 + 7000);
+  // USD quotation: the costing is shown in USD at the exchange rate
+  const q = await ok('sales', 'POST', '/quotations', { clientId: ctx.client.id, siteId: ctx.site.id, subject: 'Export', currency: 'USD', exchangeRate: 80, lines: [{ itemId: ctx.cam.id, qty: 10, rate: 100, costRate: 6400 }] });
+  const full = await ok('sales', 'GET', `/quotations/${q.id}`);
+  assert.equal(full.costingSummary.currency, 'USD'); assert.equal(full.costingSummary.value, 1000); assert.equal(full.costingSummary.material, 800); assert.equal(full.costingSummary.gpPct, 20);
+});

@@ -481,7 +481,10 @@ export const salesOrderItems = pgTable('sales_order_items', {
 export const orderQtyRequests = pgTable('order_qty_requests', {
   id: id(),
   orderId: text().notNull().references(() => salesOrders.id, { onDelete: 'cascade' }),
-  orderItemId: text().notNull().references(() => salesOrderItems.id, { onDelete: 'cascade' }),
+  /** the line to add to — null while a new item is waiting for approval (set to the new line once approved) */
+  orderItemId: text().references(() => salesOrderItems.id, { onDelete: 'cascade' }),
+  /** a new item for the order: added as a line on approval */
+  newLine: jsonb().$type<{ itemId: string | null; description: string; unit: string; rate: number; gstRate: number; hsnSac: string | null; discountPct: number }>(),
   addQty: qty().notNull(),
   reason: text().notNull(),
   status: text().notNull().default('PENDING'), // PENDING, APPROVED, REJECTED

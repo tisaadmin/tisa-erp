@@ -56,16 +56,24 @@ export function costingSummary(q: { taxable: number; costing?: QuoteCosting | nu
   const maintenanceManDays = m ? r2(Number(m.visits) * (m.duration === 'HALF' ? 0.5 : 1) * Number(m.people)) : 0;
   const maintenance = m ? r2(maintenanceManDays * Number(m.dayRate)) : 0;
   const other = r2((c.other ?? []).reduce((s, t) => s + Number(t.amount), 0));
-  const totalCost = r2(material + manpower + transport + maintenance + service + other);
-  // costs are in ₹; a foreign-currency quotation's value is converted at its exchange rate
-  const value = r2(Number(q.taxable) * (q.currency && q.currency !== 'INR' ? Number(q.exchangeRate) || 0 : 1));
-  const grossProfit = r2(value - totalCost);
-  const gpPct = value ? r2((grossProfit / value) * 100) : 0;
-  return { value, material, manpower, manDays, transport, maintenance, maintenanceManDays, maintenanceVisits: m ? Number(m.visits) : 0, service, other, totalCost, grossProfit, gpPct, missingCost: missing, belowTarget: gpPct < minGpPct, minGpPct };
+  // costs are entered in ₹; a foreign-currency quotation shows the whole working in its own currency, at its exchange rate
+  const currency = q.currency && q.currency !== 'INR' ? q.currency : 'INR';
+  const fx = currency === 'INR' ? 1 : Number(q.exchangeRate) || 0;
+  const needsRate = currency !== 'INR' && !fx;
+  const cv = (n: number) => (currency === 'INR' || needsRate ? n : r2(n / fx));
+  const totalInr = r2(material + manpower + transport + maintenance + service + other);
+  const value = r2(Number(q.taxable));
+  const totalCost = cv(totalInr);
+  const grossProfit = needsRate ? 0 : r2(value - totalCost);
+  const gpPct = needsRate ? 0 : value ? r2((grossProfit / value) * 100) : 0;
+  return { value, material: cv(material), manpower: cv(manpower), manDays, transport: cv(transport), maintenance: cv(maintenance), maintenanceManDays, maintenanceVisits: m ? Number(m.visits) : 0,
+    service: cv(service), other: cv(other), totalCost, grossProfit, gpPct, missingCost: missing, belowTarget: needsRate || gpPct < minGpPct, minGpPct,
+    currency, exchangeRate: currency === 'INR' ? null : fx || null, needsRate, totalCostInr: totalInr };
 }
 
 export const summaryText = (s: ReturnType<typeof costingSummary>) => {
-  const inr = (n: number) => `Rs. ${Math.round(n).toLocaleString('en-IN')}`;
+  const inr = (n: number) => (s.currency === 'INR' ? `Rs. ${Math.round(n).toLocaleString('en-IN')}` : `${s.currency} ${r2(n).toLocaleString('en-US')}`);
+  if (s.needsRate) return `In ${s.currency} — no exchange rate on the quotation, so the ₹ costs (${`Rs. ${Math.round(s.totalCostInr).toLocaleString('en-IN')}`}) cannot be compared. Enter the exchange rate.`;
   return `Value ${inr(s.value)} · cost ${inr(s.totalCost)} (material ${inr(s.material)}, manpower ${inr(s.manpower)} / ${s.manDays} man-days, transport ${inr(s.transport)}${s.maintenance ? `, maintenance ${inr(s.maintenance)} / ${s.maintenanceVisits} visits` : ''}${s.service ? `, service ${inr(s.service)}` : ''}${s.other ? `, other ${inr(s.other)}` : ''}) · gross profit ${inr(s.grossProfit)} (${s.gpPct}%)${s.belowTarget ? ` — below the ${s.minGpPct}% target` : ''}`;
 };
 

@@ -9,7 +9,7 @@ import { Plus, Trash2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { inr } from '../lib/format';
+import { inr, money } from '../lib/format';
 import { useAction, useGet } from '../lib/hooks';
 import type { Line } from './LineItems';
 import { Badge, Button, Card, Field, Input, PageHeader, Select, Spinner, cx } from './ui';
@@ -29,7 +29,7 @@ const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const lineTaxable = (l: Line) => r2(l.qty * l.rate * (1 - (l.discountPct || 0) / 100));
 
 /** Same maths as the server's costingSummary. */
-export function summarise(lines: Line[], c: QuoteCosting, minGpPct: number) {
+export function summarise(lines: Line[], c: QuoteCosting, minGpPct: number, currency = 'INR', exchangeRate?: number | null) {
   const value = r2(lines.reduce((s, l) => s + lineTaxable(l), 0));
   const material = r2(lines.reduce((s, l) => s + (Number(l.costRate) || 0) * l.qty, 0));
   const manpower = r2(c.manpower.reduce((s, m) => s + m.dayRate * m.people * m.days, 0));
@@ -40,50 +40,61 @@ export function summarise(lines: Line[], c: QuoteCosting, minGpPct: number) {
   const maintenanceManDays = m ? r2(m.visits * (m.duration === 'HALF' ? 0.5 : 1) * m.people) : 0;
   const maintenance = m ? r2(maintenanceManDays * m.dayRate) : 0;
   const other = r2(c.other.reduce((s, t) => s + Number(t.amount || 0), 0));
-  const totalCost = r2(material + manpower + transport + maintenance + service + other);
-  const grossProfit = r2(value - totalCost);
-  const gpPct = value ? r2((grossProfit / value) * 100) : 0;
+  // costs are in ₹; a foreign-currency quotation shows the working in its own currency at its exchange rate (server does the same)
+  const fx = currency === 'INR' ? 1 : Number(exchangeRate) || 0;
+  const needsRate = currency !== 'INR' && !fx;
+  const cv = (n: number) => (currency === 'INR' || needsRate ? n : r2(n / fx));
+  const totalCostInr = r2(material + manpower + transport + maintenance + service + other);
+  const totalCost = cv(totalCostInr);
+  const grossProfit = needsRate ? 0 : r2(value - totalCost);
+  const gpPct = needsRate ? 0 : value ? r2((grossProfit / value) * 100) : 0;
   const missingCost = lines.filter((l) => l.description && l.costRate == null && !/^99/.test(String(l.hsnSac ?? '').trim())).map((l) => l.description);
-  return { value, material, manpower, manDays, transport, maintenance, maintenanceManDays, maintenanceVisits: m?.visits ?? 0, service, other, totalCost, grossProfit, gpPct, missingCost, belowTarget: gpPct < minGpPct, minGpPct };
+  return { value, material: cv(material), manpower: cv(manpower), manDays, transport: cv(transport), maintenance: cv(maintenance), maintenanceManDays, maintenanceVisits: m?.visits ?? 0, service: cv(service), other: cv(other),
+    totalCost, grossProfit, gpPct, missingCost, belowTarget: needsRate || gpPct < minGpPct, minGpPct, currency, exchangeRate: currency === 'INR' ? null : fx || null, needsRate, totalCostInr };
 }
 type Summary = ReturnType<typeof summarise>;
 
-export function CostingSummaryTable({ s }: { s: Summary }) {
+export function CostingSummaryTable({ s }: { s: Summary & { currency?: string; needsRate?: boolean; exchangeRate?: number | null; totalCostInr?: number } }) {
+  const cur = s.currency ?? 'INR';
+  const fmt = (n: number) => money(n, cur);
   const row = (k: string, v: number, sub?: string) => (
-    <tr><td className="py-1 text-slate-600">{k}{sub && <span className="ml-1 text-xs text-slate-400">{sub}</span>}</td><td className="py-1 text-right tabular-nums">{inr(v)}</td><td className="py-1 pl-3 text-right text-xs text-slate-400">{s.value ? `${r2((v / s.value) * 100)}%` : ''}</td></tr>
+    <tr><td className="py-1 text-slate-600">{k}{sub && <span className="ml-1 text-xs text-slate-400">{sub}</span>}</td><td className="py-1 text-right tabular-nums">{s.needsRate ? inr(v) : fmt(v)}</td><td className="py-1 pl-3 text-right text-xs text-slate-400">{s.value ? `${r2((v / s.value) * 100)}%` : ''}</td></tr>
   );
   return (
     <div>
       <table className="w-full text-sm">
         <tbody>
-          <tr className="border-b border-slate-100"><td className="py-1 font-medium">Quotation value (before GST)</td><td className="py-1 text-right font-medium tabular-nums">{inr(s.value)}</td><td /></tr>
+          <tr className="border-b border-slate-100"><td className="py-1 font-medium">Quotation value (before GST)</td><td className="py-1 text-right font-medium tabular-nums">{fmt(s.value)}</td><td /></tr>
           {row('Material (our purchase rates)', s.material)}
           {row('Manpower', s.manpower, `${s.manDays} man-days`)}
           {row('Transport', s.transport)}
           {(s.maintenance ?? 0) > 0 && row('Maintenance for the year', s.maintenance, `${s.maintenanceVisits} visits · ${s.maintenanceManDays} man-days`)}
           {(s.service > 0 || !s.maintenance) && row('Other service cost (year)', s.service)}
           {s.other > 0 && row('Other', s.other)}
-          <tr className="border-t border-slate-200"><td className="py-1 font-medium">Total cost of project</td><td className="py-1 text-right font-medium tabular-nums">{inr(s.totalCost)}</td><td className="py-1 pl-3 text-right text-xs text-slate-400">{s.value ? `${r2((s.totalCost / s.value) * 100)}%` : ''}</td></tr>
+          <tr className="border-t border-slate-200"><td className="py-1 font-medium">Total cost of project</td><td className="py-1 text-right font-medium tabular-nums">{s.needsRate ? inr(s.totalCost) : fmt(s.totalCost)}</td><td className="py-1 pl-3 text-right text-xs text-slate-400">{s.value ? `${r2((s.totalCost / s.value) * 100)}%` : ''}</td></tr>
           <tr><td className="py-1.5 text-base font-semibold">Gross profit</td>
-            <td className={cx('py-1.5 text-right text-base font-semibold tabular-nums', s.grossProfit < 0 ? 'text-red-700' : s.belowTarget ? 'text-amber-700' : 'text-emerald-700')}>{inr(s.grossProfit)}</td>
+            <td className={cx('py-1.5 text-right text-base font-semibold tabular-nums', s.grossProfit < 0 ? 'text-red-700' : s.belowTarget ? 'text-amber-700' : 'text-emerald-700')}>{s.needsRate ? '—' : fmt(s.grossProfit)}</td>
             <td className="py-1.5 pl-3 text-right"><Badge t={s.grossProfit < 0 ? 'red' : s.belowTarget ? 'amber' : 'green'}>{s.gpPct}%</Badge></td></tr>
         </tbody>
       </table>
-      {s.belowTarget && <p className="mt-2 rounded-md bg-amber-50 p-2 text-xs text-amber-800">Gross margin is below the {s.minGpPct}% target.</p>}
+      {cur !== 'INR' && !s.needsRate && <p className="mt-2 text-xs text-slate-500">In {cur}: costs entered in ₹ ({inr(s.totalCostInr ?? 0)}) converted at ₹{s.exchangeRate} per {cur}.</p>}
+      {s.needsRate && <p className="mt-2 rounded-md bg-red-50 p-2 text-xs text-red-800">This quotation is in {cur} but has no exchange rate — the costs (₹) can't be compared with the {cur} value. Enter the exchange rate on the quotation.</p>}
+      {s.belowTarget && !s.needsRate && <p className="mt-2 rounded-md bg-amber-50 p-2 text-xs text-amber-800">Gross margin is below the {s.minGpPct}% target.</p>}
       {s.missingCost.length > 0 && <p className="mt-2 rounded-md bg-red-50 p-2 text-xs text-red-800">No purchase rate entered for: {s.missingCost.slice(0, 6).join(', ')}{s.missingCost.length > 6 ? ` and ${s.missingCost.length - 6} more` : ''}. Material cost is understated.</p>}
     </div>
   );
 }
 
 /** Editor card on the quotation form. */
-export function QuoteCostingEditor({ lines, value, onChange }: { lines: Line[]; value: QuoteCosting; onChange: (c: QuoteCosting) => void }) {
+export function QuoteCostingEditor({ lines, value, onChange, currency = 'INR', exchangeRate }: { lines: Line[]; value: QuoteCosting; onChange: (c: QuoteCosting) => void; currency?: string; exchangeRate?: number | null }) {
   const cfg = useGet<CostingConfig>('/quotations-costing/config');
   const c = value;
   const set = (patch: Partial<QuoteCosting>) => onChange({ ...c, ...patch });
   if (!cfg.data) return <Card title="Costing & profitability (internal)"><Spinner /></Card>;
   const conf = cfg.data;
-  const s = summarise(lines, c, conf.minGpPct);
-  const suggestedService = r2((s.value * conf.servicePct) / 100);
+  const s = summarise(lines, c, conf.minGpPct, currency, exchangeRate);
+  // service cost is entered in ₹: a foreign-currency value is converted at the exchange rate
+  const suggestedService = r2((s.value * (currency !== 'INR' ? Number(exchangeRate) || 0 : 1) * conf.servicePct) / 100);
   const num = (v: string) => (v === '' ? 0 : Number(v));
   return (
     <Card title={<>Costing &amp; profitability <span className="ml-1 text-xs font-normal text-slate-500">internal — not printed on the quotation</span></>}>
@@ -209,10 +220,13 @@ export function QuoteCostingCard({ q }: { q: any }) {
                 <thead><tr><th>Item</th><th className="text-right">Qty</th><th className="text-right">Sell rate</th><th className="text-right">Our cost</th><th>Vendor</th><th className="text-right">Margin</th></tr></thead>
                 <tbody>{q.items.map((l: any) => {
                   const net = l.rate * (1 - (l.discountPct || 0) / 100);
+                  // our cost is in ₹; for a foreign-currency quotation compare at its exchange rate
+                  const fx = q.currency && q.currency !== 'INR' ? Number(q.exchangeRate) || 0 : 1;
+                  const cost = l.costRate != null && fx ? l.costRate / fx : null;
                   return (
-                    <tr key={l.id}><td className="max-w-xs">{l.description}</td><td className="num">{l.qty} {l.unit}</td><td className="num">{inr(net)}</td>
-                      <td className="num">{l.costRate != null ? inr(l.costRate) : <span className="text-red-600">—</span>}</td><td>{l.costVendor ?? ''}</td>
-                      <td className="num">{l.costRate != null && net ? <span className={net > l.costRate ? 'text-emerald-700' : 'text-red-700'}>{r2(((net - l.costRate) / net) * 100)}%</span> : ''}</td></tr>
+                    <tr key={l.id}><td className="max-w-xs">{l.description}</td><td className="num">{l.qty} {l.unit}</td><td className="num">{money(net, q.currency)}</td>
+                      <td className="num">{l.costRate != null ? <>{inr(l.costRate)}{fx !== 1 && cost != null && <div className="text-xs text-slate-400">{money(cost, q.currency)}</div>}</> : <span className="text-red-600">—</span>}</td><td>{l.costVendor ?? ''}</td>
+                      <td className="num">{cost != null && net ? <span className={net > cost ? 'text-emerald-700' : 'text-red-700'}>{r2(((net - cost) / net) * 100)}%</span> : ''}</td></tr>
                   );
                 })}</tbody>
               </table></div>

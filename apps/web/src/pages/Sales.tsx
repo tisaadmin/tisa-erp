@@ -139,7 +139,7 @@ export function QuotationEditor() {
       </Card>
       <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD((x) => ({ ...x, lines }))} interState={inter} costing={canCost} priceTools currency={d.currency ?? 'INR'} fxRate={(d.currency ?? 'INR') !== 'INR' ? Number(d.exchangeRate) || 1 : 1} /></Card>
       {canCost && (d.currency ?? 'INR') !== 'INR' && <div className="rounded-md bg-amber-50 px-4 py-2 text-sm text-amber-900">Purchase rates are in ₹ and sales rates in {d.currency}: the margin tools and gross profit compare them at the exchange rate entered above{d.exchangeRate ? ` (₹${d.exchangeRate} per ${d.currency})` : ' — enter it'}.</div>}
-      {canCost && <QuoteCostingEditor lines={d.lines} value={d.costing ?? emptyCosting()} onChange={(costing) => setD((x) => ({ ...x, costing }))} />}
+      {canCost && <QuoteCostingEditor lines={d.lines} value={d.costing ?? emptyCosting()} onChange={(costing) => setD((x) => ({ ...x, costing }))} currency={d.currency ?? 'INR'} exchangeRate={d.exchangeRate ? Number(d.exchangeRate) : null} />}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card title={<label className="flex items-center gap-2"><input type="checkbox" checked={d.useTerms} onChange={(e) => setD({ ...d, useTerms: e.target.checked })} /> Milestone payment schedule</label>}>
           {d.useTerms ? <PaymentTermsEditor terms={d.paymentTerms} onChange={(paymentTerms) => setD({ ...d, paymentTerms })} /> : <p className="text-sm text-slate-500">No schedule — set it when converting to an order.</p>}

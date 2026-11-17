@@ -65,7 +65,7 @@ r.get('/approvals/inbox', async (req, res) => {
       const sum = costingSummary(q as never, q.items, cfg.minGpPct, await serviceItemIds(db, q.items));
       out.push({
         kind: 'QUOTATION', id: q.id, number: q.number, title: `Quotation ${q.number} — ${q.client?.name ?? ''}`, amount: Number(q.total), date: q.createdAt, by: nameOf.get(q.createdById ?? '') ?? null,
-        sub: [q.subject, q.site?.name].filter(Boolean).join(' · '), note: `Gross profit ${sum.gpPct}% (target ${sum.minGpPct}%) · cost ${rs(sum.totalCost)}`,
+        sub: [q.subject, q.site?.name].filter(Boolean).join(' · '), note: sum.needsRate ? `${sum.currency} quotation without an exchange rate — costs (₹) can't be compared` : `Gross profit ${sum.gpPct}% (target ${sum.minGpPct}%) · cost ${sum.currency === 'INR' ? rs(sum.totalCost) : `${sum.currency} ${sum.totalCost.toLocaleString('en-US')}`}${sum.currency !== 'INR' ? ` (at ₹${sum.exchangeRate}/${sum.currency})` : ''}`,
         lines: q.items.slice(0, 8).map((l) => `${l.description} — ${fmtQty(l.qty)} ${l.unit} × ${rs(l.rate)}${l.costRate != null ? ` (cost ${rs(l.costRate)})` : ''}`), link: `/quotations/${q.id}`,
         approve: { label: 'Approve', path: `/quotations/${q.id}/status`, body: { status: 'APPROVED' } },
         reject: { label: 'Send back', path: `/quotations/${q.id}/status`, body: { status: 'DRAFT' }, field: 'comment', required: true },
@@ -104,13 +104,15 @@ r.get('/approvals/inbox', async (req, res) => {
   })());
 
   if (can(u, 'orders:approve')) jobs.push((async () => {
-    const rows = await db.select({ q: orderQtyRequests, line: { description: salesOrderItems.description, qty: salesOrderItems.qty, unit: salesOrderItems.unit, rate: salesOrderItems.rate }, order: { number: salesOrders.number, id: salesOrders.id } })
-      .from(orderQtyRequests).innerJoin(salesOrderItems, eq(salesOrderItems.id, orderQtyRequests.orderItemId)).innerJoin(salesOrders, eq(salesOrders.id, orderQtyRequests.orderId))
+    const rows0 = await db.select({ q: orderQtyRequests, line: { description: salesOrderItems.description, qty: salesOrderItems.qty, unit: salesOrderItems.unit, rate: salesOrderItems.rate }, order: { number: salesOrders.number, id: salesOrders.id } })
+      .from(orderQtyRequests).leftJoin(salesOrderItems, eq(salesOrderItems.id, orderQtyRequests.orderItemId)).innerJoin(salesOrders, eq(salesOrders.id, orderQtyRequests.orderId))
       .where(and(eq(orderQtyRequests.status, 'PENDING'), u.permissions.includes('*') ? undefined : ne(orderQtyRequests.requestedById, u.id))).orderBy(asc(orderQtyRequests.createdAt));
+    // a new item has no order line yet — it is described by the request
+    const rows = rows0.map((x) => ({ ...x, isNew: !x.line, line: x.line ?? { description: x.q.newLine?.description ?? '', qty: 0, unit: x.q.newLine?.unit ?? '', rate: x.q.newLine?.rate ?? 0 } }));
     await names(rows.map((x) => x.q.requestedById));
     for (const x of rows) out.push({
-      kind: 'ORDER_QTY', id: x.q.id, number: x.order.number, title: `Extra quantity — ${x.order.number}`, amount: Number(x.q.addQty) * Number(x.line.rate), date: x.q.createdAt, by: nameOf.get(x.q.requestedById) ?? null,
-      sub: `${x.line.description}: +${fmtQty(x.q.addQty)} ${x.line.unit} (now ${fmtQty(x.line.qty)})`, note: `Reason: ${x.q.reason}`, lines: [], link: `/orders/${x.order.id}`,
+      kind: 'ORDER_QTY', id: x.q.id, number: x.order.number, title: `${x.isNew ? 'New item' : 'Extra quantity'} — ${x.order.number}`, amount: Number(x.q.addQty) * Number(x.line.rate), date: x.q.createdAt, by: nameOf.get(x.q.requestedById) ?? null,
+      sub: x.isNew ? `${x.line.description}: ${fmtQty(x.q.addQty)} ${x.line.unit} @ ${rs(x.line.rate)} — not on the order yet` : `${x.line.description}: +${fmtQty(x.q.addQty)} ${x.line.unit} (now ${fmtQty(x.line.qty)})`, note: `Reason: ${x.q.reason}`, lines: [], link: `/orders/${x.order.id}`,
       approve: { label: 'Approve', path: `/orders/${x.order.id}/qty-requests/${x.q.id}/decide`, body: { decision: 'APPROVE' } },
       reject: { label: 'Reject', path: `/orders/${x.order.id}/qty-requests/${x.q.id}/decide`, body: { decision: 'REJECT' }, field: 'note', required: false },
     });
