@@ -1,3 +1,4 @@
+import { money } from '../lib/gst';
 /**
  * Everything waiting for the caller's decision, in one list (mobile Management app, and anywhere else):
  * POs, quotations (low margin), GRNs / challans over the PO / order, order quantity requests, accessories lists,
@@ -21,7 +22,9 @@ const r = Router();
 export type InboxAction = { path: string; body: Record<string, unknown> };
 export type InboxItem = {
   kind: 'PURCHASE_ORDER' | 'QUOTATION' | 'GRN' | 'CHALLAN' | 'ORDER_QTY' | 'ACCESSORY_SHEET' | 'REQUISITION' | 'EXPENSE' | 'LEAVE';
-  id: string; number: string | null; title: string; sub: string; amount: number | null; date: string | Date; by: string | null;
+  id: string; number: string | null; title: string; sub: string; amount: number | null;
+  /** the amount already formatted when it is not in ₹ (USD quotes / orders) — amount is then null */ amountText?: string | null;
+  date: string | Date; by: string | null;
   /** why it needs a decision (over the PO, low margin …) */ note: string | null;
   lines: string[]; link: string;
   approve: InboxAction & { label: string };
@@ -63,10 +66,14 @@ r.get('/approvals/inbox', async (req, res) => {
     await names(rows.map((q) => q.createdById));
     for (const q of rows) {
       const sum = costingSummary(q as never, q.items, cfg.minGpPct, await serviceItemIds(db, q.items));
+      const cur = q.currency ?? 'INR', fx = Number(q.exchangeRate) || 0;
+      const sale = (n: unknown) => (cur === 'INR' ? rs(Number(n)) : money(Number(n), cur));
+      const cost = (n: number) => (cur === 'INR' || !fx ? rs(n) : `${money(n / fx, cur)} (Rs. ${Math.round(n).toLocaleString('en-IN')})`);
       out.push({
-        kind: 'QUOTATION', id: q.id, number: q.number, title: `Quotation ${q.number} — ${q.client?.name ?? ''}`, amount: Number(q.total), date: q.createdAt, by: nameOf.get(q.createdById ?? '') ?? null,
-        sub: [q.subject, q.site?.name].filter(Boolean).join(' · '), note: sum.needsRate ? `${sum.currency} quotation without an exchange rate — costs (₹) can't be compared` : `Gross profit ${sum.gpPct}% (target ${sum.minGpPct}%) · cost ${sum.currency === 'INR' ? rs(sum.totalCost) : `${sum.currency} ${sum.totalCost.toLocaleString('en-US')}`}${sum.currency !== 'INR' ? ` (at ₹${sum.exchangeRate}/${sum.currency})` : ''}`,
-        lines: q.items.slice(0, 8).map((l) => `${l.description} — ${fmtQty(l.qty)} ${l.unit} × ${rs(l.rate)}${l.costRate != null ? ` (cost ${rs(l.costRate)})` : ''}`), link: `/quotations/${q.id}`,
+        kind: 'QUOTATION', id: q.id, number: q.number, title: `Quotation ${q.number} — ${q.client?.name ?? ''}`,
+        amount: cur === 'INR' ? Number(q.total) : null, amountText: cur === 'INR' ? null : money(Number(q.total), cur), date: q.createdAt, by: nameOf.get(q.createdById ?? '') ?? null,
+        sub: [q.subject, q.site?.name].filter(Boolean).join(' · '), note: (cur === 'INR' ? '' : `Total ${money(Number(q.total), cur)} · `) + (sum.needsRate ? `${sum.currency} quotation without an exchange rate — costs (₹) can't be compared` : `Gross profit ${sum.gpPct}% (target ${sum.minGpPct}%) · cost ${sum.currency === 'INR' ? rs(sum.totalCost) : `${sum.currency} ${sum.totalCost.toLocaleString('en-US')}`}${sum.currency !== 'INR' ? ` (at ₹${sum.exchangeRate}/${sum.currency})` : ''}`),
+        lines: q.items.slice(0, 8).map((l) => `${l.description} — ${fmtQty(l.qty)} ${l.unit} × ${sale(l.rate)}${l.costRate != null ? ` (cost ${cost(Number(l.costRate))})` : ''}`), link: `/quotations/${q.id}`,
         approve: { label: 'Approve', path: `/quotations/${q.id}/status`, body: { status: 'APPROVED' } },
         reject: { label: 'Send back', path: `/quotations/${q.id}/status`, body: { status: 'DRAFT' }, field: 'comment', required: true },
       });
@@ -104,15 +111,15 @@ r.get('/approvals/inbox', async (req, res) => {
   })());
 
   if (can(u, 'orders:approve')) jobs.push((async () => {
-    const rows0 = await db.select({ q: orderQtyRequests, line: { description: salesOrderItems.description, qty: salesOrderItems.qty, unit: salesOrderItems.unit, rate: salesOrderItems.rate }, order: { number: salesOrders.number, id: salesOrders.id } })
+    const rows0 = await db.select({ q: orderQtyRequests, line: { description: salesOrderItems.description, qty: salesOrderItems.qty, unit: salesOrderItems.unit, rate: salesOrderItems.rate }, order: { number: salesOrders.number, id: salesOrders.id, currency: salesOrders.currency } })
       .from(orderQtyRequests).leftJoin(salesOrderItems, eq(salesOrderItems.id, orderQtyRequests.orderItemId)).innerJoin(salesOrders, eq(salesOrders.id, orderQtyRequests.orderId))
       .where(and(eq(orderQtyRequests.status, 'PENDING'), u.permissions.includes('*') ? undefined : ne(orderQtyRequests.requestedById, u.id))).orderBy(asc(orderQtyRequests.createdAt));
     // a new item has no order line yet — it is described by the request
     const rows = rows0.map((x) => ({ ...x, isNew: !x.line, line: x.line ?? { description: x.q.newLine?.description ?? '', qty: 0, unit: x.q.newLine?.unit ?? '', rate: x.q.newLine?.rate ?? 0 } }));
     await names(rows.map((x) => x.q.requestedById));
     for (const x of rows) out.push({
-      kind: 'ORDER_QTY', id: x.q.id, number: x.order.number, title: `${x.isNew ? 'New item' : 'Extra quantity'} — ${x.order.number}`, amount: Number(x.q.addQty) * Number(x.line.rate), date: x.q.createdAt, by: nameOf.get(x.q.requestedById) ?? null,
-      sub: x.isNew ? `${x.line.description}: ${fmtQty(x.q.addQty)} ${x.line.unit} @ ${rs(x.line.rate)} — not on the order yet` : `${x.line.description}: +${fmtQty(x.q.addQty)} ${x.line.unit} (now ${fmtQty(x.line.qty)})`, note: `Reason: ${x.q.reason}`, lines: [], link: `/orders/${x.order.id}`,
+      kind: 'ORDER_QTY', id: x.q.id, number: x.order.number, title: `${x.isNew ? 'New item' : 'Extra quantity'} — ${x.order.number}`, amount: (x.order.currency ?? 'INR') === 'INR' ? Number(x.q.addQty) * Number(x.line.rate) : null, amountText: (x.order.currency ?? 'INR') === 'INR' ? null : money(Number(x.q.addQty) * Number(x.line.rate), x.order.currency), date: x.q.createdAt, by: nameOf.get(x.q.requestedById) ?? null,
+      sub: x.isNew ? `${x.line.description}: ${fmtQty(x.q.addQty)} ${x.line.unit} @ ${(x.order.currency ?? 'INR') === 'INR' ? rs(x.line.rate) : money(Number(x.line.rate), x.order.currency)} — not on the order yet` : `${x.line.description}: +${fmtQty(x.q.addQty)} ${x.line.unit} (now ${fmtQty(x.line.qty)})`, note: `Reason: ${x.q.reason}`, lines: [], link: `/orders/${x.order.id}`,
       approve: { label: 'Approve', path: `/orders/${x.order.id}/qty-requests/${x.q.id}/decide`, body: { decision: 'APPROVE' } },
       reject: { label: 'Reject', path: `/orders/${x.order.id}/qty-requests/${x.q.id}/decide`, body: { decision: 'REJECT' }, field: 'note', required: false },
     });

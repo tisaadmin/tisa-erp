@@ -5,7 +5,7 @@ import { ApprovalCard } from '../../../src/components/Approve';
 import { Badge, Btn, C, Card, Chips, Empty, Field, Input, Screen, s, useFetch, useRun } from '../../../src/components/ui';
 import { api } from '../../../src/lib/api';
 import { useAuth } from '../../../src/lib/auth';
-import { fmtDate, inr, label, todayIso } from '../../../src/lib/format';
+import { fmtDate, inr, money, label, todayIso } from '../../../src/lib/format';
 import type { Inbox } from '../../../src/lib/manage';
 
 const PATH: Record<string, string> = { order: '/orders', quote: '/quotations', po: '/purchase-orders', invoice: '/invoices', grn: '/grns', challan: '/challans', vendorbill: '/vendor-bills' };
@@ -120,7 +120,7 @@ export default function Doc() {
           )}
           {kind === 'quote' && x.costingSummary && (
             <Card title="Costing (internal)">
-              <KV rows={[['Material cost', inr(x.costingSummary.material)], ['Total cost', inr(x.costingSummary.totalCost)], ['Gross profit', `${inr(x.costingSummary.grossProfit)} · ${x.costingSummary.gpPct}%`], ['Target', `${x.costingSummary.minGpPct}%`]]} />
+              <KV rows={[['Material cost', money(x.costingSummary.material, x.costingSummary.currency)], ['Total cost', money(x.costingSummary.totalCost, x.costingSummary.currency)], ['Gross profit', `${money(x.costingSummary.grossProfit, x.costingSummary.currency)} · ${x.costingSummary.gpPct}%`], ['Target', `${x.costingSummary.minGpPct}%`]]} />
             </Card>
           )}
           {lines.length > 0 && (
@@ -130,7 +130,7 @@ export default function Doc() {
                   <Text style={{ fontSize: 14, color: C.text }}>{l.useAltDescription && l.altDescription ? l.altDescription : l.description}</Text>
                   <Text style={s.muted}>
                     {l.qty != null ? `${Number(l.qty)} ${l.unit ?? ''}` : l.acceptedQty != null ? `accepted ${Number(l.acceptedQty)}` : ''}
-                    {l.rate != null ? ` × ${inr(l.rate)}` : ''}{l.taxable != null ? ` = ${inr(l.taxable)}` : ''}
+                    {l.rate != null ? ` × ${money(l.rate, x.currency)}` : ''}{l.taxable != null ? ` = ${money(l.taxable, x.currency)}` : ''}
                     {l.deliveredQty != null && kind === 'order' ? ` · delivered ${Number(l.deliveredQty)}` : ''}
                     {l.receivedQty != null && kind === 'po' ? ` · received ${Number(l.receivedQty)}` : ''}
                     {l.costRate != null ? ` · cost ${inr(l.costRate)}` : ''}
@@ -142,8 +142,8 @@ export default function Doc() {
           )}
           {x.total != null && (
             <Card title="Totals">
-              <KV rows={[['Taxable', inr(x.taxable)], ['CGST', x.cgst ? inr(x.cgst) : null], ['SGST', x.sgst ? inr(x.sgst) : null], ['IGST', x.igst ? inr(x.igst) : null], ['Total', inr(x.total)],
-                [kind === 'vendorbill' ? 'Paid' : 'Received', ['invoice', 'vendorbill'].includes(kind) ? inr(x.amountPaid) : null], ['Balance', ['invoice', 'vendorbill'].includes(kind) ? inr(Number(x.total) - Number(x.amountPaid ?? 0)) : null]]} />
+              <KV rows={[...(x.currency && x.currency !== 'INR' ? [['Currency', `${x.currency}${x.exchangeRate ? ` · ₹${Number(x.exchangeRate)}/${x.currency}` : ''}`] as [string, string]] : []), ['Taxable', money(x.taxable, x.currency)], ['CGST', x.cgst ? money(x.cgst, x.currency) : null], ['SGST', x.sgst ? money(x.sgst, x.currency) : null], ['IGST', x.igst ? money(x.igst, x.currency) : null], ['Total', money(x.total, x.currency)],
+                [kind === 'vendorbill' ? 'Paid' : 'Received', ['invoice', 'vendorbill'].includes(kind) ? money(x.amountPaid, x.currency) : null], ['Balance', ['invoice', 'vendorbill'].includes(kind) ? money(Number(x.total) - Number(x.amountPaid ?? 0), x.currency) : null]]} />
             </Card>
           )}
           {!!x.payments?.length && (

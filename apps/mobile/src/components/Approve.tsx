@@ -25,7 +25,7 @@ export function ApprovalCard({ item, onDone, compact, noLink }: { item: InboxIte
       <Text style={s.cardTitle} onPress={to ? () => router.push(to as never) : undefined}>{item.title}{to ? ' ›' : ''}</Text>
       {!!item.sub && <Text style={s.muted}>{item.sub}</Text>}
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        {item.amount != null ? <Text style={{ fontSize: 17, fontWeight: '700', color: C.text }}>{inr(item.amount)}</Text> : <View />}
+        {item.amountText || item.amount != null ? <Text style={{ fontSize: 17, fontWeight: '700', color: C.text }}>{item.amountText ?? inr(item.amount)}</Text> : <View />}
         <Text style={s.muted}>{item.by ? `${item.by} · ` : ''}{fmtDateTime(item.date)}</Text>
       </View>
       {!!item.note && <Text style={{ fontSize: 13, color: C.amber, backgroundColor: C.amberBg, padding: 8, borderRadius: 8 }}>{item.note}</Text>}

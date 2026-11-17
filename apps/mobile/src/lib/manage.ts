@@ -13,7 +13,7 @@ export const approvesSomething = (user: { teamSize?: number } | null, can: (p: s
   isManager(can) || can('expenses:finance') || can('expenses:approve') || can('requisitions:approve') || can('leaves:approve') || can('accessories:approve') || (user?.teamSize ?? 0) > 0;
 
 export type InboxItem = {
-  kind: string; id: string; number: string | null; title: string; sub: string; amount: number | null; date: string; by: string | null; note: string | null;
+  kind: string; id: string; number: string | null; title: string; sub: string; amount: number | null; amountText?: string | null; date: string; by: string | null; note: string | null;
   lines: string[]; link: string;
   approve: { label: string; path: string; body: Record<string, unknown> };
   reject: { label: string; path: string; body: Record<string, unknown>; field: string; required: boolean };

@@ -21,7 +21,7 @@ type Dash = {
 
 const SERIES = { billed: '#2a78d6', collected: '#eb6834' }; // categorical slots 1 & 2 (validated palette)
 /** Same list the mobile Approve tab shows (GET /approvals/inbox). */
-type InboxItem = { kind: string; id: string; number: string | null; title: string; sub: string; amount: number | null; date: string; by: string | null; note: string | null; link: string };
+type InboxItem = { kind: string; id: string; number: string | null; title: string; sub: string; amount: number | null; amountText?: string | null; date: string; by: string | null; note: string | null; link: string };
 const KIND_LABEL: Record<string, string> = {
   PURCHASE_ORDER: 'Purchase orders', QUOTATION: 'Quotations', GRN: 'Goods receipts over the PO', CHALLAN: 'Delivery challans over the order',
   ORDER_QTY: 'Extra order quantities', ACCESSORY_SHEET: 'Accessories lists', REQUISITION: 'Requisitions', EXPENSE: 'Expense claims', LEAVE: 'Leave requests',
@@ -84,7 +84,7 @@ export default function Dashboard() {
                     {inbox.data!.items.filter((x) => x.kind === kind).slice(0, 6).map((x) => (
                       <li key={x.id}><Link to={x.link} className="block rounded px-1 py-1 text-sm hover:bg-slate-50 hover:text-brand-700">
                         <div className="truncate font-medium">{x.title}</div>
-                        <div className="truncate text-xs text-slate-500">{[x.sub, x.amount != null ? inr(x.amount, 0) : null, x.by && `by ${x.by}`].filter(Boolean).join(' · ')}</div>
+                        <div className="truncate text-xs text-slate-500">{[x.sub, x.amountText ?? (x.amount != null ? inr(x.amount, 0) : null), x.by && `by ${x.by}`].filter(Boolean).join(' · ')}</div>
                       </Link></li>
                     ))}
                     {inbox.data!.counts[kind] > 6 && <li className="px-1 text-xs text-slate-400">and {inbox.data!.counts[kind] - 6} more</li>}
