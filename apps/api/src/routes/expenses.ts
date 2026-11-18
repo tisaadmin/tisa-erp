@@ -29,7 +29,8 @@ async function stageOf(c: { status: string; userId: string; approverId: string |
   const sa = isSuperAdminPerms(u.permissions);
   if (c.userId === u.id) return { can: false, flow };
   // with a company first approver, only the assigned approver decides (no one else with approval rights)
-  if (c.status === 'SUBMITTED') return { can: c.approverId === u.id || sa || (!flow.first && can(u, 'expenses:approve')), flow };
+  // the company first approver takes every submitted claim (also ones submitted before the chain was set)
+  if (c.status === 'SUBMITTED') return { can: c.approverId === u.id || sa || flow.first === u.id || (!flow.first && can(u, 'expenses:approve')), flow };
   // after the first approval: the final approver when one is set, else accounts
   if (c.status === 'MANAGER_APPROVED') return { can: flow.final ? flow.final === u.id || sa : can(u, 'expenses:finance'), flow };
   if (c.status === 'ACCOUNTS_APPROVED') return { can: can(u, 'expenses:finance'), flow };
@@ -93,6 +94,7 @@ r.get('/expenses', requirePerm('expenses:view'), async (req, res) => {
     const conds: SQL[] = [and(eq(expenseClaims.status, 'SUBMITTED'), eq(expenseClaims.approverId, req.user.id))!];
     if (can(req.user, 'expenses:approve')) conds.push(and(eq(expenseClaims.status, 'SUBMITTED'), isNull(expenseClaims.approverId))!);
     const flow = await expenseFlow();
+    if (flow.first === req.user.id) conds.push(eq(expenseClaims.status, 'SUBMITTED'));
     if (flow.final ? flow.final === req.user.id : can(req.user, 'expenses:finance')) conds.push(eq(expenseClaims.status, 'MANAGER_APPROVED'));
     if (can(req.user, 'expenses:finance')) conds.push(eq(expenseClaims.status, 'ACCOUNTS_APPROVED'));
     where = and(or(...conds), ne(expenseClaims.userId, req.user.id));

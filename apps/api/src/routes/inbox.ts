@@ -159,6 +159,7 @@ r.get('/approvals/inbox', async (req, res) => {
     if (can(u, 'expenses:approve')) conds.push(and(eq(expenseClaims.status, 'SUBMITTED'), isNull(expenseClaims.approverId))!);
     const company = await getCompany();
     const flow = (company.expenseFlow ?? {}) as { firstApproverId?: string | null; finalApproverId?: string | null };
+    if (flow.firstApproverId === u.id) conds.push(eq(expenseClaims.status, 'SUBMITTED'));
     if (flow.finalApproverId ? flow.finalApproverId === u.id : can(u, 'expenses:finance')) conds.push(eq(expenseClaims.status, 'MANAGER_APPROVED'));
     if (can(u, 'expenses:finance')) conds.push(eq(expenseClaims.status, 'ACCOUNTS_APPROVED'));
     const finalName = flow.finalApproverId ? (await db.query.users.findFirst({ where: eq(users.id, flow.finalApproverId), columns: { name: true } }))?.name ?? null : null;

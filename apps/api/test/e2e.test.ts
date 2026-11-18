@@ -2346,7 +2346,13 @@ test('expense approval chain: everyone → first approver → final approver →
   const nidhi = users.find((u: any) => u.email === 'sales@tisatech.in');
   const raju = users.find((u: any) => u.email === 'director@tisatech.in');
   assert.equal((await call('tech', 'PUT', '/settings/expense-flow', { firstApproverId: nidhi.id, finalApproverId: raju.id })).status, 403);
+  // a claim submitted before the chain was set (still with the reporting manager) reaches the first approver too
+  const early = await ok('tech', 'POST', '/expenses', { title: 'Before chain', submit: true, lines: [{ date: '2026-11-19', category: 'TRAVEL', description: 'Bus', amount: 120 }] });
   await ok('admin', 'PUT', '/settings/expense-flow', { firstApproverId: nidhi.id, finalApproverId: raju.id });
+  assert.ok((await ok('sales', 'GET', '/approvals/inbox')).items.some((x: any) => x.id === early.id), 'old claim in the first approver inbox');
+  assert.ok((await ok('sales', 'GET', '/expenses?scope=approvals')).data.some((x: any) => x.id === early.id));
+  await ok('sales', 'POST', `/expenses/${early.id}/approve`, {});
+  assert.equal((await ok('tech', 'GET', `/expenses/${early.id}`)).status, 'MANAGER_APPROVED');
   const c = await ok('tech', 'POST', '/expenses', { title: 'Chain test', submit: true, lines: [{ date: '2026-11-20', category: 'TRAVEL', description: 'Auto', amount: 300 }] });
   assert.equal(c.approverId, nidhi.id, 'goes to the first approver');
   assert.equal((await call('svc', 'POST', `/expenses/${c.id}/approve`, {})).status, 403, 'not the reporting manager any more');
