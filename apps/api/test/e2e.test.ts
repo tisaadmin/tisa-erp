@@ -2350,6 +2350,7 @@ test('expense approval chain: everyone → first approver → final approver →
   const early = await ok('tech', 'POST', '/expenses', { title: 'Before chain', submit: true, lines: [{ date: '2026-11-19', category: 'TRAVEL', description: 'Bus', amount: 120 }] });
   await ok('admin', 'PUT', '/settings/expense-flow', { firstApproverId: nidhi.id, finalApproverId: raju.id });
   assert.ok((await ok('sales', 'GET', '/approvals/inbox')).items.some((x: any) => x.id === early.id), 'old claim in the first approver inbox');
+  assert.ok((await ok('sales', 'GET', '/auth/me')).teamSize > 0, 'the app shows the first approver the Approve tab');
   assert.ok((await ok('sales', 'GET', '/expenses?scope=approvals')).data.some((x: any) => x.id === early.id));
   await ok('sales', 'POST', `/expenses/${early.id}/approve`, {});
   assert.equal((await ok('tech', 'GET', `/expenses/${early.id}`)).status, 'MANAGER_APPROVED');

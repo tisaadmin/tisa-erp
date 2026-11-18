@@ -1,3 +1,4 @@
+import { getCompany } from '../services/company';
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { createHash, randomBytes } from 'node:crypto';
@@ -11,6 +12,14 @@ import { refreshTokens, users } from '../db/schema';
 import { HttpError } from '../lib/http';
 import { authenticate, invalidateUserCache, loadAuthUser, signAccessToken } from '../middleware/auth';
 import { loginDomains, mayUseEmail } from '../lib/loginPolicy';
+
+/** how many people this person approves for — the company expense approvers count too, so the app shows them the Approve tab */
+async function approverSize(id: string) {
+  const n = (await teamIds(id)).length;
+  if (n > 0) return n;
+  const f = ((await getCompany()).expenseFlow ?? {}) as { firstApproverId?: string | null; finalApproverId?: string | null };
+  return f.firstApproverId === id || f.finalApproverId === id ? 1 : 0;
+}
 
 const r = Router();
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -32,7 +41,7 @@ r.post('/login', loginLimiter, async (req, res) => {
   if (!u || !u.active || !(await bcrypt.compare(password, u.passwordHash))) throw new HttpError(401, 'Invalid email or password');
   await db.update(users).set({ lastLoginAt: new Date() }).where(eq(users.id, u.id));
   const tokens = await issueTokens(u.id);
-  res.json({ ...tokens, user: { ...(await loadAuthUser(u.id)), teamSize: (await teamIds(u.id)).length } });
+  res.json({ ...tokens, user: { ...(await loadAuthUser(u.id)), teamSize: await approverSize(u.id) } });
 });
 
 r.post('/refresh', async (req, res) => {
@@ -54,7 +63,7 @@ r.post('/logout', async (req, res) => {
 r.get('/me', authenticate, async (req, res) => {
   const u = await db.query.users.findFirst({ where: eq(users.id, req.user.id), columns: { passwordHash: false } });
   // teamSize > 0 → this person approves for others (department head or reporting manager)
-  res.json({ ...req.user, profile: u, teamSize: (await teamIds(req.user.id)).length });
+  res.json({ ...req.user, profile: u, teamSize: await approverSize(req.user.id) });
 });
 
 r.post('/change-password', authenticate, async (req, res) => {
@@ -66,7 +75,7 @@ r.post('/change-password', authenticate, async (req, res) => {
   await db.delete(refreshTokens).where(eq(refreshTokens.userId, u.id));
   invalidateUserCache(u.id);
   // fresh session (other devices are signed out)
-  res.json({ ok: true, ...(await issueTokens(u.id)), user: { ...(await loadAuthUser(u.id)), teamSize: (await teamIds(u.id)).length } });
+  res.json({ ok: true, ...(await issueTokens(u.id)), user: { ...(await loadAuthUser(u.id)), teamSize: await approverSize(u.id) } });
 });
 
 /** Mobile app registers its Expo push token after login. */
