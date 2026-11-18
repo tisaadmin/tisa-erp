@@ -753,7 +753,7 @@ export function NewChallan() {
     if (o && (proj.data || proj.isError)) {
       setH((x) => ({ ...x, clientId: o.clientId, siteId: o.siteId }));
       setLines([
-        ...o.items.filter((l: any) => Number(l.qty) > 0).map((l: any) => { const pend = Math.max(0, Math.round((l.qty - l.deliveredQty) * 1000) / 1000); return { orderItemId: l.id, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, pending: pend, qty: pend, serialNos: '' }; }),
+        ...o.items.filter((l: any) => Number(l.qty) > 0).map((l: any) => { const pend = Math.max(0, Math.round((l.qty - l.deliveredQty) * 1000) / 1000); return { orderItemId: l.id, itemId: l.itemId, description: l.description, hsnSac: l.hsnSac, unit: l.unit, pending: pend, qty: 0, serialNos: '' }; }),
         ...(proj.data?.accessories ?? []).filter((a) => a.pending > 0).map((a) => ({ itemId: a.itemId, description: a.description, unit: a.unit, pending: a.pending, qty: 0, serialNos: '', accessory: true })),
       ]);
     }
@@ -768,7 +768,7 @@ export function NewChallan() {
   const excess = (l: DcLine) => (orderId ? Math.max(0, Math.round((l.qty - (l.pending ?? 0)) * 1000) / 1000) : 0);
   const overLines = lines.filter((l) => l.qty > 0 && excess(l) > 0);
   const [extraPick, setExtraPick] = useState<string | null>(null);
-  const save = useAction(() => api('/challans', { body: { ...h, overQtyReason: overLines.length ? h.overQtyReason : null, orderId, requisitionId, lines: lines.filter((l) => l.qty > 0).map((l) => ({ orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos, hsnSac: l.hsnSac ?? hsnOf(l.itemId) ?? null, altDescription: l.altDescription || null, useAltDescription: !!(l.useAltDescription && l.altDescription?.trim()) })) } }),
+  const save = useAction(() => !lines.some((l) => l.qty > 0) ? Promise.reject(new Error('Enter the dispatch quantity for at least one item')) : api('/challans', { body: { ...h, overQtyReason: overLines.length ? h.overQtyReason : null, orderId, requisitionId, lines: lines.filter((l) => l.qty > 0).map((l) => ({ orderItemId: l.orderItemId, itemId: l.itemId, description: l.description, unit: l.unit, qty: l.qty, serialNos: l.serialNos, hsnSac: l.hsnSac ?? hsnOf(l.itemId) ?? null, altDescription: l.altDescription || null, useAltDescription: !!(l.useAltDescription && l.altDescription?.trim()) })) } }),
     { invalidate: [['/challans'], ['/orders'], ['/items']], onSuccess: (dc: any) => { toast.success(dc.status === 'PENDING_APPROVAL' ? 'Sent to Management for approval — stock moves once approved' : 'Challan created — stock updated'); nav(`/challans/${dc.id}`); } });
   if ((orderId && (!order.data || proj.isLoading)) || rq.loading) return <Spinner />;
   const accIdx = lines.findIndex((l) => l.accessory);
@@ -787,7 +787,9 @@ export function NewChallan() {
           <Field label="E-way bill no."><Input value={h.ewayBillNo} onChange={(e) => setH({ ...h, ewayBillNo: e.target.value })} /></Field>
         </div>
       </Card>
-      <Card title="Items" pad={false}>
+      <Card title="Items" pad={false} actions={orderId ? <div className="flex items-center gap-2"><span className="text-xs text-slate-500">Quantities start at 0 — enter only what goes on this challan</span>
+          <Button size="sm" onClick={() => setLines(lines.map((l) => (l.accessory ? l : { ...l, qty: Math.max(0, l.pending ?? 0) })))}>Fill all pending</Button>
+          <Button size="sm" variant="ghost" onClick={() => setLines(lines.map((l) => ({ ...l, qty: 0 })))}>Clear</Button></div> : undefined}>
         <table className="tbl">
           <thead><tr><th className="min-w-80">Description</th><th className="w-28">HSN/SAC</th><th className="text-right">Pending</th><th className="w-28 text-right">Dispatch qty</th><th>Serial numbers</th>{!orderId && <th />}</tr></thead>
           <tbody>

@@ -97,7 +97,7 @@ export function PoEditor() {
     }
     const lines = [...need.values()].map((x) => ({ ...x, qty: Math.max(0, Math.round((x.qty - (s.stock[x.itemId] ?? 0)) * 1000) / 1000) })).filter((x) => x.qty > 0)
       .map((x) => ({ itemId: x.itemId, description: x.description, hsnSac: '', unit: x.unit, qty: x.qty, rate: x.rate, discountPct: 0, gstRate: 18 }));
-    setD((p) => ({ ...p, salesOrderId: s.order.id, deliverToSiteId: s.order.site?.id ?? null, notes: `Accessories for ${s.order.number} (${s.number})`, lines: lines.length ? lines : [emptyLine()] }));
+    setD((p) => ({ ...p, salesOrderId: s.order.id, deliverToSiteId: s.order.site?.id ?? null, notes: `Accessories for ${s.order.number} (${s.number})`, lines: lines.length ? startAtZero(lines) : [emptyLine()] }));
   }, [acc.data, id]);
   useEffect(() => {
     if (!rq.ready || !rq.req) return;
@@ -107,7 +107,7 @@ export function PoEditor() {
   }, [rq.ready]);
   /** prefilled lines never exceed what is still left to order on the order (earlier POs counted) */
   function capToOrder(lines: Line[]): Line[] {
-    if (!limits) return lines;
+    if (!limits) return startAtZero(lines);
     const left = new Map(Object.values(limits).map((l) => [l.itemId!, l.remaining]));
     const out = lines.map((l) => {
       if (!l.itemId || !left.has(l.itemId)) return l;
@@ -115,12 +115,20 @@ export function PoEditor() {
       left.set(l.itemId, Math.round((left.get(l.itemId)! - q) * 1000) / 1000);
       return { ...l, qty: q };
     }).filter((l) => l.qty > 0);
-    return out.length ? out : [emptyLine()];
+    return out.length ? startAtZero(out) : [emptyLine()];
   }
+  /** prefilled lines start at 0 — only what is bought now is entered; "Fill all balance" puts back the balance */
+  function startAtZero(lines: Line[]): Line[] {
+    if (lines.length === 1 && !lines[0].itemId && !lines[0].description) return lines;
+    return lines.map((l) => ({ ...l, balanceQty: l.qty, qty: 0 }) as Line);
+  }
+  const bal = (l: Line) => (l as Line & { balanceQty?: number }).balanceQty;
+  const hasBalance = d.lines.some((l) => bal(l) != null);
   const vendor = vendors.data?.data.find((v) => v.id === d.vendorId);
   const inter = !!vendor?.stateCode && vendor.stateCode !== companyState;
   const save = useAction((submit: boolean) => {
-    const body = { ...d, requisitionId: requisitionId ?? undefined, expectedDate: d.expectedDate || null, terms: d.terms || undefined, submit, lines: d.lines.map((l) => ({ ...l, rate: l.rate || undefined })) };
+    if (d.lines.every((l) => Number(l.qty) === 0)) return Promise.reject(new Error('Enter a quantity for at least one item'));
+    const body = { ...d, requisitionId: requisitionId ?? undefined, expectedDate: d.expectedDate || null, terms: d.terms || undefined, submit, lines: d.lines.filter((l) => !(bal(l) != null && Number(l.qty) === 0)).map((l) => ({ ...l, rate: l.rate || undefined })) };
     return id ? api(`/purchase-orders/${id}`, { method: 'PUT', body }) : api('/purchase-orders', { body });
   }, { invalidate: [['/purchase-orders']], onSuccess: (p: any) => { toast.success(p.autoApproved ? 'PO approved — under the no-approval limit, it can be sent to the vendor' : p.status === 'PENDING_APPROVAL' ? 'PO sent for approval' : 'PO saved'); nav(`/purchase-orders/${p.id}`, { state: { smallPoAlert: p.smallPoAlert } }); } });
   // small POs go to the purchase team without approval
@@ -163,7 +171,9 @@ export function PoEditor() {
         </div>
         <div className="mt-2 text-xs text-slate-500">Tax: <b>{inter ? 'IGST (inter-state vendor)' : 'CGST + SGST'}</b> · lines with rate 0 take the item's purchase price</div>
       </Card>
-      <Card title="Items">
+      <Card title="Items" actions={hasBalance && !id ? <div className="flex items-center gap-2"><span className="text-xs text-slate-500">Quantities start at 0 — lines left at 0 are not on the PO</span>
+          <Button size="sm" onClick={() => setD({ ...d, lines: d.lines.map((l) => (bal(l) != null ? { ...l, qty: bal(l)! } : l)) })}>Fill all balance</Button>
+          <Button size="sm" variant="ghost" onClick={() => setD({ ...d, lines: d.lines.map((l) => (bal(l) != null ? { ...l, qty: 0 } : l)) })}>Clear</Button></div> : undefined}>
         {allowed.data?.restricted && <div className="mb-3 rounded-md bg-sky-50 px-3 py-2 text-sm text-sky-800">This PO is against an order — only the order's items and its accessories & consumables can be added, up to the quantity still left to order. Anything else needs a separate PO.</div>}
         <LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} priceField="purchasePrice" onlyItemIds={allowed.data?.restricted ? allowed.data.itemIds : undefined} limits={limits} />
       </Card>
@@ -190,7 +200,7 @@ export function PoDetail() {
   const loc = useLocation();
   const [smallAlert, setSmallAlert] = useState<any>((loc.state as any)?.smallPoAlert ?? null);
   const act = useAction((a: string) => api(`/purchase-orders/${id}/${a}`, { body: {} }), { invalidate: [['/purchase-orders']], onSuccess: (r: any) => { toast.success(r.autoApproved && r.status === 'APPROVED' ? 'Approved — under the no-approval limit' : 'Updated'); if (r.smallPoAlert) setSmallAlert(r.smallPoAlert); } });
-  const post = useAction(() => api('/grns', { body: { poId: id, vendorInvoiceNo: grn!.vendorInvoiceNo, vendorInvoiceDate: grn!.vendorInvoiceDate || null, notes: grn!.notes, overQtyReason: grn!.overQtyReason || null,
+  const post = useAction(() => !Object.values(grn!.lines).some((v) => v.received > 0) ? Promise.reject(new Error('Enter the received quantity for at least one item')) : api('/grns', { body: { poId: id, vendorInvoiceNo: grn!.vendorInvoiceNo, vendorInvoiceDate: grn!.vendorInvoiceDate || null, notes: grn!.notes, overQtyReason: grn!.overQtyReason || null,
     lines: Object.entries(grn!.lines).filter(([, v]) => v.received > 0).map(([poItemId, v]) => ({ poItemId, receivedQty: v.received, rejectedQty: v.rejected, serialNos: v.serialNos })) } }),
   { invalidate: [['/purchase-orders'], ['/grns'], ['/items']], onSuccess: (g: any) => { toast.success(g.status === 'PENDING_APPROVAL' ? 'GRN sent to Management for approval — stock moves once approved' : 'GRN posted — stock updated'); nav(`/grns/${g.id}`); } });
   if (!po) return <Spinner />;
@@ -212,7 +222,7 @@ export function PoDetail() {
           {!['DRAFT', 'CANCELLED', 'CLOSED'].includes(po.status) && !!user?.permissions.includes('*') && <Link to={`/purchase-orders/${po.id}/edit`}><Button>Edit (Super Admin)</Button></Link>}
           {po.status === 'CLOSED' && (!!user?.permissions.includes('*') || can('purchase_orders:approve')) && <Button loading={reopen.isPending} onClick={() => confirm(`Reopen ${po.number}? It goes back to sent / part-received / received by what has been received, so goods can be received, billed and the PO corrected.`) && reopen.mutate(undefined)}>Reopen</Button>}
           {(PO_ACTIONS[po.status] ?? []).filter((x) => can(x.perm) || (po.status === 'DRAFT' && po.createdById === user?.id && (x.a === 'submit' || x.a === 'cancel'))).map((x) => <Button key={x.a} variant={x.variant} loading={act.isPending} onClick={() => act.mutate(x.a)}>{x.label}</Button>)}
-          {canReceive && <Button variant="primary" icon={<PackageCheck className="size-4" />} onClick={() => setGrn({ vendorInvoiceNo: '', vendorInvoiceDate: '', notes: '', overQtyReason: '', lines: Object.fromEntries(po.items.map((l: any) => [l.id, { received: Math.max(0, l.qty - l.receivedQty), rejected: 0, serialNos: '' }])) })}>Receive goods (GRN)</Button>}
+          {canReceive && <Button variant="primary" icon={<PackageCheck className="size-4" />} onClick={() => setGrn({ vendorInvoiceNo: '', vendorInvoiceDate: '', notes: '', overQtyReason: '', lines: Object.fromEntries(po.items.map((l: any) => [l.id, { received: 0, rejected: 0, serialNos: '' }])) })}>Receive goods (GRN)</Button>}
         </>} />
       <Card><KV cols={4} items={[['Date', fmtDate(po.date)], ['Expected', fmtDate(po.expectedDate)], ['Against order', po.salesOrder ? <Link className="text-brand-700" to={`/orders/${po.salesOrder.id}`}>{po.salesOrder.number}</Link> : null], ['Deliver to', po.deliverToSite?.name ?? 'Store'], ['Tax', po.isInterState ? 'IGST' : 'CGST + SGST']]} /></Card>
       <DocLines doc={po} extraCols={[{ label: 'Received', render: (l) => <span className={l.receivedQty >= l.qty ? 'text-emerald-700' : 'text-amber-700'}>{qty(l.receivedQty)}</span> }]} />
@@ -226,6 +236,9 @@ export function PoDetail() {
             <Field label="Vendor invoice date"><Input type="date" value={grn.vendorInvoiceDate} onChange={(e) => setGrn({ ...grn, vendorInvoiceDate: e.target.value })} /></Field>
             <Field label="Notes"><Input value={grn.notes} onChange={(e) => setGrn({ ...grn, notes: e.target.value })} /></Field>
           </div>
+          <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-xs text-slate-500">Quantities start at 0 — enter only what has arrived</span>
+            <Button size="sm" onClick={() => setGrn({ ...grn, lines: Object.fromEntries(po.items.map((l: any) => [l.id, { ...grn.lines[l.id], received: Math.max(0, Math.round((l.qty - l.receivedQty) * 1000) / 1000) }])) })}>Fill all pending</Button>
+            <Button size="sm" variant="ghost" onClick={() => setGrn({ ...grn, lines: Object.fromEntries(po.items.map((l: any) => [l.id, { ...grn.lines[l.id], received: 0 }])) })}>Clear</Button></div>
           <table className="tbl">
             <thead><tr><th>Item</th><th>HSN/SAC</th><th className="text-right">Ordered</th><th className="text-right">Received so far</th><th className="text-right">Pending</th><th className="w-24 text-right">Received</th><th className="w-24 text-right">Rejected</th><th>Serial nos.</th></tr></thead>
             <tbody>{po.items.map((l: any) => {
