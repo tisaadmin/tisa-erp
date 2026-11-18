@@ -84,14 +84,17 @@ export function InvoiceEditor() {
   const [d, setD] = useState({ type: 'SERVICE', clientId: null as string | null, siteId: null as string | null, stateCode: null as string | null | undefined, date: toInputDate(new Date()), dueDate: '', notes: '', lines: [emptyLine()] as Line[] });
   useEffect(() => {
     if (!rq.ready || !rq.req) return;
-    const lines = rq.lines('salePrice');
+    const lines = rq.lines('salePrice').map((l) => ({ ...l, balanceQty: l.qty, qty: 0 }) as Line);
     setD((x) => ({ ...x, clientId: rq.req!.clientId, siteId: rq.req!.siteId, notes: x.notes || `Against requisition ${rq.req!.number}`, lines: lines.length ? lines : x.lines }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rq.ready]);
   const inter = !!d.stateCode && d.stateCode !== companyState;
   const itemsQ = useItems();
   const serviceIds = useMemo(() => (itemsQ.data?.data ?? []).filter((i) => i.type === 'SERVICE').map((i) => i.id), [itemsQ.data]);
-  const save = useAction(() => api('/invoices', { body: { ...d, dueDate: d.dueDate || null, requisitionId } }), { success: 'Draft invoice created', invalidate: [['/invoices']], onSuccess: (i: any) => nav(`/invoices/${i.id}`) });
+  const save = useAction(() => {
+    const lines = d.lines.filter((l) => !((l as Line & { balanceQty?: number }).balanceQty != null && Number(l.qty) === 0));
+    return lines.length ? api('/invoices', { body: { ...d, lines, dueDate: d.dueDate || null, requisitionId } }) : Promise.reject(new Error('Enter a quantity for at least one item'));
+  }, { success: 'Draft invoice created', invalidate: [['/invoices']], onSuccess: (i: any) => nav(`/invoices/${i.id}`) });
   if (rq.loading) return <Spinner />;
   return (
     <div className="space-y-4">
@@ -106,7 +109,8 @@ export function InvoiceEditor() {
         </div>
       </Card>
       <div className="rounded-md bg-sky-50 px-4 py-2 text-sm text-sky-800">Without a sales order, only <b>services</b> can be invoiced — service visits, installation charges, AMC (service items, or a SAC code 99…). Material is billed from its sales order: open the order → <b>Running bill</b>.</div>
-      <Card title="Items"><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} ownDescription onlyItemIds={serviceIds} /></Card>
+      <Card title="Items" actions={d.lines.some((l) => (l as Line & { balanceQty?: number }).balanceQty != null) ? <div className="flex items-center gap-2"><span className="text-xs text-slate-500">Quantities start at 0 — lines left at 0 are not billed</span>
+        <Button size="sm" onClick={() => setD({ ...d, lines: d.lines.map((l) => { const b = (l as Line & { balanceQty?: number }).balanceQty; return b != null ? { ...l, qty: b } : l; }) })}>Fill all</Button></div> : undefined}><LineItemsEditor lines={d.lines} onChange={(lines) => setD({ ...d, lines })} interState={inter} ownDescription onlyItemIds={serviceIds} /></Card>
       <Card title="Notes"><Textarea value={d.notes} onChange={(e) => setD({ ...d, notes: e.target.value })} /></Card>
     </div>
   );

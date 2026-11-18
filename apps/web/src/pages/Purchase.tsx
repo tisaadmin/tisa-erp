@@ -101,7 +101,7 @@ export function PoEditor() {
   }, [acc.data, id]);
   useEffect(() => {
     if (!rq.ready || !rq.req) return;
-    const lines = rq.lines('purchasePrice', true);
+    const lines = startAtZero(rq.lines('purchasePrice', true));
     setD((x) => ({ ...x, salesOrderId: rq.req!.orderId ?? x.salesOrderId, deliverToSiteId: rq.req!.siteId, notes: x.notes || `For requisition ${rq.req!.number}${rq.req!.client ? ` (${rq.req!.client.name})` : ''}`, lines: lines.length ? lines : x.lines }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rq.ready]);

@@ -761,7 +761,7 @@ export function NewChallan() {
   useEffect(() => {
     if (!rq.ready || !rq.req) return;
     setH((x) => ({ ...x, clientId: rq.req!.clientId, siteId: rq.req!.siteId, notes: x.notes || `Against requisition ${rq.req!.number}` }));
-    setLines(rq.lines('salePrice', true).map((l) => ({ itemId: l.itemId, description: l.description, unit: l.unit, pending: l.qty, qty: l.qty, serialNos: '' })));
+    setLines(rq.lines('salePrice', true).map((l) => ({ itemId: l.itemId, description: l.description, unit: l.unit, pending: l.qty, qty: 0, serialNos: '' })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rq.ready]);
   // more than the order (or its accessories list) still has to send → Management approval
@@ -787,7 +787,7 @@ export function NewChallan() {
           <Field label="E-way bill no."><Input value={h.ewayBillNo} onChange={(e) => setH({ ...h, ewayBillNo: e.target.value })} /></Field>
         </div>
       </Card>
-      <Card title="Items" pad={false} actions={orderId ? <div className="flex items-center gap-2"><span className="text-xs text-slate-500">Quantities start at 0 — enter only what goes on this challan</span>
+      <Card title="Items" pad={false} actions={orderId || requisitionId ? <div className="flex items-center gap-2"><span className="text-xs text-slate-500">Quantities start at 0 — enter only what goes on this challan</span>
           <Button size="sm" onClick={() => setLines(lines.map((l) => (l.accessory ? l : { ...l, qty: Math.max(0, l.pending ?? 0) })))}>Fill all pending</Button>
           <Button size="sm" variant="ghost" onClick={() => setLines(lines.map((l) => ({ ...l, qty: 0 })))}>Clear</Button></div> : undefined}>
         <table className="tbl">
