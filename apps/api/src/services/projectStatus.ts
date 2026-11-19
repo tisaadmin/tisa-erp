@@ -11,6 +11,9 @@ import { accessorySheets, deliveryChallans, projectMembers, requisitions, salesO
 import { notFound } from '../lib/http';
 
 const r3 = (n: number) => Math.round(n * 1000) / 1000;
+/** material on a challan has left only once it is dispatched (not while waiting for approval, not when rejected) */
+const wentOut = (dc: { status: string }) => !['PENDING_APPROVAL', 'REJECTED', 'CANCELLED'].includes(dc.status);
+
 export const materialKey = (l: { itemId?: string | null; description?: string | null }) =>
   l.itemId ? `i:${l.itemId}` : `d:${String(l.description ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '')}`;
 
@@ -42,7 +45,8 @@ export async function projectMaterialStatus(db: DbOrTx, orderId: string) {
     need.set(k, { key: k, itemId: l.itemId, description: cur?.description ?? l.description, unit: l.unit, required: r3((cur?.required ?? 0) + Number(l.qty)) });
   }
   const sent = new Map<string, number>();
-  for (const dc of dcs) for (const it of dc.items) if (!it.orderItemId) { const k = materialKey(it); sent.set(k, r3((sent.get(k) ?? 0) + Number(it.qty))); }
+  // a challan waiting for approval or rejected has not sent anything
+  for (const dc of dcs.filter(wentOut)) for (const it of dc.items) if (!it.orderItemId) { const k = materialKey(it); sent.set(k, r3((sent.get(k) ?? 0) + Number(it.qty))); }
   const accessories = [...need.values()].map((a) => ({ ...a, sent: sent.get(a.key) ?? 0, pending: Math.max(0, r3(a.required - (sent.get(a.key) ?? 0))) }));
 
   const reqs = order.siteId ? await db.query.requisitions.findMany({
@@ -107,7 +111,7 @@ export async function projectSummaries(db: DbOrTx, ids: string[]) {
     const need = new Map<string, number>();
     for (const l of sheet?.lines ?? []) need.set(materialKey(l), (need.get(materialKey(l)) ?? 0) + Number(l.qty));
     const sent = new Map<string, number>();
-    for (const dc of dcs.filter((x) => x.orderId === o.id)) for (const i of dc.items) if (!i.orderItemId) sent.set(materialKey(i), (sent.get(materialKey(i)) ?? 0) + Number(i.qty));
+    for (const dc of dcs.filter((x) => x.orderId === o.id && wentOut(x))) for (const i of dc.items) if (!i.orderItemId) sent.set(materialKey(i), (sent.get(materialKey(i)) ?? 0) + Number(i.qty));
     const accReq = [...need.values()].reduce((s, v) => s + v, 0);
     const accSent = [...need.entries()].reduce((s, [k, v]) => s + Math.min(v, sent.get(k) ?? 0), 0);
     const q = o.items.reduce((s, l) => s + l.qty, 0);

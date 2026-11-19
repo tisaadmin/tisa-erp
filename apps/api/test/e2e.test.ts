@@ -1236,6 +1236,13 @@ test('project material status: order items and accessories sent to site, deliver
   // accessories go on the order's challan, up to what is still to be sent
   assert.equal((await call('stores', 'POST', '/challans', { ...base, lines: [{ itemId: acc.itemId, description: acc.description, unit: acc.unit, qty: acc.pending + 1 }] })).status, 400);
   assert.equal((await call('stores', 'POST', '/challans', { ...base, lines: [{ description: 'Something else', unit: 'Nos', qty: 1 }] })).status, 400);
+  // a challan waiting for approval, then rejected, has not sent its accessories
+  const ol = order.items[0];
+  const held = await ok('stores', 'POST', '/challans', { ...base, overQtyReason: 'spares for site', lines: [{ orderItemId: ol.id, itemId: ol.itemId, description: ol.description, unit: ol.unit, qty: ol.qty - ol.deliveredQty + 5 }, { itemId: acc.itemId, description: acc.description, unit: acc.unit, qty: 1 }] });
+  assert.equal(held.status, 'PENDING_APPROVAL');
+  assert.equal((await ok('stores', 'GET', `/projects/${ctx.order.id}`)).accessories.find((a: any) => a.key === acc.key).sent, acc.sent, 'pending challan: not sent yet');
+  await ok('admin', 'POST', `/challans/${held.id}/reject`, { reason: 'too many' });
+  assert.equal((await ok('stores', 'GET', `/projects/${ctx.order.id}`)).accessories.find((a: any) => a.key === acc.key).sent, acc.sent, 'rejected challan: nothing sent');
   const sendQty = Math.min(1, acc.pending);
   await ok('stores', 'POST', '/challans', { ...base, lines: [{ itemId: acc.itemId, description: acc.description, unit: acc.unit, qty: sendQty }] });
   // the technician (installation ticket on this order) sees it among their projects
