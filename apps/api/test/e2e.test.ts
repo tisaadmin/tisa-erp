@@ -1720,6 +1720,13 @@ test('remove test data: only the picked records and what was raised against them
   assert.equal((await call('admin', 'GET', `/invoices/${pv.items.invoices[0].id}`)).status, 404);
   assert.equal((await ok('admin', 'GET', `/orders?clientId=${ctx.client.id}&pageSize=500`)).total, before, 'real client untouched');
 
+  // a dummy lead / enquiry: found by name, removed with what was made for it
+  const lead = await ok('admin', 'POST', '/leads', { companyName: 'Dummy Enquiry Pvt Ltd', contactName: 'Test' });
+  assert.ok((await ok('admin', 'GET', '/records/test-data/search?q=dummyenquiry')).some((h: any) => h.kind === 'lead' && h.id === lead.id));
+  const gone = await ok('admin', 'POST', '/records/test-data/remove', { leadIds: [lead.id], confirm: 'DELETE' });
+  assert.equal(gone.leads, 1);
+  assert.equal((await call('admin', 'GET', `/leads/${lead.id}`)).status, 404);
+
   // numbering: cannot go back over numbers in use; can jump ahead
   const series = await ok('admin', 'GET', '/records/numbering');
   const inv = series.find((x: any) => x.key === 'INVOICE');

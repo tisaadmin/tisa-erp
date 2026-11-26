@@ -226,6 +226,7 @@ export default r;
 const rootsSchema = z.object({
   clientIds: z.array(z.string()).default([]), orderIds: z.array(z.string()).default([]),
   quotationIds: z.array(z.string()).default([]), invoiceIds: z.array(z.string()).default([]),
+  leadIds: z.array(z.string()).default([]), purchaseOrderIds: z.array(z.string()).default([]), requisitionIds: z.array(z.string()).default([]),
 });
 
 /** Find records to pick: clients by name / code, orders / quotations / invoices by number or client name. */
@@ -234,13 +235,16 @@ r.get('/records/test-data/search', perm, async (req, res) => {
   if (q.length < 2) return res.json([]);
   const like = `%${q.toLowerCase().replace(/[^a-z0-9]+/g, '')}%`;
   const sq = (c: PgColumn) => sql`regexp_replace(lower(coalesce(${c}::text,'')),'[^a-z0-9]+','','g') like ${like}`;
-  const [cl, os, qs, is] = await Promise.all([
+  const [cl, os, qs, is, ls, ps, rs] = await Promise.all([
     db.select({ id: clients.id, label: clients.name, sub: clients.code }).from(clients).where(sql`${sq(clients.name)} or ${sq(clients.code)}`).limit(15),
     db.select({ id: salesOrders.id, label: salesOrders.number, sub: clients.name, date: salesOrders.date, value: salesOrders.total, status: salesOrders.status }).from(salesOrders).innerJoin(clients, eq(clients.id, salesOrders.clientId)).where(sql`${sq(salesOrders.number)} or ${sq(clients.name)}`).limit(25),
     db.select({ id: quotations.id, label: quotations.number, sub: clients.name, date: quotations.date, value: quotations.total, status: quotations.status }).from(quotations).leftJoin(clients, eq(clients.id, quotations.clientId)).where(sql`${sq(quotations.number)} or ${sq(clients.name)}`).limit(25),
     db.select({ id: invoices.id, label: invoices.number, sub: clients.name, date: invoices.date, value: invoices.total, status: invoices.status }).from(invoices).innerJoin(clients, eq(clients.id, invoices.clientId)).where(sql`${sq(invoices.number)} or ${sq(clients.name)}`).limit(25),
+    db.select({ id: leads.id, label: leads.companyName, sub: leads.code, date: leads.createdAt, value: leads.estimatedValue, status: leads.status }).from(leads).where(sql`${sq(leads.companyName)} or ${sq(leads.code)} or ${sq(leads.contactName)}`).limit(25),
+    db.select({ id: purchaseOrders.id, label: purchaseOrders.number, sub: vendors.name, date: purchaseOrders.date, value: purchaseOrders.total, status: purchaseOrders.status }).from(purchaseOrders).innerJoin(vendors, eq(vendors.id, purchaseOrders.vendorId)).where(sql`${sq(purchaseOrders.number)} or ${sq(vendors.name)}`).limit(25),
+    db.select({ id: requisitions.id, label: requisitions.number, sub: requisitions.description, date: requisitions.createdAt, status: requisitions.status }).from(requisitions).where(sql`${sq(requisitions.number)} or ${sq(requisitions.description)}`).limit(25),
   ]);
-  res.json([...cl.map((x) => ({ ...x, kind: 'client' })), ...os.map((x) => ({ ...x, kind: 'order' })), ...qs.map((x) => ({ ...x, kind: 'quotation' })), ...is.map((x) => ({ ...x, kind: 'invoice' }))]);
+  res.json([...cl.map((x) => ({ ...x, kind: 'client' })), ...os.map((x) => ({ ...x, kind: 'order' })), ...qs.map((x) => ({ ...x, kind: 'quotation' })), ...is.map((x) => ({ ...x, kind: 'invoice' })), ...ls.map((x) => ({ ...x, kind: 'lead' })), ...ps.map((x) => ({ ...x, kind: 'po' })), ...rs.map((x) => ({ ...x, kind: 'requisition' }))]);
 });
 
 r.post('/records/test-data/preview', perm, async (req, res) => {

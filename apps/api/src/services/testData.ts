@@ -14,8 +14,8 @@ import {
 } from '../db/schema';
 import { onHand } from './stock';
 
-export type Roots = { clientIds?: string[]; orderIds?: string[]; quotationIds?: string[]; invoiceIds?: string[] };
-const KINDS = ['clients', 'sites', 'orders', 'quotations', 'invoices', 'receipts', 'challans', 'purchaseOrders', 'goodsReceipts', 'vendorBills', 'vendorPayments', 'amcs', 'tickets', 'serviceReports', 'requisitions', 'accessorySheets'] as const;
+export type Roots = { clientIds?: string[]; orderIds?: string[]; quotationIds?: string[]; invoiceIds?: string[]; leadIds?: string[]; purchaseOrderIds?: string[]; requisitionIds?: string[] };
+const KINDS = ['clients', 'sites', 'orders', 'quotations', 'invoices', 'receipts', 'challans', 'purchaseOrders', 'goodsReceipts', 'vendorBills', 'vendorPayments', 'amcs', 'tickets', 'serviceReports', 'requisitions', 'accessorySheets', 'leads'] as const;
 type Kind = (typeof KINDS)[number];
 type Sets = Record<Kind, Set<string>>;
 
@@ -33,6 +33,9 @@ export async function collect(tx: DbOrTx, roots: Roots) {
   for (const x of roots.orderIds ?? []) S.orders.add(x);
   for (const x of roots.quotationIds ?? []) S.quotations.add(x);
   for (const x of roots.invoiceIds ?? []) S.invoices.add(x);
+  for (const x of roots.leadIds ?? []) S.leads.add(x);
+  for (const x of roots.purchaseOrderIds ?? []) S.purchaseOrders.add(x);
+  for (const x of roots.requisitionIds ?? []) S.requisitions.add(x);
   const add = (k: Kind, list: string[]) => { let n = 0; for (const x of list) if (!S[k].has(x)) { S[k].add(x); n++; } return n; };
 
   for (let round = 0; round < 20; round++) {
@@ -76,6 +79,8 @@ export async function collect(tx: DbOrTx, roots: Roots) {
         if (others.every((o) => S.orders.has(o.id))) n += add('quotations', [q]);
       }
     }
+    // an enquiry (lead): the quotations made for it
+    if (S.leads.size) n += add('quotations', await ids(tx, quotations, quotations.id, any(quotations.leadId, S.leads)));
     if (S.quotations.size) {
       // the whole revision family (R1, R2 … point to the one before)
       n += add('quotations', await ids(tx, quotations, quotations.id, any(quotations.parentId, S.quotations)));
@@ -141,6 +146,7 @@ export async function describe(tx: DbOrTx, S: Sets) {
     tickets: await L(S.tickets, (l) => tx.select({ id: tickets.id, label: tickets.number, sub: tickets.title }).from(tickets).where(inArray(tickets.id, l))),
     serviceReports: await L(S.serviceReports, (l) => tx.select({ id: serviceReports.id, label: serviceReports.number }).from(serviceReports).where(inArray(serviceReports.id, l))),
     requisitions: await L(S.requisitions, (l) => tx.select({ id: requisitions.id, label: requisitions.number }).from(requisitions).where(inArray(requisitions.id, l))),
+    leads: await L(S.leads, (l) => tx.select({ id: leads.id, label: leads.companyName, sub: leads.code, status: leads.status }).from(leads).where(inArray(leads.id, l))),
     accessorySheets: await L(S.accessorySheets, (l) => tx.select({ id: accessorySheets.id, label: accessorySheets.number }).from(accessorySheets).where(inArray(accessorySheets.id, l))),
   };
 }
@@ -174,6 +180,7 @@ export async function removeAll(tx: DbOrTx, S: Sets) {
   }
   if (S.quotations.size) { await tx.update(quotations).set({ parentId: null }).where(inArray(quotations.id, [...S.quotations])); await del(quotations, quotations.id, S.quotations); }
   await del(amcContracts, amcContracts.id, S.amcs);
+  if (S.leads.size) { await tx.update(quotations).set({ leadId: null }).where(inArray(quotations.leadId, [...S.leads])); await del(leads, leads.id, S.leads); }
   if (S.sites.size) {
     const s = [...S.sites];
     await tx.update(attendance).set({ siteId: null }).where(inArray(attendance.siteId, s));

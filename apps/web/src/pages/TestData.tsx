@@ -10,18 +10,18 @@ import { useAuth } from '../lib/auth';
 import { fmtDate, inr } from '../lib/format';
 import { useGet } from '../lib/hooks';
 
-type Kind = 'client' | 'order' | 'quotation' | 'invoice';
+type Kind = 'client' | 'order' | 'quotation' | 'invoice' | 'lead' | 'po' | 'requisition';
 type Hit = { id: string; kind: Kind; label: string; sub?: string | null; date?: string; value?: number; status?: string };
 type Row = { id: string; label: string | null; sub?: string | null; value?: number; status?: string };
 type Preview = { items: Record<string, Row[]>; conflicts: string[]; stockMoves: number };
 type Series = { key: string; label: string; fy: string; highestUsed: number; next: number; example: string };
 
-const KIND_LABEL: Record<Kind, string> = { client: 'Client', order: 'Order', quotation: 'Quotation', invoice: 'Invoice' };
-const KIND_TONE: Record<Kind, 'violet' | 'blue' | 'gray' | 'amber'> = { client: 'violet', order: 'blue', quotation: 'gray', invoice: 'amber' };
+const KIND_LABEL: Record<Kind, string> = { client: 'Client', order: 'Order', quotation: 'Quotation', invoice: 'Invoice', lead: 'Lead / enquiry', po: 'Purchase order', requisition: 'Requisition' };
+const KIND_TONE: Record<Kind, 'violet' | 'blue' | 'gray' | 'amber'> = { client: 'violet', order: 'blue', quotation: 'gray', invoice: 'amber', lead: 'violet', po: 'blue', requisition: 'gray' };
 const GROUP_LABEL: Record<string, string> = {
   clients: 'Clients', sites: 'Sites', orders: 'Orders', quotations: 'Quotations', invoices: 'Invoices & RA bills', receipts: 'Payment receipts', challans: 'Delivery challans',
   purchaseOrders: 'Purchase orders', goodsReceipts: 'Goods receipts', vendorBills: 'Vendor bills', vendorPayments: 'Vendor payments', amcs: 'AMC contracts', tickets: 'Service tickets',
-  serviceReports: 'Service reports', requisitions: 'Requisitions', accessorySheets: 'Accessory sheets',
+  serviceReports: 'Service reports', requisitions: 'Requisitions', accessorySheets: 'Accessory sheets', leads: 'Leads / enquiries',
 };
 
 export function TestDataPage() {
@@ -90,6 +90,7 @@ function RemoveTestData() {
   const roots = () => ({
     clientIds: picked.filter((p) => p.kind === 'client').map((p) => p.id), orderIds: picked.filter((p) => p.kind === 'order').map((p) => p.id),
     quotationIds: picked.filter((p) => p.kind === 'quotation').map((p) => p.id), invoiceIds: picked.filter((p) => p.kind === 'invoice').map((p) => p.id),
+    leadIds: picked.filter((p) => p.kind === 'lead').map((p) => p.id), purchaseOrderIds: picked.filter((p) => p.kind === 'po').map((p) => p.id), requisitionIds: picked.filter((p) => p.kind === 'requisition').map((p) => p.id),
   });
   const pick = (h: Hit) => { if (!picked.some((p) => p.id === h.id)) setPicked([...picked, h]); setPv(null); };
   const unpick = (id: string) => { setPicked(picked.filter((p) => p.id !== id)); setPv(null); };
@@ -108,8 +109,8 @@ function RemoveTestData() {
   const total = pv ? Object.values(pv.items).reduce((a, l) => a + l.length, 0) : 0;
   return (
     <Card title={<span className="flex items-center gap-2"><Trash2 className="size-4" />Remove test data</span>}>
-      <p className="mb-3 text-sm text-slate-600">Search and pick the test <b>clients, orders, quotations or invoices</b>. Removing a record also removes what was raised against it (bills, receipts, challans, POs, GRNs, vendor bills, tickets, “billed earlier” amounts); stock posted by removed challans / GRNs is taken back. Picking a client removes all its sites and documents. You see the full list before anything is removed. This cannot be undone.</p>
-      <SearchBox value={q} onChange={setQ} placeholder="Search by client name or document number (min 2 letters)…" />
+      <p className="mb-3 text-sm text-slate-600">Search and pick the test <b>clients, leads / enquiries, quotations, orders, invoices, purchase orders or requisitions</b>. Removing a record also removes what was raised against it (bills, receipts, challans, POs, GRNs, vendor bills, tickets, “billed earlier” amounts); stock posted by removed challans / GRNs is taken back. Picking a client removes all its sites and documents. You see the full list before anything is removed. This cannot be undone.</p>
+      <SearchBox value={q} onChange={setQ} placeholder="Search by client / lead / vendor name or document number (min 2 letters)…" />
       {q.trim().length >= 2 && (
         <div className="mt-2 max-h-80 overflow-y-auto rounded-md border border-slate-200">
           {!hits.data ? <Spinner /> : !hits.data.length ? <p className="p-3 text-sm text-slate-500">Nothing found.</p> : (
