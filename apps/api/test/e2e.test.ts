@@ -1486,6 +1486,13 @@ test('RA bill from the client sheet: order from the BOQ, previous quantities as 
   assert.equal(ra22.taxable, 4 * 2000);
   await ok('accounts', 'POST', `/invoices/${ra22.id}/issue`, {});
   assert.equal((await ok('accounts', 'GET', `/orders/${done.orderId}`)).items[1].installedQty, 4, 'installed brought up to what was certified');
+  // Super Admin: delivered back to what ERP challans carried (none → 0); billing stays on certified quantities
+  assert.ok((await ok('accounts', 'GET', `/orders/${done.orderId}`)).items.some((l: any) => l.deliveredQty > 0));
+  assert.equal((await call('accounts', 'POST', `/orders/${done.orderId}/reset-delivered`, {})).status, 403);
+  const rs = await ok('admin', 'POST', `/orders/${done.orderId}/reset-delivered`, {});
+  assert.ok(rs.changed.length > 0);
+  assert.ok((await ok('accounts', 'GET', `/orders/${done.orderId}`)).items.every((l: any) => l.deliveredQty === 0));
+  assert.equal((await ok('accounts', 'GET', `/orders/${done.orderId}/billing`)).lines.find((l: any) => l.orderItemId === bullet.id).stages.find((s: any) => s.stage === 'DELIVERY').billableQty, 0, 'billing unchanged');
   // one order per project: a second order for the same site from an RA sheet is refused
   const p4 = await ok('accounts', 'POST', '/ra-imports/parse', undefined, await make([[[10, 0], [10, 0], [6, 0], [0, 10]], [[6, 0], [0, 0], [0, 0], [0, 0]]]));
   const dup = await call('admin', 'POST', `/ra-imports/${p4.id}/commit`, { ...body(p4.doc), lines: p4.doc.lines.map((l: any) => ({ ...l, include: true, itemId: linked[l.key] ?? ctx.cam.id })), newClient: null, clientId: o.client.id, site: { mode: 'existing', siteId: o.site.id }, orderId: null });

@@ -413,6 +413,32 @@ r.post('/orders', requirePerm('orders:create'), async (req, res) => {
 const mayEditDraft = (u: Request['user'], o: { createdById: string | null }) => o.createdById === u.id || can(u, 'orders:edit') || isSuperAdminPerms(u.permissions);
 
 /** Draft → confirmed (open): from now on it cannot be edited (only corrected by the Super Admin), and challans, POs and bills can be raised. */
+/**
+ * Super Admin: set each line's delivered quantity back to what the ERP's own dispatched challans carried
+ * (e.g. 0 after an RA-sheet import raised it to the client-certified figures). No stock moves.
+ */
+r.post('/orders/:id/reset-delivered', async (req, res) => {
+  if (!isSuperAdminPerms(req.user.permissions)) throw forbidden('Only the Super Admin can reset delivered quantities');
+  const out = await db.transaction(async (tx) => {
+    const o = await tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id), with: { items: true } });
+    if (!o) throw notFound('Order');
+    const dcs = await tx.query.deliveryChallans.findMany({ where: and(eq(deliveryChallans.orderId, o.id), notInArray(deliveryChallans.status, ['PENDING_APPROVAL', 'REJECTED', 'CANCELLED'])), with: { items: true } });
+    const sent = new Map<string, number>();
+    for (const dc of dcs) for (const l of dc.items) if (l.orderItemId) sent.set(l.orderItemId, r3((sent.get(l.orderItemId) ?? 0) + Number(l.qty)));
+    const changed: { description: string; from: number; to: number }[] = [];
+    for (const it of o.items) {
+      const to = sent.get(it.id) ?? 0;
+      if (Math.abs(Number(it.deliveredQty) - to) > 1e-9) {
+        await tx.update(salesOrderItems).set({ deliveredQty: to }).where(eq(salesOrderItems.id, it.id));
+        changed.push({ description: it.description, from: Number(it.deliveredQty), to });
+      }
+    }
+    return { number: o.number, changed };
+  });
+  audit(req, 'reset-delivered', 'order', req.params.id, { changed: out.changed });
+  res.json(out);
+});
+
 r.post('/orders/:id/confirm', async (req, res) => {
   const o = await db.query.salesOrders.findFirst({ where: eq(salesOrders.id, req.params.id) });
   if (!o) throw notFound('Order');

@@ -429,6 +429,8 @@ export function OrderDetail() {
   const setStatus = useAction((status: string) => api(`/orders/${id}`, { method: 'PATCH', body: { status } }), { success: 'Updated', invalidate: [['/orders']] });
   const confirmOrder = useAction(() => api(`/orders/${id}/confirm`, { body: {} }), { success: 'Order confirmed — the purchase team has been notified', invalidate: [['/orders']] });
   const delDraft = useAction(() => api(`/orders/${id}`, { method: 'DELETE' }), { success: 'Draft deleted', invalidate: [['/orders']], onSuccess: () => nav('/orders') });
+  const resetDelivered = useAction(() => api<{ changed: { description: string; from: number; to: number }[] }>(`/orders/${id}/reset-delivered`, { body: {} }),
+    { invalidate: [['/orders'], ['/projects']], onSuccess: (r) => toast.success(r.changed.length ? `Delivered quantities reset on ${r.changed.length} line(s)` : 'Nothing to change — delivered already matches the challans') });
   const setBasis = useAction((billingBasis: string) => api(`/orders/${id}`, { method: 'PATCH', body: { billingBasis } }), { success: 'Billing basis changed', invalidate: [['/orders'], [`/orders/${id}`]] });
   const setProject = useAction((isProject: boolean) => api(`/orders/${id}`, { method: 'PATCH', body: { isProject } }), { success: 'Updated', invalidate: [['/orders'], [`/orders/${id}`], ['/projects']] });
   const createRa = useAction(() => api('/invoices/running-bill', { body: { orderId: id, proforma, lines: Object.entries(ra!).filter(([, v]) => v > 0).map(([k, v]) => { const [orderItemId, stage] = k.split('|'); return { orderItemId, stage, qty: v }; }) } }),
@@ -463,6 +465,7 @@ export function OrderDetail() {
           {!draft && can('challans:create') && <Link to={`/challans/new?orderId=${o.id}`}><Button icon={<Truck className="size-4" />}>Delivery challan</Button></Link>}
           {!draft && can('purchase_orders:create') && <Link to={`/purchase-orders/new?salesOrderId=${o.id}`}><Button>Raise PO</Button></Link>}
           {!draft && !!user?.permissions.includes('*') && !['CANCELLED', 'MERGED'].includes(o.status) && <Link to={`/orders/${o.id}/edit`}><Button>Edit (Super Admin)</Button></Link>}
+          {!draft && !!user?.permissions.includes('*') && !['CANCELLED', 'MERGED'].includes(o.status) && <Button loading={resetDelivered.isPending} onClick={() => confirm(`Reset delivered quantities on ${o.number} to what the ERP's own delivery challans carried (0 where none)? Use this after an RA bill import. Stock is not changed.`) && resetDelivered.mutate(undefined)}>Reset delivered qty</Button>}
           {!draft && can('invoices:create') && <Button variant="primary" icon={<Receipt className="size-4" />} onClick={() => setRa({})}>Running bill</Button>}
           {can('orders:edit') && !['MERGED', 'CLOSED', 'CANCELLED'].includes(o.status) && <MergeOrdersButton orderId={o.id} number={o.number} />}
           <DeleteOrderButton orderId={o.id} onDeleted={() => nav('/orders')} />
