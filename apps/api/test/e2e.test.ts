@@ -2428,3 +2428,27 @@ test('order: a new item requested by a user is added only on approval; USD quota
   const full = await ok('sales', 'GET', `/quotations/${q.id}`);
   assert.equal(full.costingSummary.currency, 'USD'); assert.equal(full.costingSummary.value, 1000); assert.equal(full.costingSummary.material, 800); assert.equal(full.costingSummary.gpPct, 20);
 });
+
+test('Super Admin moves an issued RA bill to another order of the same site; the new order counts it as billed', async () => {
+  const body = { clientId: ctx.client.id, siteId: ctx.site.id, paymentTerms: [{ stage: 'DELIVERY', percent: 100 }], lines: [{ itemId: ctx.cam.id, description: 'Camera move test', qty: 10, rate: 1234 }] };
+  const a = await ok('admin', 'POST', '/orders', body);
+  const b = await ok('admin', 'POST', '/orders', { ...body, lines: [{ itemId: ctx.cam.id, description: 'Camera move test', qty: 20, rate: 1234 }] });
+  const la = (await ok('admin', 'GET', `/orders/${a.id}`)).items[0];
+  await ok('admin', 'PATCH', `/orders/${a.id}`, { billingBasis: 'CERTIFIED' });
+  const ra = await ok('accounts', 'POST', '/invoices/running-bill', { orderId: a.id, lines: [{ orderItemId: la.id, stage: 'DELIVERY', qty: 4 }] });
+  const iss = await ok('accounts', 'POST', `/invoices/${ra.id}/issue`, {});
+  assert.equal((await call('accounts', 'POST', `/invoices/${ra.id}/move-to-order`, { orderId: b.id })).status, 403);
+  const pv = await ok('admin', 'POST', `/invoices/${ra.id}/move-to-order`, { orderId: b.id, preview: true });
+  assert.equal(pv.lines, 1);
+  assert.equal((await ok('admin', 'GET', `/invoices/${ra.id}`)).orderId, a.id, 'preview changes nothing');
+  await ok('admin', 'POST', `/invoices/${ra.id}/move-to-order`, { orderId: b.id });
+  const inv = await ok('admin', 'GET', `/invoices/${ra.id}`);
+  assert.equal(inv.orderId, b.id); assert.equal(inv.number, iss.number);
+  const bb = await ok('admin', 'GET', `/orders/${b.id}/billing`);
+  assert.equal(bb.lines[0].stages.find((s: any) => s.stage === 'DELIVERY').billedQty, 4);
+  const ba = await ok('admin', 'GET', `/orders/${a.id}/billing`);
+  assert.equal(ba.lines[0].stages.find((s: any) => s.stage === 'DELIVERY').billedQty, 0);
+  // a different site's order is refused
+  const other = (await ok('admin', 'GET', `/orders?pageSize=200`)).data.find((o: any) => o.siteId && o.siteId !== ctx.site.id && !['CANCELLED', 'MERGED'].includes(o.status));
+  if (other) assert.equal((await call('admin', 'POST', `/invoices/${ra.id}/move-to-order`, { orderId: other.id })).status, 400);
+});

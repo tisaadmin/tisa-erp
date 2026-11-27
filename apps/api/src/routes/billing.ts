@@ -259,6 +259,66 @@ r.post('/invoices/:id/ra-number', async (req, res) => {
   res.json({ ok: true, from: inv.raBillNo, raBillNo });
 });
 
+/**
+ * Super Admin: move an issued RA bill to another order of the same client and site (e.g. it stayed on an order that was
+ * later cancelled and re-made). The bill itself — number, amounts, PDF — is unchanged; its lines are re-pointed to the
+ * matching lines of the new order (same RA-sheet line key, else same description and rate), so the new order counts them as billed.
+ */
+r.post('/invoices/:id/move-to-order', async (req, res) => {
+  if (!isSuperAdminPerms(req.user.permissions)) throw forbidden('Only the Super Admin can move a bill to another order');
+  const { orderId, preview } = z.object({ orderId: z.string(), preview: z.boolean().default(false) }).parse(req.body);
+  const out = await db.transaction(async (tx) => {
+    const inv = await tx.query.invoices.findFirst({ where: eq(invoices.id, req.params.id), with: { items: true } });
+    if (!inv) throw notFound('Invoice');
+    if (!inv.orderId) throw badRequest('This bill is not against an order');
+    if (inv.orderId === orderId) throw badRequest('The bill is already on that order');
+    if (inv.status === 'CANCELLED') throw badRequest('This bill is cancelled');
+    const [from, to] = await Promise.all([
+      tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, inv.orderId), with: { items: true } }),
+      tx.query.salesOrders.findFirst({ where: eq(salesOrders.id, orderId), with: { items: true } }),
+    ]);
+    if (!from || !to) throw notFound('Order');
+    if (['CANCELLED', 'MERGED'].includes(to.status)) throw badRequest(`${to.number} is ${to.status.toLowerCase()}`);
+    if (to.clientId !== inv.clientId || (to.siteId ?? null) !== (inv.siteId ?? null)) throw badRequest(`${to.number} is for a different client or site`);
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    const mapping: { line: string; stage: string | null; qty: number; fromLine: string; toLine: string }[] = [];
+    for (const l of inv.items) {
+      if (!l.orderItemId) continue;
+      const src = from.items.find((x) => x.id === l.orderItemId);
+      if (!src) throw badRequest(`${l.description}: its order line is missing`);
+      let m = src.sourceKey ? to.items.filter((x) => x.sourceKey === src.sourceKey) : [];
+      if (m.length !== 1) m = to.items.filter((x) => norm(x.description) === norm(src.description) && Math.abs(x.rate - src.rate) < 0.01);
+      if (m.length !== 1) throw badRequest(`${l.description.slice(0, 60)}: no single matching line on ${to.number}`);
+      if (Math.abs(m[0].rate - l.rate) > 0.01) throw badRequest(`${l.description.slice(0, 60)}: rate ${l.rate} on the bill but ${m[0].rate} on ${to.number}`);
+      mapping.push({ line: l.id, stage: l.milestone, qty: l.qty, fromLine: src.description, toLine: m[0].id });
+    }
+    // nothing may end up billed beyond the ordered quantity on the new order
+    const st = await orderBillingStatus(tx, to.id);
+    for (const m of mapping) {
+      const bl = st.lines.find((x) => x.orderItemId === m.toLine)!;
+      const stage = bl.stages.find((s) => s.stage === (m.stage ?? 'FULL'));
+      if (stage && r3(stage.billedQty + m.qty) > bl.qty + 1e-9) throw badRequest(`${bl.description.slice(0, 60)}: ${stage.billedQty} + ${m.qty} would be more than the ordered ${bl.qty} at ${m.stage}`);
+    }
+    if (inv.type === 'RUNNING_BILL' && inv.raBillNo) {
+      const clash = await tx.query.invoices.findFirst({ where: and(eq(invoices.orderId, to.id), eq(invoices.raBillNo, inv.raBillNo), ne(invoices.status, 'CANCELLED')) });
+      if (clash) throw badRequest(`${to.number} already has RA-${inv.raBillNo} (${clash.number})`);
+    }
+    const result = { bill: inv.number, raBillNo: inv.raBillNo, from: from.number, to: to.number, lines: mapping.length };
+    if (preview) return result;
+    for (const m of mapping) await tx.update(invoiceItems).set({ orderItemId: m.toLine }).where(eq(invoiceItems.id, m.line));
+    await tx.update(invoices).set({ orderId: to.id }).where(eq(invoices.id, inv.id));
+    // RA numbering on both orders carries on after their highest RA number
+    for (const oid of [from.id, to.id]) {
+      const issued = await tx.query.invoices.findMany({ where: and(eq(invoices.orderId, oid), eq(invoices.type, 'RUNNING_BILL'), inArray(invoices.status, ['ISSUED', 'PARTIALLY_PAID', 'PAID'])), columns: { raBillNo: true } });
+      const top = Math.max(0, ...issued.map((x) => x.raBillNo ?? 0));
+      if (top) await tx.update(salesOrders).set({ raBillOffset: Math.max(0, top - issued.length) }).where(eq(salesOrders.id, oid));
+    }
+    return result;
+  });
+  if (!preview) audit(req, 'move_to_order', 'invoice', req.params.id, out);
+  res.json(out);
+});
+
 r.delete('/invoices/:id', requirePerm('invoices:edit'), async (req, res) => {
   const inv = await db.query.invoices.findFirst({ where: eq(invoices.id, req.params.id) });
   if (!inv) throw notFound('Invoice');
